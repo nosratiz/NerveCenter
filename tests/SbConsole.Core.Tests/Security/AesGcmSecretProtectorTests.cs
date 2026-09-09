@@ -46,4 +46,36 @@ public class AesGcmSecretProtectorTests
 
         act.Should().Throw<ArgumentException>();
     }
+
+    [Fact]
+    public void Unprotect_short_blob_throws_CryptographicException()
+    {
+        var protector = new AesGcmSecretProtector(Key);
+        var shortBlob = new byte[27]; // Less than NonceSize(12) + TagSize(16)
+
+        var act = () => protector.Unprotect(shortBlob);
+
+        act.Should().Throw<CryptographicException>()
+            .WithMessage("Ciphertext blob is too short to contain a nonce and tag.");
+    }
+
+    [Fact]
+    public void Key_is_defensively_copied()
+    {
+        var keyArray = RandomNumberGenerator.GetBytes(32);
+        var keyArrayCopy = (byte[])keyArray.Clone();
+        var protector = new AesGcmSecretProtector(keyArray);
+        var plaintext = "secret";
+        var blob = protector.Protect(plaintext);
+
+        // Mutate the original key array passed to the constructor
+        Array.Clear(keyArray);
+
+        // Unprotect should still work because the protector has its own copy
+        protector.Unprotect(blob).Should().Be(plaintext);
+
+        // Create a new protector with the mutated key and verify it cannot decrypt
+        var protectorWithClearedKey = new AesGcmSecretProtector(keyArrayCopy);
+        protectorWithClearedKey.Protect(plaintext).Should().NotEqual(blob);
+    }
 }

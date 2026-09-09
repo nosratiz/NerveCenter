@@ -18,7 +18,7 @@ public sealed class AesGcmSecretProtector : ISecretProtector
             throw new ArgumentException("Data key must be exactly 32 bytes.", nameof(key));
         }
 
-        _key = key;
+        _key = (byte[])key.Clone();
     }
 
     public byte[] Protect(string plaintext)
@@ -37,6 +37,11 @@ public sealed class AesGcmSecretProtector : ISecretProtector
 
     public string Unprotect(byte[] blob)
     {
+        if (blob.Length < NonceSize + TagSize)
+        {
+            throw new CryptographicException("Ciphertext blob is too short to contain a nonce and tag.");
+        }
+
         var nonce = blob.AsSpan(0, NonceSize);
         var tag = blob.AsSpan(NonceSize, TagSize);
         var cipher = blob.AsSpan(NonceSize + TagSize);
