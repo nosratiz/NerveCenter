@@ -37,10 +37,12 @@ public class DeleteConnectionCommandHandlerTests
     public async Task Unknown_id_returns_not_found()
     {
         using var testDb = new TestDb();
+        var audit = Substitute.For<IAuditWriter>();
 
-        var result = await new DeleteConnectionCommandHandler(testDb, Substitute.For<IAuditWriter>(), new FakeTimeProvider())
+        var result = await new DeleteConnectionCommandHandler(testDb, audit, new FakeTimeProvider())
             .HandleAsync(new DeleteConnectionCommand(Guid.NewGuid(), "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.NotFound);
+        await audit.DidNotReceive().WriteAsync(Arg.Any<AuditEntry>(), Arg.Any<CancellationToken>());
     }
 }

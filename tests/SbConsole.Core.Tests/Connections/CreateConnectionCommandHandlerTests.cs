@@ -46,10 +46,14 @@ public class CreateConnectionCommandHandlerTests
         var audit = Substitute.For<IAuditWriter>();
         var handler = Handler(testDb, audit);
         await handler.HandleAsync(new CreateConnectionCommand("dup", "k", "s", [], "admin"));
+        audit.ClearReceivedCalls();
 
         var result = await handler.HandleAsync(new CreateConnectionCommand("dup", "k", "s2", [], "admin"));
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Category.Should().Be(ErrorCategory.Conflict);
+        await audit.DidNotReceive().WriteAsync(Arg.Any<AuditEntry>(), Arg.Any<CancellationToken>());
+        await using var db = testDb.CreateDbContext();
+        (await db.Connections.CountAsync()).Should().Be(1);
     }
 }
