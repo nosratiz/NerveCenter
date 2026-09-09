@@ -11,3 +11,4 @@ obj/
 
 # OS
 .DS_Store
+.superpowers/

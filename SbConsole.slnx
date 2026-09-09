@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SbConsole.Core/SbConsole.Core.csproj" />
+    <Project Path="src/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
+    <Project Path="src/SbConsole.Sdk/SbConsole.Sdk.csproj" />
+    <Project Path="src/SbConsole.Web/SbConsole.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SbConsole.Core.Tests/SbConsole.Core.Tests.csproj" />
+    <Project Path="tests/SbConsole.Plugins.ServiceBus.Tests/SbConsole.Plugins.ServiceBus.Tests.csproj" />
+    <Project Path="tests/SbConsole.Web.Tests/SbConsole.Web.Tests.csproj" />
+  </Folder>
+</Solution>

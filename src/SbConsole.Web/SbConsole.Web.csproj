@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SbConsole.Core\SbConsole.Core.csproj" />
+    <ProjectReference Include="..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+    <ProjectReference Include="..\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+</Project>
