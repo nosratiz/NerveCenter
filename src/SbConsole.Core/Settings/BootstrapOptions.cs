@@ -30,4 +30,7 @@ public sealed record BootstrapOptions(string DbPath, byte[] DataKey, string Admi
             ApiKey: Require("SBC_API_KEY"),
             Bind: getEnv("SBC_BIND") ?? "http://localhost:5080");
     }
+
+    public override string ToString() =>
+        $"BootstrapOptions {{ DbPath = {DbPath}, DataKey = [REDACTED], AdminPassword = [REDACTED], ApiKey = [REDACTED], Bind = {Bind} }}";
 }

@@ -20,6 +20,17 @@ public sealed class DeleteConnectionCommandHandler(
         var connection = await db.Connections.SingleOrDefaultAsync(c => c.Id == cmd.Id, ct);
         if (connection is null)
         {
+            await audit.WriteAsync(new AuditEntry
+            {
+                At = clock.GetUtcNow(),
+                Actor = cmd.Actor,
+                Action = "connection.delete",
+                Target = cmd.Id.ToString(),
+                Risk = ActionRisk.Destructive,
+                Succeeded = false,
+                Detail = "Connection not found.",
+            }, ct);
+
             return Result.Fail(ErrorCategory.NotFound, "Connection not found.");
         }
 

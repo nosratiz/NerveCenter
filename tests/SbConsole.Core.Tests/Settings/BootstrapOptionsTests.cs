@@ -66,4 +66,18 @@ public class BootstrapOptionsTests
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*32 bytes*");
     }
+
+    [Fact]
+    public void ToString_redacts_secrets()
+    {
+        var env = ValidEnv();
+
+        var options = BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+
+        var text = options.ToString();
+
+        text.Should().NotContain("hunter2");
+        text.Should().NotContain("api-key");
+        text.Should().Contain("[REDACTED]");
+    }
 }

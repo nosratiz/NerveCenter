@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using SbConsole.Core.Audit;
@@ -20,6 +21,11 @@ var builder = WebApplication.CreateBuilder(args);
 var bootstrap = BootstrapOptions.FromEnvironment(Environment.GetEnvironmentVariable);
 builder.WebHost.UseUrls(bootstrap.Bind);
 builder.Services.AddSingleton(bootstrap);
+
+var keysDirectory = new DirectoryInfo(Path.Combine(Path.GetDirectoryName(bootstrap.DbPath) ?? ".", "dataprotection-keys"));
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(keysDirectory)
+    .SetApplicationName("SbConsole");
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddMudServices();

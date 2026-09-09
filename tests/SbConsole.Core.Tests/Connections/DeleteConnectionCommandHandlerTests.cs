@@ -43,6 +43,8 @@ public class DeleteConnectionCommandHandlerTests
             .HandleAsync(new DeleteConnectionCommand(Guid.NewGuid(), "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.NotFound);
-        await audit.DidNotReceive().WriteAsync(Arg.Any<AuditEntry>(), Arg.Any<CancellationToken>());
+        await audit.Received(1).WriteAsync(
+            Arg.Is<AuditEntry>(a => a.Action == "connection.delete" && a.Risk == ActionRisk.Destructive && !a.Succeeded),
+            Arg.Any<CancellationToken>());
     }
 }
