@@ -33,7 +33,18 @@ internal sealed class EfPluginStore(IDbContextFactory<SbcDbContext> dbFactory, s
             doc.Json = value;
         }
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException) when (doc is null)
+        {
+            // Lost a race to a concurrent insert for the same (PluginId, Key). Retry as an update.
+            db.ChangeTracker.Clear();
+            var existing = await db.PluginDocuments.SingleAsync(d => d.PluginId == pluginId && d.Key == key, ct);
+            existing.Json = value;
+            await db.SaveChangesAsync(ct);
+        }
     }
 
     public async Task<bool> DeleteAsync(string key, CancellationToken ct = default)
