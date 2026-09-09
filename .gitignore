@@ -1,0 +1,13 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
