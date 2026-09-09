@@ -1,0 +1,26 @@
+@* src/SbConsole.Web/Components/Pages/Login.razor *@
+@page "/login"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@layout SbConsole.Web.Components.Layout.EmptyLayout
+
+<PageTitle>Sign in — SbConsole</PageTitle>
+
+<div style="display:flex;justify-content:center;margin-top:15vh">
+    <MudPaper Class="pa-8" Style="width:360px">
+        <MudText Typo="Typo.h5" Class="mb-4">SbConsole</MudText>
+        <form method="post" action="/auth/login">
+            <input type="password" name="password" placeholder="Admin password"
+                   style="width:100%;padding:8px;margin-bottom:12px" autofocus />
+            <button type="submit" style="width:100%;padding:8px">Sign in</button>
+        </form>
+        @if (Failed)
+        {
+            <MudText Color="Color.Error" Class="mt-2">Wrong password.</MudText>
+        }
+    </MudPaper>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "failed")]
+    public bool Failed { get; set; }
+}
