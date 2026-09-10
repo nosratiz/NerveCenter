@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor;
@@ -23,7 +24,11 @@ public class AddEditConnectionDialogTests : BunitContext, IAsyncLifetime
     // Xunit.IAsyncLifetime, in which case DisposeAsync() runs first -- disposing those services
     // the async-safe way before the base (synchronous) Dispose() runs as a no-op afterwards.
     Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
-    async Task IAsyncLifetime.DisposeAsync() => await base.DisposeAsync();
+    async Task IAsyncLifetime.DisposeAsync()
+    {
+        await base.DisposeAsync();
+        _testDb.Dispose();
+    }
 
     private sealed class FakePlugin(string kind, string displayName) : IPlugin
     {
@@ -135,6 +140,32 @@ public class AddEditConnectionDialogTests : BunitContext, IAsyncLifetime
 
         cut.Find("input#connection-name").GetAttribute("value").Should().Be("sb-dev");
         cut.Find("button.save-connection").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Save_in_edit_mode_preserves_the_existing_secret_when_the_field_is_left_blank()
+    {
+        const string originalSecret = "Endpoint=sb://original;SharedAccessKey=orig-key";
+
+        var created = await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", originalSecret, ["dev"], "admin"));
+
+        var existing = new ConnectionInfo(created.Value, "sb-dev", "azure-servicebus", ["dev"]);
+
+        var cut = RenderDialog(existing);
+
+        // Change something other than the secret field, which is left blank per the Edit-mode
+        // contract asserted below.
+        cut.Find("input#connection-tag-input").Input("prod");
+        cut.Find("button#add-tag").Click();
+
+        cut.Find("button.save-connection").Click();
+        await Task.Delay(50); // let the async Save handler's awaits (Update command + DB write) complete
+
+        var protector = Services.GetRequiredService<ISecretProtector>();
+        await using var db = _testDb.CreateDbContext();
+        var stored = await db.Connections.SingleAsync(c => c.Id == existing.Id);
+        protector.Unprotect(stored.SecretCiphertext).Should().Be(originalSecret);
     }
 
     [Fact]

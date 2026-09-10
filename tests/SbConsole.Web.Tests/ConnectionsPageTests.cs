@@ -21,7 +21,11 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
     // Xunit.IAsyncLifetime, in which case DisposeAsync() runs first -- disposing those services
     // the async-safe way before the base (synchronous) Dispose() runs as a no-op afterwards.
     Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
-    async Task IAsyncLifetime.DisposeAsync() => await base.DisposeAsync();
+    async Task IAsyncLifetime.DisposeAsync()
+    {
+        await base.DisposeAsync();
+        _testDb.Dispose();
+    }
 
     private readonly TestDb _testDb = new();
     private readonly IAuditWriter _audit = Substitute.For<IAuditWriter>();
@@ -76,5 +80,30 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(50); // let the async click handler's awaits (confirm + DB delete) complete
 
         await confirmation.Received(1).ConfirmAsync("Delete", "sb-dev", false, null, Arg.Any<CancellationToken>());
+
+        var remaining = await Services.GetRequiredService<ListConnectionsQueryHandler>().HandleAsync();
+        remaining.Should().NotContain(c => c.Name == "sb-dev");
+    }
+
+    [Fact]
+    public async Task Delete_leaves_the_connection_when_confirmation_service_returns_false()
+    {
+        // Same registration-ordering constraint as the confirmed-delete test above: replace the
+        // default IConfirmationService substitute before anything resolves from Services.
+        var confirmation = Substitute.For<SbConsole.Sdk.IConfirmationService>();
+        confirmation.ConfirmAsync("Delete", "sb-dev", false, null, Arg.Any<CancellationToken>()).Returns(false);
+        Services.AddSingleton(confirmation);
+
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = Render<Connections>();
+        cut.Find("button.delete-connection").Click();
+        await Task.Delay(50); // let the async click handler's awaits (confirm, short-circuited) complete
+
+        await confirmation.Received(1).ConfirmAsync("Delete", "sb-dev", false, null, Arg.Any<CancellationToken>());
+
+        var remaining = await Services.GetRequiredService<ListConnectionsQueryHandler>().HandleAsync();
+        remaining.Should().Contain(c => c.Name == "sb-dev");
     }
 }
