@@ -1,7 +1,10 @@
 # SbConsole — Design (v1)
 
-Status: approved 2026-09-09.
-SDK version: `SbConsole.Sdk` 1.0.0 (bump and note here on every SDK change).
+Status: approved 2026-09-09. Extended 2026-09-10 (Core UI: §3 SDK v1.1, §4
+new handlers, §5 screen inventory).
+SDK version: `SbConsole.Sdk` 1.1.0 — see §3 for the 2026-09-10 additions
+(`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
+`IConfirmationService`).
 
 ## 1. What it is
 
@@ -43,7 +46,13 @@ Nothing depends on plugin assemblies except the Web host's registration line.
 
 - `IPlugin` — identity (`Id`, `DisplayName`, `Version`),
   `ConfigureServices(IServiceCollection)`, declares nav items and root Blazor
-  component types.
+  component types. **(v1.1)** also declares `ConnectionKind` (matches
+  `Connection.Kind`, e.g. `"azure-servicebus"`), `ConnectionKindDisplayName`
+  (shown in the host's Add Connection "Kind" dropdown), and `Contribution`
+  (a `PluginContribution(int PageCount, int ActionCount)` record, shown on
+  the host's Plugins page). All three are static/declarative properties —
+  no plugin method call, no async round-trip; the host reads them straight
+  off `PluginRegistry.Plugins`.
 - `IPluginStore` — namespaced key/value + JSON document storage, scoped per
   plugin ID. The only persistence a plugin gets. Plugins never touch the
   DbContext.
@@ -53,12 +62,33 @@ Nothing depends on plugin assemblies except the Web host's registration line.
 - `PluginAction` metadata — `ActionRisk` enum (`Safe`, `Mutating`,
   `Destructive`) the host uses to enforce confirmation rules.
 - `IAuditScope` — plugins report what they did; the host writes the audit row.
+- **(v1.1)** `IConfirmationService` —
+  `Task<bool> ConfirmAsync(string verb, string target, bool isProd, int? count = null, CancellationToken ct = default)`.
+  How host code (delete connection) and plugin code (purge queue) both
+  trigger the same typed-confirmation dialog without the plugin ever
+  referencing `SbConsole.Web`: the interface lives in Sdk, the MudBlazor
+  dialog component lives in Web and is registered in DI, plugins consume it
+  by injection like any other Sdk service. Typed confirmation (type the
+  target name to proceed) applies only when `isProd` is true and the
+  Settings "require typed confirmation on prod-tagged targets" toggle is on;
+  otherwise it degrades to a plain two-button confirm.
+
+Connection reachability testing (pinging a saved connection with its
+credentials) is deliberately **not** part of the SDK yet — it is dynamic,
+plugin-specific I/O rather than a static property, and is deferred to the
+plan that gives a plugin something real to test against.
 
 ## 4. Host core (`SbConsole.Core`)
 
 - **Handlers**: plain `XxxQueryHandler` / `XxxCommandHandler` classes,
   DI-registered. No MediatR. Commands write audit rows via `IAuditWriter`;
-  queries never write.
+  queries never write. **(v1.1)** adds `UpdateConnectionCommandHandler`
+  (rename/re-tag/replace-secret — v1.0 only had Create/List/Delete),
+  `ListAuditEntriesQueryHandler` (paged, filterable by date range, actor,
+  risk, target text — v1.0 could only write audit rows, never read them
+  back), and `ListPluginsQueryHandler` (joins `PluginRegistry`'s static
+  plugin metadata with a live "connections in use" count grouped by
+  `Connection.Kind`, for the Plugins page).
 - **Persistence**: EF Core + SQLite (WAL) at `SBC_DB_PATH`. Tables:
   `AppSettings`, `Connections`, `AuditEntries`, `PluginDocuments`. No
   SQLite-only SQL — PostgreSQL stays a viable later option.
@@ -78,18 +108,53 @@ Nothing depends on plugin assemblies except the Web host's registration line.
 
 - Blazor Web App, Interactive Server render mode only. No WebAssembly.
 - MudBlazor shell (single component library): nav drawer with host sections
-  (Dashboard, Connections, Audit, Settings) plus plugin-contributed nav items
-  under each plugin's heading.
+  (Dashboard, Connections, Audit, Plugins, Settings) plus plugin-contributed
+  nav items under each plugin's heading.
 - Plugin pages mount at `/p/{pluginId}/...`, rendering the plugin's registered
   root components.
 - Destructive actions (`ActionRisk.Destructive`) on prod-tagged connections
-  require a typed-confirmation dialog (user types the entity/connection name).
+  require the typed-confirmation dialog (`IConfirmationService`, §3).
 - Minimal APIs (no controllers) under `/api/v1`: health, list connections
   (no secrets), list entities, peek, send, resubmit-DLQ, purge. Destructive
   endpoints additionally require `?confirm=<name>`. OpenAPI via
   `Microsoft.AspNetCore.OpenApi`. The UI does not use the API — it calls Core
   handlers directly; the API exists for external automation and grows on
   demand.
+
+### 5.1 Host screens (v1.1)
+
+- **Login** — single card, password field only, no username. Matches v1.0.
+- **Dashboard** — triage-first layout: a "Needs attention" section (unreachable
+  connections, growing dead-letter backlogs, disabled subscriptions — all
+  plugin-reported problems) above a recent-activity feed sourced from real
+  audit entries. With zero plugins reporting problems (true until a plugin
+  exists to report them), "Needs attention" renders a correct, honest empty
+  state rather than fake data — the page doesn't need stubbing to be right.
+- **Connections** — list/add/edit/delete. The Add/Edit dialog's "Kind"
+  dropdown is populated from `PluginRegistry.Plugins` (`ConnectionKind` /
+  `ConnectionKindDisplayName`), not free text. A Status column always reads
+  "Untested" — reachability testing is deferred (§3). Delete on a prod-tagged
+  connection goes through `IConfirmationService`.
+- **Audit** — filterable (date range, actor, risk, target text) paginated
+  table over `ListAuditEntriesQueryHandler`. CSV export is out of scope for
+  v1.1 (cheap to add later; cut to keep this slice tight).
+- **Settings** — instance name, theme (Light/Dark/System via MudBlazor's
+  theme provider), the "require typed confirmation on prod-tagged targets"
+  toggle (read by `IConfirmationService`'s implementation), session timeout,
+  and audit retention (days). The latter two are **persisted but not
+  enforced** by any running code yet: session timeout changes take effect
+  only after the app restarts (cookie options are configured once at
+  startup, not re-read per-request), and audit retention has no purge job
+  behind it (that needs a background-job decision out of scope here).
+- **Plugins** — **read-only** for v1.1: a table of the compile-time-registered
+  plugins (`PluginRegistry`) showing version, `Contribution` summary, and
+  live connections-in-use count. No install/enable/disable/registry/remove —
+  that's the dynamic-plugin-loading feature explicitly deferred past v1 (§2).
+
+Deferred past v1.1: connection reachability testing, plugin-contributed
+dashboard widgets, charts/wallboard views, audit CSV export, audit-retention
+enforcement, the dynamic plugin marketplace (install/enable/disable at
+runtime).
 
 ## 6. Service Bus plugin (`SbConsole.Plugins.ServiceBus`)
 
