@@ -1,0 +1,85 @@
+@* src/SbConsole.Web/Components/Pages/Audit.razor *@
+@page "/audit"
+@using SbConsole.Core.Audit
+@using SbConsole.Sdk
+@inject ListAuditEntriesQueryHandler ListHandler
+
+<PageTitle>Audit</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-4">Audit</MudText>
+
+<div class="d-flex gap-4 mb-4">
+    <MudTextField T="string" Label="Actor" @bind-Value="_actor" @bind-Value:after="ReloadAsync" />
+    <MudSelect T="ActionRisk?" Label="Risk" @bind-Value="_risk" @bind-Value:after="ReloadAsync">
+        <MudSelectItem T="ActionRisk?" Value="null">All</MudSelectItem>
+        <MudSelectItem T="ActionRisk?" Value="ActionRisk.Safe">Safe</MudSelectItem>
+        <MudSelectItem T="ActionRisk?" Value="ActionRisk.Mutating">Mutating</MudSelectItem>
+        <MudSelectItem T="ActionRisk?" Value="ActionRisk.Destructive">Destructive</MudSelectItem>
+    </MudSelect>
+    <MudTextField T="string" Label="Search target" @bind-Value="_targetContains" @bind-Value:after="ReloadAsync" />
+</div>
+
+<MudTable Items="_page.Entries">
+    <HeaderContent>
+        <MudTh>Timestamp</MudTh>
+        <MudTh>Actor</MudTh>
+        <MudTh>Action</MudTh>
+        <MudTh>Target</MudTh>
+        <MudTh>Risk</MudTh>
+        <MudTh>Result</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.At.ToLocalTime()</MudTd>
+        <MudTd>@context.Actor</MudTd>
+        <MudTd>@context.Action</MudTd>
+        <MudTd>@context.Target</MudTd>
+        <MudTd>@context.Risk</MudTd>
+        <MudTd>@(context.Succeeded ? "✓" : "✕")</MudTd>
+    </RowTemplate>
+</MudTable>
+
+<div class="d-flex justify-space-between align-center mt-2">
+    <MudText>@_page.Entries.Count of @_page.TotalCount</MudText>
+    <div>
+        <MudButton Disabled="@(_pageNumber <= 1)" OnClick="PreviousPage">‹ Prev</MudButton>
+        <MudButton Disabled="@(_pageNumber * PageSize >= _page.TotalCount)" OnClick="NextPage">Next ›</MudButton>
+    </div>
+</div>
+
+@code {
+    private const int PageSize = 25;
+    private string? _actor;
+    private ActionRisk? _risk;
+    private string? _targetContains;
+    private int _pageNumber = 1;
+    private AuditPage _page = new([], 0);
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _page = await ListHandler.HandleAsync(new AuditQuery(
+            Actor: string.IsNullOrWhiteSpace(_actor) ? null : _actor,
+            Risk: _risk,
+            TargetContains: string.IsNullOrWhiteSpace(_targetContains) ? null : _targetContains,
+            Page: _pageNumber,
+            PageSize: PageSize));
+    }
+
+    private async Task PreviousPage()
+    {
+        _pageNumber--;
+        await LoadAsync();
+    }
+
+    private async Task NextPage()
+    {
+        _pageNumber++;
+        await LoadAsync();
+    }
+}
