@@ -17,6 +17,9 @@ public class NavMenuTests : BunitContext
         public string Version => "1.0.0";
         public IReadOnlyList<PluginNavItem> NavItems => [new("Queues", "/p/fake/queues")];
         public Type RootComponent => typeof(object);
+        public string ConnectionKind => "fake";
+        public string ConnectionKindDisplayName => "Fake Connection Kind";
+        public PluginContribution Contribution => new(PageCount: 1, ActionCount: 1);
         public void ConfigureServices(IServiceCollection services) { }
     }
 

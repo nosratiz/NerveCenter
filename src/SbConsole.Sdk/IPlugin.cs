@@ -16,5 +16,14 @@ public interface IPlugin
     /// <summary>Root Blazor component rendered at /p/{Id}. Must derive from ComponentBase.</summary>
     Type RootComponent { get; }
 
+    /// <summary>Connection kind this plugin's connections use, e.g. "azure-servicebus". Matches Connection.Kind.</summary>
+    string ConnectionKind { get; }
+
+    /// <summary>Shown in the host's Add/Edit Connection "Kind" dropdown.</summary>
+    string ConnectionKindDisplayName { get; }
+
+    /// <summary>Static summary shown on the host's Plugins page.</summary>
+    PluginContribution Contribution { get; }
+
     void ConfigureServices(IServiceCollection services);
 }
