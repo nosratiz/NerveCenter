@@ -23,12 +23,13 @@ public sealed class SbcDbContext(DbContextOptions<SbcDbContext> options) : DbCon
         {
             e.HasKey(a => a.Id);
             e.Property(a => a.Risk).HasConversion<string>();
-            // Store as UTC ticks (not the default DateTimeOffset TEXT mapping) so this column can be
-            // used in server-side ORDER BY: SQLite's EF Core provider refuses to translate ORDER BY
-            // over a raw DateTimeOffset-typed column ("SQLite does not support expressions of type
-            // 'DateTimeOffset' in ORDER BY clauses"), even though WHERE comparisons translate fine.
-            // All values are written via this app's UTC TimeProvider-based clock, so round-tripping
-            // through UTC ticks loses no information.
+            // Store as UTC ticks (not the default DateTimeOffset TEXT mapping) because EF Core 10 +
+            // the SQLite provider cannot translate either WHERE comparisons or ORDER BY over a raw
+            // DateTimeOffset-typed column to SQL (both throw/fail to translate, e.g. "SQLite does not
+            // support expressions of type 'DateTimeOffset' in ORDER BY clauses") -- the long-typed
+            // ticks column is required for both filtering and sorting to work at all. All values are
+            // written via this app's UTC TimeProvider-based clock, so round-tripping through UTC
+            // ticks loses no information.
             e.Property(a => a.At).HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
             e.HasIndex(a => a.At);
         });
