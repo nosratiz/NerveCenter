@@ -101,4 +101,28 @@ public class AuditPageTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().NotContain("message.peek");
         cut.Markup.Should().Contain("queue.purge");
     }
+
+    [Fact]
+    public async Task From_date_filter_excludes_entries_before_it()
+    {
+        var older = DateTimeOffset.UtcNow.AddDays(-10);
+        var newer = DateTimeOffset.UtcNow;
+        await SeedAsync(
+            Entry("queue.purge", ActionRisk.Destructive, older),
+            Entry("message.peek", ActionRisk.Safe, newer));
+
+        var cut = RenderPage();
+        cut.WaitForState(() => cut.Markup.Contains("queue.purge"));
+
+        // MudDatePicker's own calendar popover is a separate concern from this page's filter
+        // wiring -- rather than driving the popup UI, set the bound "From" date directly via
+        // bUnit's parameter-setting API on the rendered MudDatePicker and let its @bind-Date:after
+        // callback (ReloadAsync) run, which is the actual behavior under test here.
+        var fromPicker = cut.FindComponents<MudDatePicker>()[0];
+        await cut.InvokeAsync(() => fromPicker.Instance.DateChanged.InvokeAsync(newer.Date));
+        cut.WaitForState(() => !cut.Markup.Contains("queue.purge"));
+
+        cut.Markup.Should().NotContain("queue.purge");
+        cut.Markup.Should().Contain("message.peek");
+    }
 }
