@@ -1,7 +1,54 @@
-﻿@page "/"
+@page "/"
+@using SbConsole.Core.Audit
+@using SbConsole.Core.Connections
+@using SbConsole.Core.Data.Entities
+@inject ListConnectionsQueryHandler ConnectionsHandler
+@inject ListAuditEntriesQueryHandler AuditHandler
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Dashboard</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-2">Dashboard</MudText>
+<MudText Typo="Typo.body2" Class="mb-4">@_connectionCount connection(s) saved</MudText>
 
-<h1>Hello, world!</h1>
+<MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
+@if (_needsAttention.Count == 0)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
+}
+else
+{
+    @* Populated once a plugin reports problems (Plan 3+); intentionally empty for now. *@
+}
 
-Welcome to your new app.
+<MudText Typo="Typo.h6" Class="mb-2">Recent activity</MudText>
+<MudTable Items="_recentActivity">
+    <HeaderContent>
+        <MudTh>Time</MudTh>
+        <MudTh>Actor</MudTh>
+        <MudTh>Action</MudTh>
+        <MudTh>Target</MudTh>
+        <MudTh>Risk</MudTh>
+        <MudTh>Result</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.At.ToLocalTime()</MudTd>
+        <MudTd>@context.Actor</MudTd>
+        <MudTd>@context.Action</MudTd>
+        <MudTd>@context.Target</MudTd>
+        <MudTd>@context.Risk</MudTd>
+        <MudTd>@(context.Succeeded ? "✓" : "✕")</MudTd>
+    </RowTemplate>
+</MudTable>
+<MudLink Href="/audit">Open audit log →</MudLink>
+
+@code {
+    private int _connectionCount;
+    private List<string> _needsAttention = [];
+    private IReadOnlyList<AuditEntry> _recentActivity = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connectionCount = (await ConnectionsHandler.HandleAsync()).Count;
+        var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
+        _recentActivity = page.Entries;
+    }
+}
