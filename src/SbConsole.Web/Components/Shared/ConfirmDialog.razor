@@ -1,0 +1,42 @@
+@* src/SbConsole.Web/Components/Shared/ConfirmDialog.razor *@
+<MudDialog>
+    <DialogContent>
+        <MudText Class="mb-2">
+            @if (Count is { } count)
+            {
+                <text>This will @Verb.ToLowerInvariant() @count item(s) from <strong>@Target</strong>. This cannot be undone.</text>
+            }
+            else
+            {
+                <text>This will @Verb.ToLowerInvariant() <strong>@Target</strong>. This cannot be undone.</text>
+            }
+        </MudText>
+        @if (RequireTypedConfirmation)
+        {
+            <MudText Typo="Typo.body2" Class="mb-1">Type <strong>@Target</strong> to confirm.</MudText>
+            <MudTextField T="string" @bind-Value="_typedValue" Immediate="true" Placeholder="@Target" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Class="confirm-action" Color="Color.Error" Variant="Variant.Filled"
+                   Disabled="@(RequireTypedConfirmation && _typedValue != Target)"
+                   OnClick="Confirm">
+            @Verb
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public string Verb { get; set; } = "";
+    [Parameter, EditorRequired] public string Target { get; set; } = "";
+    [Parameter] public int? Count { get; set; }
+    [Parameter] public bool RequireTypedConfirmation { get; set; }
+
+    private string _typedValue = "";
+
+    private void Confirm() => MudDialog.Close(DialogResult.Ok(true));
+    private void Cancel() => MudDialog.Cancel();
+}

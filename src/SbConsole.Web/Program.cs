@@ -14,6 +14,7 @@ using SbConsole.Core.Security;
 using SbConsole.Core.Settings;
 using SbConsole.Sdk;
 using SbConsole.Web.Components;
+using SbConsole.Web.Confirmation;
 using SbConsole.Web.Plugins;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -54,6 +55,7 @@ builder.Services.AddSingleton<IConnectionProvider, EfConnectionProvider>();
 builder.Services.AddScoped<CreateConnectionCommandHandler>();
 builder.Services.AddScoped<ListConnectionsQueryHandler>();
 builder.Services.AddScoped<DeleteConnectionCommandHandler>();
+builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
 
 // Plugins (compile-time registration; see docs/design.md §2)
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));
