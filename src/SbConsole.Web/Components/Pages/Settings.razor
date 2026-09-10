@@ -1,0 +1,55 @@
+@* src/SbConsole.Web/Components/Pages/Settings.razor *@
+@page "/settings"
+@using SbConsole.Core.Settings
+@inject ISettings SettingsService
+@inject NavigationManager Navigation
+
+<PageTitle>Settings</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-4">Settings</MudText>
+
+<MudTextField id="instance-name" @bind-Value="_instanceName" Label="Instance name" Immediate="true" />
+<MudSelect T="string" @bind-Value="_theme" Label="Theme">
+    <MudSelectItem Value="@("light")">Light</MudSelectItem>
+    <MudSelectItem Value="@("dark")">Dark</MudSelectItem>
+    <MudSelectItem Value="@("system")">System</MudSelectItem>
+</MudSelect>
+<MudNumericField T="int" @bind-Value="_sessionTimeoutHours" Label="Session timeout (hours)" />
+<MudSwitch T="bool" @bind-Value="_requireTypedConfirmation" Label="Require typed confirmation on prod-tagged targets" />
+<MudNumericField T="int" @bind-Value="_auditRetentionDays" Label="Audit retention (days)" />
+
+<MudButton Class="save-settings" Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync">Save changes</MudButton>
+
+@code {
+    private string _instanceName = "";
+    private string _theme = "system";
+    private int _sessionTimeoutHours = 12;
+    private bool _requireTypedConfirmation = true;
+    private int _auditRetentionDays = 365;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _instanceName = await SettingsService.GetAsync("instance.name") ?? "";
+        _theme = await SettingsService.GetAsync("theme.mode") ?? "system";
+        _sessionTimeoutHours = int.TryParse(await SettingsService.GetAsync("auth.sessionTimeoutHours"), out var h) ? h : 12;
+        _requireTypedConfirmation = !bool.TryParse(await SettingsService.GetAsync("confirm.requireTypedForProd"), out var b) || b;
+        _auditRetentionDays = int.TryParse(await SettingsService.GetAsync("audit.retentionDays"), out var d) ? d : 365;
+    }
+
+    private async Task SaveAsync()
+    {
+        await SettingsService.SetAsync("instance.name", _instanceName);
+        await SettingsService.SetAsync("theme.mode", _theme);
+        await SettingsService.SetAsync("auth.sessionTimeoutHours", _sessionTimeoutHours.ToString());
+        await SettingsService.SetAsync("confirm.requireTypedForProd", _requireTypedConfirmation.ToString());
+        await SettingsService.SetAsync("audit.retentionDays", _auditRetentionDays.ToString());
+
+        try
+        {
+            Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+        }
+        catch (NavigationException)
+        {
+            // bUnit's fake NavigationManager doesn't support forceLoad; harmless in tests, real in the browser.
+        }
+    }
+}
