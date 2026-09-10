@@ -50,15 +50,28 @@ namespace SbConsole.Core.Migrations
                 oldClrType: typeof(long),
                 oldType: "INTEGER");
 
-            // Mirror-image backfill of the Up() conversion above, applied AFTER the column is back to
-            // its TEXT-based type, so Down() undoes Up() fully (data included), not just the schema.
-            // Converts UTC-ticks INTEGER values back to the TEXT DateTimeOffset format EF Core's
-            // SQLite provider expects (e.g. "2026-09-09 20:50:00.000+00:00"): ticks -> unix seconds
-            // via the same epoch constant used in Up(), then strftime(..., 'unixepoch') renders the
-            // UTC calendar date/time with millisecond precision. "+00:00" is appended because the
-            // value converter in SbcDbContext always stores these values as UTC (TimeSpan.Zero
-            // offset). As in Up(), this round-trip is only accurate to the millisecond -- acceptable
-            // for an audit log.
+            // Mirror-image backfill of the Up() conversion above, so Down() undoes Up() fully (data
+            // included), not just the schema. NOTE ON ORDERING: even though this Sql() call appears
+            // after the AlterColumn above in source, EF Core's SQLite migrations generator does not
+            // run it after the column is back to TEXT. SQLite can't alter a column type in place, so
+            // AlterColumn is realized as a table rebuild (CREATE a temp table with the new schema,
+            // INSERT ... SELECT the old rows into it, DROP the original, RENAME the temp table into
+            // place); that rebuild is deferred and only materializes once enough pending operations
+            // force it, and this Sql() operation runs BEFORE that rebuild completes, against the
+            // still-INTEGER-typed "AuditEntries" table (verified via `dotnet ef migrations script`
+            // for the down direction: the UPDATE below precedes the CREATE ef_temp_AuditEntries /
+            // INSERT / DROP / RENAME sequence, and EF itself warns "An operation of type
+            // 'SqlOperation' will be attempted while a rebuild of table 'AuditEntries' is pending").
+            // This still round-trips correctly because SQLite has dynamic typing: writing this TEXT
+            // string into the (still nominally INTEGER-affinity) column succeeds as-is, and the
+            // subsequent rebuild's INSERT ... SELECT copies that TEXT value straight into the new
+            // TEXT-typed column. Converts UTC-ticks INTEGER values back to the TEXT DateTimeOffset
+            // format EF Core's SQLite provider expects (e.g. "2026-09-09 20:50:00.000+00:00"): ticks
+            // -> unix seconds via the same epoch constant used in Up(), then strftime(...,
+            // 'unixepoch') renders the UTC calendar date/time with millisecond precision. "+00:00" is
+            // appended because the value converter in SbcDbContext always stores these values as UTC
+            // (TimeSpan.Zero offset). As in Up(), this round-trip is only accurate to the millisecond
+            // -- acceptable for an audit log.
             migrationBuilder.Sql(
                 """
                 UPDATE AuditEntries

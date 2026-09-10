@@ -10,7 +10,7 @@ public sealed class MudConfirmationService(IDialogService dialogService, ISettin
     public async Task<bool> ConfirmAsync(string verb, string target, bool isProd, int? count = null, CancellationToken ct = default)
     {
         var settingValue = await settings.GetAsync("confirm.requireTypedForProd", ct);
-        var requireTypedForProd = settingValue is null || bool.Parse(settingValue);
+        var requireTypedForProd = !bool.TryParse(settingValue, out var parsed) || parsed;
         var requireTyped = isProd && requireTypedForProd;
 
         var parameters = new DialogParameters<ConfirmDialog>

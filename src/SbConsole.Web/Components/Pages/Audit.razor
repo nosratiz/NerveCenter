@@ -68,8 +68,8 @@
     private async Task LoadAsync()
     {
         _page = await ListHandler.HandleAsync(new AuditQuery(
-            From: _fromDate is { } from ? new DateTimeOffset(from, TimeSpan.Zero) : null,
-            To: _toDate is { } to ? new DateTimeOffset(to.AddDays(1).AddTicks(-1), TimeSpan.Zero) : null,
+            From: _fromDate is { } from ? new DateTimeOffset(from, TimeZoneInfo.Local.GetUtcOffset(from)) : null,
+            To: _toDate is { } to ? new DateTimeOffset(to.AddDays(1).AddTicks(-1), TimeZoneInfo.Local.GetUtcOffset(to)) : null,
             Actor: string.IsNullOrWhiteSpace(_actor) ? null : _actor,
             Risk: _risk,
             TargetContains: string.IsNullOrWhiteSpace(_targetContains) ? null : _targetContains,

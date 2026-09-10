@@ -2,6 +2,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using SbConsole.Core.Connections
 @using SbConsole.Sdk
+@using SbConsole.Web.Auth
 
 <MudDialog>
     <DialogContent>
@@ -70,12 +71,9 @@
 
     private void RemoveTag(string tag) => _tags.Remove(tag);
 
-    private async Task<string> CurrentActorAsync() =>
-        AuthState is null ? "admin" : (await AuthState).User.Identity?.Name ?? "admin";
-
     private async Task Save()
     {
-        var actor = await CurrentActorAsync();
+        var actor = await ActorResolver.ResolveAsync(AuthState);
         if (Existing is null)
         {
             await CreateHandler.HandleAsync(new CreateConnectionCommand(_name, _kind, _secret, _tags, actor));

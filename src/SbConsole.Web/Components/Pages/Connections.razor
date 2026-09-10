@@ -1,6 +1,7 @@
 @* src/SbConsole.Web/Components/Pages/Connections.razor *@
 @page "/connections"
 @using SbConsole.Core.Connections
+@using SbConsole.Web.Auth
 @using SbConsole.Web.Components.Connections
 @inject ListConnectionsQueryHandler ListHandler
 @inject DeleteConnectionCommandHandler DeleteHandler
@@ -25,7 +26,7 @@
         <MudTd>
             @foreach (var tag in context.Tags)
             {
-                <MudChip T="string" Color="@(tag == "prod" ? Color.Warning : Color.Default)">@tag</MudChip>
+                <MudChip T="string" Color="@(string.Equals(tag, "prod", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default)">@tag</MudChip>
             }
         </MudTd>
         <MudTd>Untested</MudTd>
@@ -44,9 +45,6 @@
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
     private async Task RefreshAsync() => _connections = await ListHandler.HandleAsync();
-
-    private async Task<string> CurrentActorAsync() =>
-        AuthState is null ? "admin" : (await AuthState).User.Identity?.Name ?? "admin";
 
     private async Task OpenAdd()
     {
@@ -77,7 +75,7 @@
             return;
         }
 
-        var actor = await CurrentActorAsync();
+        var actor = await ActorResolver.ResolveAsync(AuthState);
         await DeleteHandler.HandleAsync(new DeleteConnectionCommand(connection.Id, actor));
         await RefreshAsync();
     }

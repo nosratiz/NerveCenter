@@ -9,6 +9,7 @@ using MudBlazor.Services;
 using SbConsole.Core.Audit;
 using SbConsole.Core.Connections;
 using SbConsole.Core.Data;
+using SbConsole.Core.Data.Entities;
 using SbConsole.Core.Plugins;
 using SbConsole.Core.Security;
 using SbConsole.Core.Settings;
@@ -55,6 +56,9 @@ builder.Services.AddSingleton<IConnectionProvider, EfConnectionProvider>();
 builder.Services.AddScoped<CreateConnectionCommandHandler>();
 builder.Services.AddScoped<ListConnectionsQueryHandler>();
 builder.Services.AddScoped<DeleteConnectionCommandHandler>();
+builder.Services.AddScoped<UpdateConnectionCommandHandler>();
+builder.Services.AddScoped<ListAuditEntriesQueryHandler>();
+builder.Services.AddScoped<ListPluginsQueryHandler>();
 builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
 
 // Plugins (compile-time registration; see docs/design.md §2)
@@ -76,7 +80,7 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
-app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options) =>
+app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options, IAuditWriter audit, TimeProvider clock) =>
 {
     var form = await http.Request.ReadFormAsync();
     var password = form["password"].ToString();
@@ -84,6 +88,15 @@ app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options) =>
             Encoding.UTF8.GetBytes(password),
             Encoding.UTF8.GetBytes(options.AdminPassword)))
     {
+        await audit.WriteAsync(new AuditEntry
+        {
+            At = clock.GetUtcNow(),
+            Actor = "admin",
+            Action = "auth.login",
+            Target = "-",
+            Risk = ActionRisk.Safe,
+            Succeeded = false,
+        });
         return Results.Redirect("/login?failed=true");
     }
 
@@ -91,15 +104,37 @@ app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options) =>
         [new Claim(ClaimTypes.Name, "admin")],
         CookieAuthenticationDefaults.AuthenticationScheme);
     await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+    await audit.WriteAsync(new AuditEntry
+    {
+        At = clock.GetUtcNow(),
+        Actor = "admin",
+        Action = "auth.login",
+        Target = "-",
+        Risk = ActionRisk.Safe,
+        Succeeded = true,
+    });
     return Results.Redirect("/");
 }).AllowAnonymous().DisableAntiforgery(); // pre-auth form; password is the only field, no session to ride
 
-app.MapPost("/auth/logout", async (HttpContext http) =>
+app.MapPost("/auth/logout", async (HttpContext http, IAuditWriter audit, TimeProvider clock) =>
 {
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    await audit.WriteAsync(new AuditEntry
+    {
+        At = clock.GetUtcNow(),
+        Actor = "admin",
+        Action = "auth.logout",
+        Target = "-",
+        Risk = ActionRisk.Safe,
+        Succeeded = true,
+    });
     return Results.Redirect("/login");
 });
 
 app.MapGet("/api/v1/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 
 app.Run();
+
+// Exposes the top-level-statement Program class so WebApplicationFactory<Program> can host it
+// in-process for integration tests (see tests/SbConsole.Web.Tests/AuthEndpointsTests.cs).
+public partial class Program;

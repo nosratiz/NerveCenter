@@ -67,4 +67,55 @@ public class AuditEntryMigrationTests
             }
         }
     }
+
+    /// <summary>
+    /// Every real audit row written via <c>TimeProvider.GetUtcNow()</c> carries 7 fractional-second
+    /// digits (e.g. "2026-03-15 13:45:30.1234567+00:00"), unlike the zero-fraction timestamp used
+    /// above. The backfill's julianday()-based conversion is documented as accurate only to the
+    /// millisecond, so this confirms a fractional timestamp still survives the migration -- to
+    /// millisecond precision, with the sub-millisecond remainder intentionally and acceptably lost.
+    /// </summary>
+    [Fact]
+    public async Task Migrating_an_existing_database_preserves_audit_timestamps_with_fractional_seconds()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"sbc-migration-test-{Guid.NewGuid()}.db");
+        var connectionString = $"Data Source={dbPath}";
+        try
+        {
+            await using (var db = new SbcDbContext(new DbContextOptionsBuilder<SbcDbContext>().UseSqlite(connectionString).Options))
+            {
+                var migrator = db.GetInfrastructure().GetRequiredService<IMigrator>();
+                await migrator.MigrateAsync(InitialCreateMigrationId);
+            }
+
+            const string originalText = "2026-03-15 13:45:30.1234567+00:00";
+            var originalInstant = DateTimeOffset.Parse(originalText);
+            await using (var connection = new SqliteConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                var command = connection.CreateCommand();
+                command.CommandText =
+                    "INSERT INTO AuditEntries (At, Actor, Action, Target, Risk, Succeeded) " +
+                    "VALUES ($at, 'admin', 'auth.login', '-', 'Safe', 1)";
+                command.Parameters.AddWithValue("$at", originalText);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            await using (var db = new SbcDbContext(new DbContextOptionsBuilder<SbcDbContext>().UseSqlite(connectionString).Options))
+            {
+                await db.Database.MigrateAsync();
+
+                var entry = await db.AuditEntries.SingleAsync();
+                entry.At.Should().BeCloseTo(originalInstant, TimeSpan.FromMilliseconds(2));
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
+    }
 }
