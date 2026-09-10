@@ -86,4 +86,22 @@ public class ListAuditEntriesQueryHandlerTests
         page2.Entries.Should().HaveCount(2);
         page1.Entries.Select(e => e.Action).Should().NotIntersectWith(page2.Entries.Select(e => e.Action));
     }
+
+    [Fact]
+    public async Task Combines_date_filter_with_another_filter_and_pagination()
+    {
+        using var testDb = new TestDb();
+        var now = DateTimeOffset.UtcNow;
+        await SeedAsync(testDb,
+            Entry("admin", "queue.purge", "a", ActionRisk.Destructive, true, now.AddDays(-10)), // out of date range
+            Entry("admin", "queue.purge", "b", ActionRisk.Destructive, true, now.AddMinutes(-3)),
+            Entry("admin", "queue.purge", "c", ActionRisk.Destructive, true, now.AddMinutes(-2)),
+            Entry("admin", "message.peek", "d", ActionRisk.Safe, true, now.AddMinutes(-1))); // wrong risk
+
+        var page = await new ListAuditEntriesQueryHandler(testDb).HandleAsync(new AuditQuery(
+            From: now.AddDays(-1), Risk: ActionRisk.Destructive, Page: 1, PageSize: 1));
+
+        page.TotalCount.Should().Be(2); // b and c match date+risk; a is too old, d is wrong risk
+        page.Entries.Should().ContainSingle(e => e.Target == "c"); // newest-first, page size 1
+    }
 }

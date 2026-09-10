@@ -21,29 +21,20 @@ public sealed class ListAuditEntriesQueryHandler(IDbContextFactory<SbcDbContext>
     public async Task<AuditPage> HandleAsync(AuditQuery query, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var queryable = db.AuditEntries.AsNoTracking();
+        var filtered = db.AuditEntries.AsNoTracking().AsQueryable();
 
-        // Apply server-side filters (those that SQLite can handle)
-        if (query.Actor is { } actor) queryable = queryable.Where(e => e.Actor == actor);
-        if (query.Risk is { } risk) queryable = queryable.Where(e => e.Risk == risk);
-        if (query.TargetContains is { } target) queryable = queryable.Where(e => e.Target.Contains(target));
+        if (query.From is { } from) filtered = filtered.Where(e => e.At >= from);
+        if (query.To is { } to) filtered = filtered.Where(e => e.At <= to);
+        if (query.Actor is { } actor) filtered = filtered.Where(e => e.Actor == actor);
+        if (query.Risk is { } risk) filtered = filtered.Where(e => e.Risk == risk);
+        if (query.TargetContains is { } target) filtered = filtered.Where(e => e.Target.Contains(target));
 
-        // Switch to client-side for DateTimeOffset filtering and ordering
-        var filtered = queryable.AsEnumerable()
-            .Where(e =>
-            {
-                if (query.From is { } from && e.At < from) return false;
-                if (query.To is { } to && e.At > to) return false;
-                return true;
-            })
+        var totalCount = await filtered.CountAsync(ct);
+        var entries = await filtered
             .OrderByDescending(e => e.At)
-            .AsQueryable();
-
-        var totalCount = filtered.Count();
-        var entries = filtered
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
-            .ToList();
+            .ToListAsync(ct);
 
         return new AuditPage(entries, totalCount);
     }
