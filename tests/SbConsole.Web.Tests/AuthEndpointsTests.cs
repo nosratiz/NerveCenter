@@ -13,7 +13,13 @@ namespace SbConsole.Web.Tests;
 /// end-to-end via WebApplicationFactory -- the same registrations, the same endpoints -- rather
 /// than re-implementing the handler logic in isolation, so it also would have caught the missing
 /// audit writes this fix addresses.
+///
+/// Shares the "ProgramFactory" xunit collection (defined in ProgramDiRegistrationTests.cs) with any
+/// other test class that hosts Program.cs via WebApplicationFactory, since all of them mutate the
+/// same process-wide environment variables that BootstrapOptions reads -- running two such classes
+/// concurrently would race on that shared state.
 /// </summary>
+[Collection("ProgramFactory")]
 public sealed class AuthEndpointsTests : IDisposable
 {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"sbc-auth-test-{Guid.NewGuid()}.db");
