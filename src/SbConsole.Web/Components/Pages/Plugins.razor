@@ -1,0 +1,30 @@
+@* src/SbConsole.Web/Components/Pages/Plugins.razor *@
+@page "/plugins"
+@using SbConsole.Core.Plugins
+@inject ListPluginsQueryHandler ListHandler
+
+<PageTitle>Plugins</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-4">Plugins</MudText>
+
+<MudTable Items="_plugins">
+    <HeaderContent>
+        <MudTh>Plugin</MudTh>
+        <MudTh>Version</MudTh>
+        <MudTh>Contributes</MudTh>
+        <MudTh>Connections</MudTh>
+        <MudTh>Status</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.DisplayName</MudTd>
+        <MudTd>@context.Version</MudTd>
+        <MudTd>@context.Contribution.PageCount page(s) · @context.Contribution.ActionCount action(s)</MudTd>
+        <MudTd>@context.ConnectionsInUse in use</MudTd>
+        <MudTd>Enabled</MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private IReadOnlyList<PluginSummary> _plugins = [];
+
+    protected override async Task OnInitializedAsync() => _plugins = await ListHandler.HandleAsync();
+}
