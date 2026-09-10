@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SbConsole.Web\SbConsole.Web.csproj" />
+    <ProjectReference Include="..\SbConsole.Core.Tests\SbConsole.Core.Tests.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,84 @@
+@* src/SbConsole.Web/Components/Pages/Connections.razor *@
+@page "/connections"
+@using SbConsole.Core.Connections
+@using SbConsole.Web.Components.Connections
+@inject ListConnectionsQueryHandler ListHandler
+@inject DeleteConnectionCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+
+<PageTitle>Connections</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-4">Connections</MudText>
+<MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenAdd" Class="mb-4">+ Add connection</MudButton>
+
+<MudTable Items="_connections">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Kind</MudTh>
+        <MudTh>Tags</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Name</MudTd>
+        <MudTd>@context.Kind</MudTd>
+        <MudTd>
+            @foreach (var tag in context.Tags)
+            {
+                <MudChip T="string" Color="@(tag == "prod" ? Color.Warning : Color.Default)">@tag</MudChip>
+            }
+        </MudTd>
+        <MudTd>Untested</MudTd>
+        <MudTd>
+            <MudButton OnClick="@(() => OpenEdit(context))">Edit</MudButton>
+            <MudButton Class="delete-connection" Color="Color.Error" OnClick="@(() => DeleteAsync(context))">Delete</MudButton>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync() => _connections = await ListHandler.HandleAsync();
+
+    private async Task<string> CurrentActorAsync() =>
+        AuthState is null ? "admin" : (await AuthState).User.Identity?.Name ?? "admin";
+
+    private async Task OpenAdd()
+    {
+        var dialog = await DialogService.ShowAsync<AddEditConnectionDialog>("Add connection");
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await RefreshAsync();
+        }
+    }
+
+    private async Task OpenEdit(ConnectionInfo connection)
+    {
+        var parameters = new DialogParameters<AddEditConnectionDialog> { { x => x.Existing, connection } };
+        var dialog = await DialogService.ShowAsync<AddEditConnectionDialog>("Edit connection", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await RefreshAsync();
+        }
+    }
+
+    private async Task DeleteAsync(ConnectionInfo connection)
+    {
+        var confirmed = await Confirmation.ConfirmAsync("Delete", connection.Name, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var actor = await CurrentActorAsync();
+        await DeleteHandler.HandleAsync(new DeleteConnectionCommand(connection.Id, actor));
+        await RefreshAsync();
+    }
+}
