@@ -77,7 +77,7 @@ using (var scope = app.Services.CreateScope())
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
-app.MapStaticAssets();
+app.MapStaticAssets().AllowAnonymous();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
 app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options, IAuditWriter audit, TimeProvider clock) =>
