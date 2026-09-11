@@ -242,11 +242,13 @@ just recolored and retyped.
   500 per Nocturne's `--font-heading-weight`. MudBlazor's own type-scale
   sizes are kept (tokens-only scope; not pixel-matching Nocturne's scale).
 - **Shape/elevation**: `LayoutProperties.DefaultBorderRadius` = 8px
-  (`--radius-md`). Shadow elevation levels are re-tuned per Nocturne's own
-  stated elevation logic — "a hairline edge plus ambient darkness" for the
-  dark theme (directly from its `--shadow-*` tokens) and a softer ink-tinted
-  shadow for the light theme (Nocturne's own stated intent for a light
-  ground, values derived since no light shadow tokens exist to copy).
+  (`--radius-md`). Shadow customization (`MudTheme.Shadows`/`Shadow.Elevation`)
+  was **not** done — it was an explicit, plan-permitted scope cut, not an
+  oversight. `Shadow.Elevation` is 26 raw CSS `box-shadow` strings (one per
+  elevation level, 0-25); hand-tuning all of them to Nocturne's dark/light
+  surfaces would have been significant unplanned effort with no spec input
+  on what those shadows should look like, so both palettes keep MudBlazor's
+  default `Shadow` values.
 - **Login page parity**: `EmptyLayout` (Plan 1) currently instantiates its
   own bare `<MudThemeProvider />`, disconnected from `MainLayout`'s
   dark-mode-resolution logic (Plan 2 Task 8) — the pre-login page would

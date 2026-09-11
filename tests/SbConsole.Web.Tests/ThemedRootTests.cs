@@ -55,7 +55,7 @@ public class ThemedRootTests : BunitContext, IAsyncLifetime
         await Task.Delay(20);
         cut.Render();
 
-        cut.Markup.Should().Contain("hello"); // renders without throwing under the dark theme
+        cut.Markup.Should().Contain("22,24,38"); // NocturneTheme.Dark's Background, rgb(22,24,38) = #161826
     }
 
     [Fact]
@@ -68,6 +68,6 @@ public class ThemedRootTests : BunitContext, IAsyncLifetime
         await Task.Delay(20);
         cut.Render();
 
-        cut.Markup.Should().Contain("hello");
+        cut.Markup.Should().Contain("243,245,254"); // NocturneTheme.Light's Background, rgb(243,245,254) = #f3f5fe
     }
 }
