@@ -200,3 +200,60 @@ metrics dashboards/history, ARM/namespace creation, Entra ID auth.
 .NET 10, C# latest, nullable enabled, warnings as errors. Blazor Interactive
 Server. EF Core + SQLite (WAL). Minimal APIs. MudBlazor. xUnit +
 FluentAssertions + NSubstitute + bUnit + Testcontainers.
+
+## 10. Theming (2026-09-11)
+
+The app's visual theme is derived from **Nocturne**, a dark-first design
+system produced during UI exploration (tokens and rationale in
+`styles.css`/`readme.md` of the Nocturne kit). Scope is **theme tokens only**:
+colors, typography, corner radius, and shadow tuning through MudBlazor's own
+`MudTheme` API (`PaletteDark`/`PaletteLight`, `Typography`,
+`LayoutProperties`, `Shadow`). No custom CSS is added to force MudBlazor
+components into Nocturne's specific shapes (e.g. outlined-only buttons, the
+fading-gradient table rule) — components keep their native MudBlazor shape,
+just recolored and retyped.
+
+- **`src/SbConsole.Web/Theming/NocturneTheme.cs`** — two static `MudTheme`
+  instances, `Dark` and `Light`.
+- **Dark** maps Nocturne's tokens directly: `Background` #161826, `Surface`/
+  `DrawerBackground`/`AppbarBackground` #232532/#161826 (flush shell, no
+  separate nav treatment, matching Nocturne's borderless `.nav`), `Primary`
+  #9184d9 with `PrimaryDarken`/`PrimaryLighten` at the accent ramp's 600/400
+  steps (#796cbf/#b5abfc), `TextPrimary` #e9e9ed. `Divider` and
+  `TextSecondary` use 8-digit alpha hex (`#e9e9ed29`, `#e9e9ed8c`) rather than
+  a manually flattened opaque color, mirroring Nocturne's own
+  `color-mix(..., transparent)` approach so the mix stays correct if the
+  underlying color is ever retuned.
+- **Light** is a derived counterpart — Nocturne itself is dark-only, but its
+  own wireframe notes for a light variant say exactly how to invert it:
+  surfaces lift toward white instead of receding, and the accent steps down a
+  ramp level for contrast on a light ground. Concretely: `Background`
+  --color-neutral-100 #f3f5fe, `Surface` white (lifting above the page),
+  `Primary` --color-accent-700 #5d5294 (not the raw #9184d9, which under-
+  contrasts on a light ground), `TextPrimary` --color-neutral-900 #292b31,
+  `Divider`/`TextSecondary` as alpha-hex over the dark text color.
+- **Semantic colors** (`Error`/`Warning`/`Success`/`Info`) have no source in
+  Nocturne — it is deliberately a single-accent system, but the app already
+  needs these for the audit log's risk chips, prod-tag warnings, and
+  unreachable-connection states. Chosen here, muted to match Nocturne's
+  low-chroma-outside-the-accent rule rather than pulled from any token file.
+- **Typography**: Inter (loaded the same way Nocturne loads it — a Google
+  Fonts `<link>`) replaces MudBlazor's default Roboto, with heading weight
+  500 per Nocturne's `--font-heading-weight`. MudBlazor's own type-scale
+  sizes are kept (tokens-only scope; not pixel-matching Nocturne's scale).
+- **Shape/elevation**: `LayoutProperties.DefaultBorderRadius` = 8px
+  (`--radius-md`). Shadow elevation levels are re-tuned per Nocturne's own
+  stated elevation logic — "a hairline edge plus ambient darkness" for the
+  dark theme (directly from its `--shadow-*` tokens) and a softer ink-tinted
+  shadow for the light theme (Nocturne's own stated intent for a light
+  ground, values derived since no light shadow tokens exist to copy).
+- **Login page parity**: `EmptyLayout` (Plan 1) currently instantiates its
+  own bare `<MudThemeProvider />`, disconnected from `MainLayout`'s
+  dark-mode-resolution logic (Plan 2 Task 8) — the pre-login page would
+  otherwise stay on MudBlazor's stock theme forever. The dark-mode/system-
+  preference resolution logic is extracted out of `MainLayout` into a shared
+  piece both layouts use, so Login renders in whatever theme (light/dark/
+  system) the `theme.mode` setting already specifies.
+- A handful of tests pin the theme's key token values (background/primary/
+  etc. hex codes for both palettes) so an edit to `NocturneTheme.cs` can't
+  silently drift from these decisions without a test catching it.
