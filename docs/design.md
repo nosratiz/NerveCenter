@@ -206,9 +206,10 @@ FluentAssertions + NSubstitute + bUnit + Testcontainers.
 The app's visual theme is derived from **Nocturne**, a dark-first design
 system produced during UI exploration (tokens and rationale in
 `styles.css`/`readme.md` of the Nocturne kit). Scope is **theme tokens only**:
-colors, typography, corner radius, and shadow tuning through MudBlazor's own
-`MudTheme` API (`PaletteDark`/`PaletteLight`, `Typography`,
-`LayoutProperties`, `Shadow`). No custom CSS is added to force MudBlazor
+colors, typography, and corner radius through MudBlazor's own `MudTheme` API
+(`PaletteDark`/`PaletteLight`, `Typography`, `LayoutProperties`). Shadow
+customization was left as an explicit scope cut — see below. No custom CSS is
+added to force MudBlazor
 components into Nocturne's specific shapes (e.g. outlined-only buttons, the
 fading-gradient table rule) — components keep their native MudBlazor shape,
 just recolored and retyped.

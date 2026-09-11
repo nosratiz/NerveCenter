@@ -7,7 +7,7 @@ namespace SbConsole.Web.Theming;
 /// Scope is theme tokens only — colors, typography, corner radius — not custom CSS
 /// forcing MudBlazor components into Nocturne's specific component shapes.
 /// Shadow customization (<see cref="MudTheme.Shadows"/>) is intentionally left at
-/// MudBlazor's defaults; see task-1-report.md for why.
+/// MudBlazor's defaults — an explicit scope cut, not an oversight; see docs/design.md §10.
 /// </summary>
 public static class NocturneTheme
 {
