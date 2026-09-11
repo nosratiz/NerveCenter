@@ -1,0 +1,35 @@
+@* src/SbConsole.Web/Theming/ThemedRoot.razor *@
+@using MudBlazor
+@using SbConsole.Core.Settings
+@inject ISettings Settings
+
+<MudThemeProvider Theme="@(_isDarkMode ? NocturneTheme.Dark : NocturneTheme.Light)" @bind-IsDarkMode="_isDarkMode" @ref="_themeProvider" />
+@ChildContent
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private MudThemeProvider _themeProvider = default!;
+    private bool _isDarkMode;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var theme = await Settings.GetAsync("theme.mode") ?? "system";
+        _isDarkMode = theme == "dark";
+        // "light" and unrecognized values already default to false above; "system" is
+        // refined in OnAfterRenderAsync once the theme provider can report the OS preference.
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var theme = await Settings.GetAsync("theme.mode") ?? "system";
+            if (theme == "system")
+            {
+                _isDarkMode = await _themeProvider.GetSystemDarkModeAsync();
+                StateHasChanged();
+            }
+        }
+    }
+}

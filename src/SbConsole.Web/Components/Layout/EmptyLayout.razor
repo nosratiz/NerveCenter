@@ -1,4 +1,7 @@
 @* src/SbConsole.Web/Components/Layout/EmptyLayout.razor *@
 @inherits LayoutComponentBase
-<MudThemeProvider />
-@Body
+@using SbConsole.Web.Theming
+
+<ThemedRoot>
+    @Body
+</ThemedRoot>

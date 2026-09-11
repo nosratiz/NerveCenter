@@ -1,48 +1,20 @@
 @inherits LayoutComponentBase
+@using SbConsole.Web.Theming
 
-<MudThemeProvider @bind-IsDarkMode="_isDarkMode" @ref="_themeProvider" />
-<MudPopoverProvider />
-<MudDialogProvider />
-<MudSnackbarProvider />
+<ThemedRoot>
+    <MudPopoverProvider />
+    <MudDialogProvider />
+    <MudSnackbarProvider />
 
-<MudLayout>
-    <MudAppBar Elevation="1">
-        <MudText Typo="Typo.h6">SbConsole</MudText>
-    </MudAppBar>
-    <MudDrawer Open="true" Elevation="1">
-        <NavMenu />
-    </MudDrawer>
-    <MudMainContent Class="pa-4">
-        @Body
-    </MudMainContent>
-</MudLayout>
-
-@code {
-    [Inject] private SbConsole.Core.Settings.ISettings Settings { get; set; } = default!;
-    private MudThemeProvider _themeProvider = default!;
-    private bool _isDarkMode;
-
-    protected override async Task OnInitializedAsync()
-    {
-        var theme = await Settings.GetAsync("theme.mode") ?? "system";
-        _isDarkMode = theme == "dark";
-        // "light" and unrecognized values already default to false above; "system" is
-        // refined in OnAfterRenderAsync once the theme provider can report the OS preference.
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            var theme = await Settings.GetAsync("theme.mode") ?? "system";
-            if (theme == "system")
-            {
-                // MudThemeProvider in the installed MudBlazor version (9.9.0) exposes system dark
-                // mode detection as GetSystemDarkModeAsync() -- there is no GetSystemPreference()
-                // method (confirmed via ilspycmd decompilation of MudThemeProvider).
-                _isDarkMode = await _themeProvider.GetSystemDarkModeAsync();
-                StateHasChanged();
-            }
-        }
-    }
-}
+    <MudLayout>
+        <MudAppBar Elevation="1">
+            <MudText Typo="Typo.h6">SbConsole</MudText>
+        </MudAppBar>
+        <MudDrawer Open="true" Elevation="1">
+            <NavMenu />
+        </MudDrawer>
+        <MudMainContent Class="pa-4">
+            @Body
+        </MudMainContent>
+    </MudLayout>
+</ThemedRoot>
