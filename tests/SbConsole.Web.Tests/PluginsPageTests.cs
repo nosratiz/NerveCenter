@@ -31,11 +31,12 @@ public class PluginsPageTests : BunitContext, IAsyncLifetime
         public string DisplayName => "Azure Service Bus";
         public string Version => "0.4.1";
         public IReadOnlyList<PluginNavItem> NavItems => [];
-        public Type RootComponent => typeof(object);
         public string ConnectionKind => "azure-servicebus";
         public string ConnectionKindDisplayName => "Azure Service Bus";
         public PluginContribution Contribution => new(PageCount: 3, ActionCount: 8);
         public void ConfigureServices(IServiceCollection services) { }
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
+            Task.FromResult(new ConnectionTestResult(Success: true));
     }
 
     private readonly TestDb _testDb = new();

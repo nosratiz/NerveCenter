@@ -14,11 +14,12 @@ public class ListPluginsQueryHandlerTests
         public string DisplayName => $"Plugin {id}";
         public string Version => "1.0.0";
         public IReadOnlyList<PluginNavItem> NavItems => [];
-        public Type RootComponent => typeof(object);
         public string ConnectionKind => kind;
         public string ConnectionKindDisplayName => kind;
         public PluginContribution Contribution => new(PageCount: 2, ActionCount: 4);
         public void ConfigureServices(IServiceCollection services) { }
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
+            Task.FromResult(new ConnectionTestResult(Success: true));
     }
 
     [Fact]

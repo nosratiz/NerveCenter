@@ -13,9 +13,6 @@ public interface IPlugin
 
     IReadOnlyList<PluginNavItem> NavItems { get; }
 
-    /// <summary>Root Blazor component rendered at /p/{Id}. Must derive from ComponentBase.</summary>
-    Type RootComponent { get; }
-
     /// <summary>Connection kind this plugin's connections use, e.g. "azure-servicebus". Matches Connection.Kind.</summary>
     string ConnectionKind { get; }
 
@@ -26,4 +23,11 @@ public interface IPlugin
     PluginContribution Contribution { get; }
 
     void ConfigureServices(IServiceCollection services);
+
+    /// <summary>
+    /// Verifies a saved connection of this plugin's ConnectionKind actually works, using
+    /// whatever protocol that connection kind speaks. Called with the connection's decrypted
+    /// secret — never the connection ID, so this has no dependency on the host's DbContext.
+    /// </summary>
+    Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
 }
