@@ -24,13 +24,15 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
     private readonly IServiceBusOperations _operations = Substitute.For<IServiceBusOperations>();
     private readonly Guid _connectionId = Guid.NewGuid();
+    private readonly ConnectionInfo _connectionInfo;
 
     public QueuesPageTests()
     {
+        _connectionInfo = new ConnectionInfo(_connectionId, "sb-dev", "azure-servicebus", ["dev"]);
         Services.AddMudServices();
         JSInterop.Mode = JSRuntimeMode.Loose;
         _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>())
-            .Returns(new List<ConnectionInfo> { new(_connectionId, "sb-dev", "azure-servicebus", ["dev"]) });
+            .Returns(new List<ConnectionInfo> { _connectionInfo });
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
@@ -73,7 +75,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<QueueSummary> { new("orders-inbound", 0, 0, 0, 0) });
         var confirmation = Services.GetRequiredService<IConfirmationService>();
-        confirmation.ConfirmAsync("Delete", "orders-inbound", false, null, Arg.Any<CancellationToken>()).Returns(true);
+        confirmation.ConfirmAsync("Delete", "orders-inbound", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
         await Task.Delay(30);
@@ -81,6 +83,29 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         cut.Find("button.delete-queue").Click();
         await Task.Delay(30);
 
+        // Asserting against the connection's actual IsProd (rather than a hard-coded literal)
+        // means this fails if prod-gating stops flowing through to the confirmation call --
+        // the seeded connection isn't tagged prod, so IsProd happens to be false, but a
+        // hard-coded `false` here would hide a bug that skips passing it through entirely.
+        await confirmation.Received(1).ConfirmAsync("Delete", "orders-inbound", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>());
         await _operations.Received(1).DeleteQueueAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Delete_does_nothing_when_confirmation_is_denied()
+    {
+        _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { new("orders-inbound", 0, 0, 0, 0) });
+        // IConfirmationService.ConfirmAsync is left unstubbed for this call: NSubstitute defaults
+        // an unstubbed Task<bool>-returning call to a completed task with result false, so this
+        // exercises the "user declined" path without an explicit .Returns(false).
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.delete-queue").Click();
+        await Task.Delay(30);
+
+        await _operations.DidNotReceive().DeleteQueueAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

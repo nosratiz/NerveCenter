@@ -1,4 +1,5 @@
 @using SbConsole.Plugins.ServiceBus.Queues
+@inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
@@ -23,8 +24,15 @@
 
     private async Task Save()
     {
-        await CreateHandler.HandleAsync(new CreateQueueCommand(ConnectionId, ConnectionName, _name, _maxDeliveryCount));
-        MudDialog.Close(DialogResult.Ok(true));
+        var result = await CreateHandler.HandleAsync(new CreateQueueCommand(ConnectionId, ConnectionName, _name, _maxDeliveryCount));
+        if (result.IsSuccess)
+        {
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
     }
 
     private void Cancel() => MudDialog.Cancel();

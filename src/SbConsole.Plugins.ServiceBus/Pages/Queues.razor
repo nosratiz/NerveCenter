@@ -1,5 +1,4 @@
 @page "/p/azure-servicebus/queues"
-@using Microsoft.AspNetCore.Components.Authorization
 @using SbConsole.Plugins.ServiceBus.Client
 @using SbConsole.Plugins.ServiceBus.Queues
 @using SbConsole.Sdk
@@ -8,6 +7,7 @@
 @inject DeleteQueueCommandHandler DeleteHandler
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
 <PageTitle>Queues</PageTitle>
 <h1>Queues</h1>
@@ -51,8 +51,6 @@ else
 }
 
 @code {
-    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
-
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private IReadOnlyList<QueueSummary> _queues = [];
     private Guid _selectedConnectionId;
@@ -76,7 +74,15 @@ else
     private async Task LoadQueuesAsync()
     {
         var result = await ListHandler.HandleAsync(_selectedConnectionId);
-        _queues = result.IsSuccess ? result.Value! : [];
+        if (result.IsSuccess)
+        {
+            _queues = result.Value!;
+        }
+        else
+        {
+            _queues = [];
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
     }
 
     private static string FormatSize(long bytes) => bytes switch
@@ -92,7 +98,7 @@ else
     private string PeekUrl(string queueName)
     {
         var connection = _connections.Single(c => c.Id == _selectedConnectionId);
-        return $"/p/azure-servicebus/queues/{queueName}/peek" +
+        return $"/p/azure-servicebus/queues/{Uri.EscapeDataString(queueName)}/peek" +
                $"?connectionId={connection.Id}" +
                $"&connectionName={Uri.EscapeDataString(connection.Name)}" +
                $"&isProd={connection.IsProd}";
@@ -123,7 +129,12 @@ else
             return;
         }
 
-        await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
+        var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
         await LoadQueuesAsync();
     }
 }

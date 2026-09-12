@@ -34,4 +34,20 @@ public class ListQueuesQueryHandlerTests
 
         result.IsSuccess.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task Operation_failure_returns_a_failure_instead_of_throwing()
+    {
+        var connectionId = Guid.NewGuid();
+        var connections = Substitute.For<IConnectionProvider>();
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        var operations = Substitute.For<IServiceBusOperations>();
+        operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<QueueSummary>>(new InvalidOperationException("namespace unreachable")));
+
+        var result = await new ListQueuesQueryHandler(operations, connections).HandleAsync(connectionId);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("namespace unreachable");
+    }
 }

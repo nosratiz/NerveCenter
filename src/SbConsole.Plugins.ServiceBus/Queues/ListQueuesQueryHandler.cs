@@ -13,7 +13,14 @@ public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, ICo
             return PluginResult<IReadOnlyList<QueueSummary>>.Fail("Connection not found.");
         }
 
-        var queues = await operations.ListQueuesAsync(secret, ct);
-        return PluginResult<IReadOnlyList<QueueSummary>>.Ok(queues);
+        try
+        {
+            var queues = await operations.ListQueuesAsync(secret, ct);
+            return PluginResult<IReadOnlyList<QueueSummary>>.Ok(queues);
+        }
+        catch (Exception ex)
+        {
+            return PluginResult<IReadOnlyList<QueueSummary>>.Fail(ex.Message);
+        }
     }
 }
