@@ -51,6 +51,7 @@ builder.Services.AddSingleton<ISecretProtector>(new AesGcmSecretProtector(bootst
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ISettings, DbSettings>();
 builder.Services.AddSingleton<IAuditWriter, EfAuditWriter>();
+builder.Services.AddScoped<IAuditScope, EfAuditScope>();
 builder.Services.AddSingleton<IPluginStoreFactory, EfPluginStoreFactory>();
 builder.Services.AddSingleton<IConnectionProvider, EfConnectionProvider>();
 builder.Services.AddScoped<CreateConnectionCommandHandler>();
