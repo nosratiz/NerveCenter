@@ -23,6 +23,9 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Queues.CreateQueueCommandHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
         services.AddScoped<Messages.PeekMessagesQueryHandler>();
+        services.AddScoped<Messages.SendMessageCommandHandler>();
+        services.AddScoped<Messages.ResubmitDeadLetterMessagesCommandHandler>();
+        services.AddScoped<Messages.PurgeDeadLetterMessagesCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

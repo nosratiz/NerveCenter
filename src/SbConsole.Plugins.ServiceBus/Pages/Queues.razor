@@ -44,6 +44,7 @@ else
             <MudTd>@FormatSize(context.SizeInBytes)</MudTd>
             <MudTd>
                 <MudButton Href="@PeekUrl(context.Name)">Peek</MudButton>
+                <MudButton Class="send-message-action" OnClick="@(() => OpenSend(context.Name))">Send</MudButton>
                 <MudButton Class="delete-queue" Color="Color.Error" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
             </MudTd>
         </RowTemplate>
@@ -118,6 +119,18 @@ else
         {
             await LoadQueuesAsync();
         }
+    }
+
+    private async Task OpenSend(string queueName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<SendMessageDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.QueueName, queueName },
+        };
+        await DialogService.ShowAsync<SendMessageDialog>("Send message", parameters);
     }
 
     private async Task DeleteAsync(string queueName)

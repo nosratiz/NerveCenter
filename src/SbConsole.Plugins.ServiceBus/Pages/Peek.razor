@@ -1,24 +1,44 @@
-@* Read-only message browser: peeks a queue's active messages, or its dead-letter sub-queue when
-   DeadLetter is set. Destructive/mutating actions (resubmit, purge, send) are Task 9. *@
+@* Message browser: peeks a queue's active messages, or its dead-letter sub-queue when DeadLetter
+   is set. Dead-letter mode adds multi-select resubmit and a queue-wide dead-letter purge. *@
 @page "/p/azure-servicebus/queues/{QueueName}/peek"
 @using SbConsole.Plugins.ServiceBus.Client
 @using SbConsole.Plugins.ServiceBus.Messages
+@using SbConsole.Sdk
 @inject PeekMessagesQueryHandler PeekHandler
+@inject ResubmitDeadLetterMessagesCommandHandler ResubmitHandler
+@inject PurgeDeadLetterMessagesCommandHandler PurgeHandler
+@inject IConfirmationService Confirmation
 @inject ISnackbar Snackbar
 
 <PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @QueueName</PageTitle>
 <h1>@(DeadLetter ? "Dead-letter" : "Peek"): @QueueName</h1>
 
+@if (DeadLetter)
+{
+    <div class="d-flex gap-2 mb-2">
+        <MudButton Class="resubmit-selected" Disabled="@(_selectedSequenceNumbers.Count == 0)" OnClick="ResubmitSelectedAsync">
+            Resubmit selected (@_selectedSequenceNumbers.Count)
+        </MudButton>
+        <MudButton Class="purge-queue" Color="Color.Error" OnClick="PurgeAsync">Purge queue</MudButton>
+    </div>
+}
+
 <MudGrid>
     <MudItem xs="5">
-        <MudList T="PeekedMessage" SelectedValue="_selected" SelectedValueChanged="OnSelect">
-            @foreach (var message in _messages)
-            {
-                <MudListItem T="PeekedMessage" Value="message">
+        @foreach (var message in _messages)
+        {
+            <div class="d-flex align-center gap-2">
+                @if (DeadLetter)
+                {
+                    <input type="checkbox" class="select-message"
+                           checked="@_selectedSequenceNumbers.Contains(message.SequenceNumber)"
+                           @onchange="@(e => ToggleSelection(message.SequenceNumber, (bool)e.Value!))" />
+                }
+                <MudButton OnClick="@(() => _selected = message)">
                     #@message.SequenceNumber · @message.EnqueuedTime.ToLocalTime() · deliveries @message.DeliveryCount
-                </MudListItem>
-            }
-        </MudList>
+                </MudButton>
+            </div>
+        }
     </MudItem>
     <MudItem xs="7">
         @if (_selected is not null)
@@ -47,10 +67,13 @@
 @code {
     [Parameter] public string QueueName { get; set; } = "";
     [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+    [SupplyParameterFromQuery] public string ConnectionName { get; set; } = "";
+    [SupplyParameterFromQuery] public bool IsProd { get; set; }
     [SupplyParameterFromQuery] public bool DeadLetter { get; set; }
 
     private IReadOnlyList<PeekedMessage> _messages = [];
     private PeekedMessage? _selected;
+    private readonly HashSet<long> _selectedSequenceNumbers = [];
     private (Guid ConnectionId, string QueueName, bool DeadLetter)? _lastLoaded;
 
     // Blazor reuses this component instance across same-route navigations (e.g. flipping
@@ -67,8 +90,13 @@
         }
 
         _lastLoaded = current;
+        await LoadAsync();
+    }
 
+    private async Task LoadAsync()
+    {
         var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
+        _selectedSequenceNumbers.Clear();
         if (result.IsSuccess)
         {
             _messages = result.Value!;
@@ -77,9 +105,48 @@
         else
         {
             _messages = [];
+            _selected = null;
             Snackbar.Add(result.Error!, Severity.Error);
         }
     }
 
-    private void OnSelect(PeekedMessage message) => _selected = message;
+    private void ToggleSelection(long sequenceNumber, bool selected)
+    {
+        if (selected)
+        {
+            _selectedSequenceNumbers.Add(sequenceNumber);
+        }
+        else
+        {
+            _selectedSequenceNumbers.Remove(sequenceNumber);
+        }
+    }
+
+    private async Task ResubmitSelectedAsync()
+    {
+        var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, ConnectionName, QueueName, [.. _selectedSequenceNumbers]));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task PurgeAsync()
+    {
+        var confirmed = await Confirmation.ConfirmAsync("Purge", QueueName, IsProd, count: _messages.Count);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, ConnectionName, QueueName));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
+        await LoadAsync();
+    }
 }

@@ -30,6 +30,9 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
         Services.AddSingleton<PeekMessagesQueryHandler>();
+        Services.AddSingleton(Substitute.For<IConfirmationService>());
+        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.ResubmitDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
+        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.PurgeDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
     }
 
     // Peek.razor's ConnectionId/DeadLetter are [SupplyParameterFromQuery] (they arrive as real
@@ -37,12 +40,14 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
     // that page) -- bUnit refuses ComponentParameterCollectionBuilder.Add() for those (it throws
     // telling you to navigate instead), so route through the fake NavigationManager the way
     // bUnit's own docs for testing [SupplyParameterFromQuery] components prescribe.
-    private void NavigateToPeekQuery(Guid connectionId, bool deadLetter)
+    private void NavigateToPeekQuery(Guid connectionId, bool deadLetter, string connectionName = "", bool isProd = false)
     {
         var navigationManager = Services.GetRequiredService<NavigationManager>();
         var uri = navigationManager.GetUriWithQueryParameters(new Dictionary<string, object?>
         {
             ["ConnectionId"] = connectionId,
+            ["ConnectionName"] = connectionName,
+            ["IsProd"] = isProd,
             ["DeadLetter"] = deadLetter,
         });
         navigationManager.NavigateTo(uri);
@@ -69,9 +74,10 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().Contain("correlationId");
         cut.Markup.Should().NotContain("UK-456");
 
-        // Selecting the second message swaps the body pane to its content, proving OnSelect and
-        // the MudList selection wiring actually work rather than just the auto-select default.
-        cut.FindAll(".mud-list-item")[1].Click();
+        // Selecting the second message swaps the body pane to its content, proving the row click
+        // wiring actually works rather than just the auto-select default. Queue mode (DeadLetter
+        // false) renders no other buttons, so the two message rows are the only <button>s present.
+        cut.FindAll("button")[1].Click();
 
         cut.Markup.Should().Contain("UK-456");
         cut.Markup.Should().Contain("c-2");
@@ -144,5 +150,58 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         cut.Render();
 
         cut.Markup.Should().Contain("MaxDeliveryCountExceeded");
+    }
+
+    [Fact]
+    public async Task Dead_letter_mode_shows_resubmit_and_purge_actions_but_queue_mode_does_not()
+    {
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", false, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage>
+            {
+                new(1, "{}", "application/json", DateTimeOffset.UtcNow, 1, new Dictionary<string, string>()),
+            });
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+
+        NavigateToPeekQuery(_connectionId, false);
+        var queueModeCut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        queueModeCut.Render();
+
+        queueModeCut.FindAll("button.purge-queue").Should().BeEmpty();
+        queueModeCut.FindAll("input.select-message").Should().BeEmpty();
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.FindAll("button.purge-queue").Should().HaveCount(1);
+        cut.FindAll("input.select-message").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Resubmit_selected_calls_the_operations_seam_with_the_checked_sequence_numbers()
+    {
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+        _operations.ResubmitDeadLetterMessagesAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<IReadOnlyList<long>>(), Arg.Any<CancellationToken>())
+            .Returns(1);
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("input.select-message").Change(true);
+        cut.Find("button.resubmit-selected").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).ResubmitDeadLetterMessagesAsync(
+            "Endpoint=sb://real", "orders-inbound",
+            Arg.Is<IReadOnlyList<long>>(l => l.SequenceEqual(new long[] { 1 })),
+            Arg.Any<CancellationToken>());
     }
 }

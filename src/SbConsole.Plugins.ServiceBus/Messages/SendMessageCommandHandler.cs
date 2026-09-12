@@ -1,0 +1,35 @@
+using SbConsole.Plugins.ServiceBus.Client;
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.ServiceBus.Messages;
+
+public sealed record SendMessageCommand(
+    Guid ConnectionId, string ConnectionName, string QueueName, string Body, string ContentType,
+    IReadOnlyDictionary<string, string>? Properties, DateTimeOffset? ScheduledEnqueueTime);
+
+public sealed class SendMessageCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit)
+{
+    public async Task<PluginResult> HandleAsync(SendMessageCommand cmd, CancellationToken ct = default)
+    {
+        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        if (secret is null)
+        {
+            return PluginResult.Fail("Connection not found.");
+        }
+
+        var target = $"{cmd.ConnectionName}/{cmd.QueueName}";
+        var request = new SendMessageRequest(cmd.Body, cmd.ContentType, cmd.Properties, cmd.ScheduledEnqueueTime);
+        try
+        {
+            await operations.SendMessageAsync(secret, cmd.QueueName, request, ct);
+        }
+        catch (Exception ex)
+        {
+            await audit.RecordAsync("message.send", target, ActionRisk.Mutating, succeeded: false, detail: ex.Message, ct: ct);
+            return PluginResult.Fail(ex.Message);
+        }
+
+        await audit.RecordAsync("message.send", target, ActionRisk.Mutating, succeeded: true, ct: ct);
+        return PluginResult.Ok();
+    }
+}
