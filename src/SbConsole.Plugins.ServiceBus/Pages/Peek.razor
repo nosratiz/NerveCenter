@@ -67,14 +67,23 @@
 @code {
     [Parameter] public string QueueName { get; set; } = "";
     [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
-    [SupplyParameterFromQuery] public string ConnectionName { get; set; } = "";
-    [SupplyParameterFromQuery] public bool IsProd { get; set; }
     [SupplyParameterFromQuery] public bool DeadLetter { get; set; }
+    [SupplyParameterFromQuery] public long? DeadLetterCount { get; set; }
+
+    [Inject] private IConnectionProvider Connections { get; set; } = default!;
 
     private IReadOnlyList<PeekedMessage> _messages = [];
     private PeekedMessage? _selected;
     private readonly HashSet<long> _selectedSequenceNumbers = [];
     private (Guid ConnectionId, string QueueName, bool DeadLetter)? _lastLoaded;
+
+    // ConnectionName and IsProd used to be [SupplyParameterFromQuery], but that made the
+    // prod-purge typed-confirmation gate trivially bypassable: a client (or a hand-typed URL)
+    // could simply omit isProd and silently downgrade a prod dead-letter purge to a plain
+    // two-button confirm. IsProd/Name are security-relevant, so they're looked up from the
+    // real connection record instead of trusted off the URL -- ConnectionId/DeadLetter stay as
+    // query parameters since they're not security-relevant the same way.
+    private ConnectionInfo? _connection;
 
     // Blazor reuses this component instance across same-route navigations (e.g. flipping
     // DeadLetter or ConnectionId in the query string while QueueName stays the same), so
@@ -90,6 +99,8 @@
         }
 
         _lastLoaded = current;
+        var connections = await Connections.ListAsync("azure-servicebus");
+        _connection = connections.FirstOrDefault(c => c.Id == ConnectionId);
         await LoadAsync();
     }
 
@@ -124,8 +135,13 @@
 
     private async Task ResubmitSelectedAsync()
     {
-        var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, ConnectionName, QueueName, [.. _selectedSequenceNumbers]));
-        if (!result.IsSuccess)
+        var requested = _selectedSequenceNumbers.Count;
+        var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName, [.. _selectedSequenceNumbers]));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"{result.Value} of {requested} resubmitted", Severity.Success);
+        }
+        else
         {
             Snackbar.Add(result.Error!, Severity.Error);
         }
@@ -135,13 +151,19 @@
 
     private async Task PurgeAsync()
     {
-        var confirmed = await Confirmation.ConfirmAsync("Purge", QueueName, IsProd, count: _messages.Count);
+        // DeadLetterCount comes from the Queues page's per-row live count (Fix D): _messages.Count
+        // is capped at the peek page size (32), so it would badly understate the confirmation
+        // prompt's "this will purge N item(s)" warning on a large dead-letter queue. It's only a
+        // display number -- unlike IsProd below, which must come from the trusted connection
+        // record rather than the URL, this one being slightly stale by click time is fine.
+        var count = DeadLetterCount.HasValue ? (int)DeadLetterCount.Value : _messages.Count;
+        var confirmed = await Confirmation.ConfirmAsync("Purge", QueueName, _connection?.IsProd ?? false, count: count);
         if (!confirmed)
         {
             return;
         }
 
-        var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, ConnectionName, QueueName));
+        var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName));
         if (!result.IsSuccess)
         {
             Snackbar.Add(result.Error!, Severity.Error);

@@ -70,6 +70,27 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dead_letter_link_points_at_the_peek_route_with_deadLetter_and_the_rows_live_count()
+    {
+        // Before this test, nothing in the app linked to dead-letter mode at all -- the
+        // dead-letter browse/resubmit/purge feature was unreachable from the running app except
+        // by hand-typing a URL. This proves the row action exists and carries connectionId,
+        // deadLetter=true, and the row's live DeadLetterMessageCount (used for the purge
+        // confirmation's message count, per Fix D) rather than connectionName/isProd (removed
+        // per Fix A -- Peek.razor now looks those up itself from the connection record).
+        _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { new("orders-inbound", 12, 3, 0, 2048) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        var link = cut.Find("a.dead-letter-action");
+        link.GetAttribute("href").Should().Be(
+            $"/p/azure-servicebus/queues/orders-inbound/peek?connectionId={_connectionId}&deadLetter=true&deadLetterCount=3");
+    }
+
+    [Fact]
     public async Task Delete_goes_through_confirmation_before_calling_the_handler()
     {
         _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())

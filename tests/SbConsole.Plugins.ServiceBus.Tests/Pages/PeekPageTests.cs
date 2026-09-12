@@ -21,35 +21,55 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
     private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
     private readonly IServiceBusOperations _operations = Substitute.For<IServiceBusOperations>();
     private readonly Guid _connectionId = Guid.NewGuid();
+    private readonly IConfirmationService _confirmation = Substitute.For<IConfirmationService>();
 
     public PeekPageTests()
     {
         Services.AddMudServices();
         JSInterop.Mode = JSRuntimeMode.Loose;
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        // Default seed: a non-prod connection. Individual tests (e.g. the prod-purge safety
+        // test) override this via SeedConnection to exercise IsProd = true instead.
+        SeedConnection(isProd: false);
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
         Services.AddSingleton<PeekMessagesQueryHandler>();
-        Services.AddSingleton(Substitute.For<IConfirmationService>());
+        Services.AddSingleton(_confirmation);
         Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.ResubmitDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
         Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.PurgeDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
     }
 
+    // Peek.razor no longer trusts ConnectionName/IsProd off the URL (that made the prod-purge
+    // typed-confirmation gate trivially bypassable -- a hand-typed link omitting isProd silently
+    // downgraded a prod purge to a plain confirm). It now looks the connection up from
+    // IConnectionProvider by ConnectionId instead, so tests seed the connection through the
+    // already-substituted provider rather than through the query string.
+    private void SeedConnection(bool isProd, string name = "sb-conn")
+    {
+        var tags = isProd ? new[] { "prod" } : Array.Empty<string>();
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>())
+            .Returns(new List<ConnectionInfo> { new(_connectionId, name, "azure-servicebus", tags) });
+    }
+
     // Peek.razor's ConnectionId/DeadLetter are [SupplyParameterFromQuery] (they arrive as real
-    // query-string values via Queues.razor's link, same as ConnectionName/IsProd already do for
-    // that page) -- bUnit refuses ComponentParameterCollectionBuilder.Add() for those (it throws
-    // telling you to navigate instead), so route through the fake NavigationManager the way
-    // bUnit's own docs for testing [SupplyParameterFromQuery] components prescribe.
-    private void NavigateToPeekQuery(Guid connectionId, bool deadLetter, string connectionName = "", bool isProd = false)
+    // query-string values via Queues.razor's link) -- bUnit refuses
+    // ComponentParameterCollectionBuilder.Add() for those (it throws telling you to navigate
+    // instead), so route through the fake NavigationManager the way bUnit's own docs for testing
+    // [SupplyParameterFromQuery] components prescribe.
+    private void NavigateToPeekQuery(Guid connectionId, bool deadLetter, long? deadLetterCount = null)
     {
         var navigationManager = Services.GetRequiredService<NavigationManager>();
-        var uri = navigationManager.GetUriWithQueryParameters(new Dictionary<string, object?>
+        var queryParams = new Dictionary<string, object?>
         {
             ["ConnectionId"] = connectionId,
-            ["ConnectionName"] = connectionName,
-            ["IsProd"] = isProd,
             ["DeadLetter"] = deadLetter,
-        });
+        };
+        if (deadLetterCount is not null)
+        {
+            queryParams["DeadLetterCount"] = deadLetterCount;
+        }
+
+        var uri = navigationManager.GetUriWithQueryParameters(queryParams);
         navigationManager.NavigateTo(uri);
     }
 
@@ -203,5 +223,71 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
             "Endpoint=sb://real", "orders-inbound",
             Arg.Is<IReadOnlyList<long>>(l => l.SequenceEqual(new long[] { 1 })),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Purge_goes_through_confirmation_before_calling_the_handler()
+    {
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+        _confirmation.ConfirmAsync("Purge", "orders-inbound", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        _operations.PurgeDeadLetterMessagesAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>()).Returns(1);
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.purge-queue").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).PurgeDeadLetterMessagesAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Purge_does_nothing_when_confirmation_is_denied()
+    {
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+        // IConfirmationService.ConfirmAsync is left unstubbed for this call: NSubstitute defaults
+        // an unstubbed Task<bool>-returning call to a completed task with result false, so this
+        // exercises the "user declined" path without an explicit .Returns(false) (see the
+        // analogous Delete_does_nothing_when_confirmation_is_denied test in QueuesPageTests.cs).
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.purge-queue").Click();
+        await Task.Delay(30);
+
+        await _operations.DidNotReceive().PurgeDeadLetterMessagesAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Purge_passes_the_connections_prod_flag_to_the_confirmation_prompt_not_a_url_parameter()
+    {
+        // Regression test for the original bug this task fixes: IsProd used to be
+        // [SupplyParameterFromQuery], so a hand-typed URL that simply omitted isProd silently
+        // downgraded a prod dead-letter purge from typed confirmation to a plain two-button
+        // confirm -- the only reachable path to the purge button, since nothing in the app linked
+        // to dead-letter mode. IsProd is now looked up from the connection record instead. Seeding
+        // a prod-tagged connection and asserting ConfirmAsync receives isProd: true proves the
+        // value is trusted from the connection, not the URL: NavigateToPeekQuery below carries no
+        // isProd (or any prod-related) query parameter at all.
+        SeedConnection(isProd: true);
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.purge-queue").Click();
+        await Task.Delay(30);
+
+        await _confirmation.Received(1).ConfirmAsync("Purge", "orders-inbound", true, Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 }
