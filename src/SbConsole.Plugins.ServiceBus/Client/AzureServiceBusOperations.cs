@@ -185,8 +185,14 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                     }
                     else
                     {
-                        await receiver.DeferMessageAsync(message, cancellationToken: ct);
+                        // Record before deferring, not after: if DeferMessageAsync applies the defer
+                        // broker-side but then throws (e.g. a transient fault surfaced by the SDK's
+                        // retry policy after the operation already succeeded), the sequence number
+                        // must still reach the restore pass in `finally` — recording first costs at
+                        // worst one harmless MessageNotFound if the defer never actually applied,
+                        // versus a permanently stranded message if we recorded after and never got there.
                         deferredSequenceNumbers.Add(message.SequenceNumber);
+                        await receiver.DeferMessageAsync(message, cancellationToken: ct);
                     }
                 }
             }
