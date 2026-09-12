@@ -58,6 +58,7 @@ builder.Services.AddScoped<CreateConnectionCommandHandler>();
 builder.Services.AddScoped<ListConnectionsQueryHandler>();
 builder.Services.AddScoped<DeleteConnectionCommandHandler>();
 builder.Services.AddScoped<UpdateConnectionCommandHandler>();
+builder.Services.AddScoped<TestConnectionCommandHandler>();
 builder.Services.AddScoped<ListAuditEntriesQueryHandler>();
 builder.Services.AddScoped<ListPluginsQueryHandler>();
 builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();

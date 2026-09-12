@@ -16,6 +16,6 @@ public sealed class ListConnectionsQueryHandler(IDbContextFactory<SbcDbContext> 
         }
 
         var rows = await query.OrderBy(c => c.Name).ToListAsync(ct);
-        return rows.Select(c => new ConnectionInfo(c.Id, c.Name, c.Kind, c.Tags)).ToList();
+        return rows.Select(c => new ConnectionInfo(c.Id, c.Name, c.Kind, c.Tags, c.LastTestSucceeded, c.LastTestedAt, c.LastTestError)).ToList();
     }
 }

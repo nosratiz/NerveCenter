@@ -18,6 +18,11 @@ public sealed class SbcDbContext(DbContextOptions<SbcDbContext> options) : DbCon
             e.HasKey(c => c.Id);
             e.HasIndex(c => c.Name).IsUnique();
             e.Ignore(c => c.Tags);
+            // Same UTC-ticks conversion as AuditEntry.At (see its comment) — pre-empting the identical
+            // EF Core 10 + SQLite DateTimeOffset translation trap on a brand-new column, before any data exists.
+            e.Property(c => c.LastTestedAt).HasConversion(
+                v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+                v => v.HasValue ? new DateTimeOffset(v.Value, TimeSpan.Zero) : null);
         });
         builder.Entity<AuditEntry>(e =>
         {

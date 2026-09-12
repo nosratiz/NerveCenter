@@ -16,7 +16,7 @@ public sealed class EfConnectionProvider(
             .Where(c => c.Kind == kind)
             .OrderBy(c => c.Name)
             .ToListAsync(ct);
-        return rows.Select(c => new ConnectionInfo(c.Id, c.Name, c.Kind, c.Tags)).ToList();
+        return rows.Select(c => new ConnectionInfo(c.Id, c.Name, c.Kind, c.Tags, c.LastTestSucceeded, c.LastTestedAt, c.LastTestError)).ToList();
     }
 
     public async Task<string?> GetSecretAsync(Guid connectionId, CancellationToken ct = default)
