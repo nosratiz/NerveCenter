@@ -130,6 +130,11 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
     }
 
+    // Design tradeoff: non-matching messages are deferred (not abandoned) during the scan so the
+    // scan can make forward progress through the queue instead of looping on the same head-of-queue
+    // messages; the cost is that deferral is durable (it does NOT self-heal like an expiring
+    // PeekLock does), so an explicit, best-effort restoration pass is required afterward — see the
+    // try/finally below — to avoid permanently stranding messages if the scan is cancelled or fails.
     public async Task<int> ResubmitDeadLetterMessagesAsync(string connectionString, string queueName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default)
     {
         if (sequenceNumbers.Count == 0)
@@ -146,53 +151,121 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var deferredSequenceNumbers = new List<long>();
         var resubmitted = 0;
 
-        // Bounded scan: keep receiving batches until every requested sequence number has been
-        // found or the dead-letter queue is exhausted, so resubmitting a handful of messages out
-        // of a much larger dead-letter queue can't loop forever.
-        //
-        // Defer (not abandon) every non-matching message while scanning: abandoning would make it
-        // immediately redeliverable, causing the same head-of-queue messages to loop back before
-        // the scan ever reaches deeper ones. A deferred message is skipped by ordinary receive
-        // calls until explicitly re-received by sequence number, which is what makes forward
-        // progress possible.
-        var maxAttempts = sequenceNumbers.Count * 4 + 20;
-        for (var attempt = 0; attempt < maxAttempts && remaining.Count > 0; attempt++)
+        try
         {
-            var batch = await receiver.ReceiveMessagesAsync(maxMessages: 32, maxWaitTime: TimeSpan.FromSeconds(5), ct);
-            if (batch.Count == 0)
+            // Bounded scan: keep receiving batches until every requested sequence number has been
+            // found or the dead-letter queue is exhausted, so resubmitting a handful of messages out
+            // of a much larger dead-letter queue can't loop forever.
+            //
+            // Defer (not abandon) every non-matching message while scanning: abandoning would make it
+            // immediately redeliverable, causing the same head-of-queue messages to loop back before
+            // the scan ever reaches deeper ones. A deferred message is skipped by ordinary receive
+            // calls until explicitly re-received by sequence number, which is what makes forward
+            // progress possible.
+            //
+            // maxAttempts bounds only this scan loop — how many 32-message receive batches it will
+            // attempt before giving up on finding every requested sequence number. It has no bearing
+            // on the separate restore pass below, which always processes every deferred message.
+            var maxAttempts = sequenceNumbers.Count * 4 + 20;
+            for (var attempt = 0; attempt < maxAttempts && remaining.Count > 0; attempt++)
             {
-                break; // dead-letter queue exhausted before every requested message was found
-            }
-
-            foreach (var message in batch)
-            {
-                if (remaining.Remove(message.SequenceNumber))
+                var batch = await receiver.ReceiveMessagesAsync(maxMessages: 32, maxWaitTime: TimeSpan.FromSeconds(5), ct);
+                if (batch.Count == 0)
                 {
-                    await sender.SendMessageAsync(new ServiceBusMessage(message), ct);
-                    await receiver.CompleteMessageAsync(message, ct);
-                    resubmitted++;
+                    break; // dead-letter queue exhausted before every requested message was found
                 }
-                else
+
+                foreach (var message in batch)
                 {
-                    await receiver.DeferMessageAsync(message, cancellationToken: ct);
-                    deferredSequenceNumbers.Add(message.SequenceNumber);
+                    if (remaining.Remove(message.SequenceNumber))
+                    {
+                        await sender.SendMessageAsync(new ServiceBusMessage(message), ct);
+                        await receiver.CompleteMessageAsync(message, ct);
+                        resubmitted++;
+                    }
+                    else
+                    {
+                        await receiver.DeferMessageAsync(message, cancellationToken: ct);
+                        deferredSequenceNumbers.Add(message.SequenceNumber);
+                    }
                 }
             }
         }
-
-        // Restore every deferred message back to normal delivery order — abandoning a deferred
-        // message un-defers it, the correct way to "put back" a message that was only set aside
-        // while scanning, not actually re-dead-lettered.
-        foreach (var sequenceNumber in deferredSequenceNumbers)
+        finally
         {
-            var deferred = await receiver.ReceiveDeferredMessageAsync(sequenceNumber, ct);
-            if (deferred is not null)
-            {
-                await receiver.AbandonMessageAsync(deferred, cancellationToken: ct);
-            }
+            // Restore every deferred message back to normal delivery order — abandoning a deferred
+            // message un-defers it, the correct way to "put back" a message that was only set aside
+            // while scanning, not actually re-dead-lettered. This runs no matter how the scan above
+            // exits (normal completion, break, or an exception/cancellation) because a deferred
+            // message never returns to normal delivery on its own.
+            //
+            // Deliberately uses CancellationToken.None, not the caller's `ct`: both
+            // ReceiveDeferredMessagesAsync and AbandonMessageAsync check their token up front, so if
+            // this restoration ran with an already-cancelled `ct` it would throw immediately and
+            // restore nothing. This cleanup must complete even when the original request did not.
+            await RestoreDeferredMessagesAsync(receiver, deferredSequenceNumbers);
         }
 
         return resubmitted;
+    }
+
+    // Best-effort restoration of messages deferred by the scan above. Batches sequence numbers via
+    // the SDK's plural ReceiveDeferredMessagesAsync(IEnumerable<long>, CancellationToken) overload,
+    // which (verified by decompiling Azure.Messaging.ServiceBus 7.20.2) throws a ServiceBusException
+    // with Reason == MessageNotFound for the WHOLE call if even one requested sequence number is no
+    // longer deferred (e.g. a concurrent consumer already received-and-settled it directly) — it
+    // does not return a partial/shorter list. So a chunk-level failure falls back to restoring that
+    // chunk's messages one at a time, each independently try/caught, so one bad sequence number
+    // can't strand the rest of an otherwise-healthy chunk. Any restoration failure is swallowed:
+    // this is cleanup for a resubmit that has already happened, not an operation whose failure
+    // should mask or abort the original result.
+    private static async Task RestoreDeferredMessagesAsync(ServiceBusReceiver receiver, IReadOnlyList<long> deferredSequenceNumbers)
+    {
+        const int restoreChunkSize = 100;
+
+        foreach (var chunk in deferredSequenceNumbers.Chunk(restoreChunkSize))
+        {
+            try
+            {
+                var restored = await receiver.ReceiveDeferredMessagesAsync(chunk, CancellationToken.None);
+                foreach (var message in restored)
+                {
+                    await TryAbandonAsync(receiver, message);
+                }
+            }
+            catch
+            {
+                foreach (var sequenceNumber in chunk)
+                {
+                    try
+                    {
+                        var single = await receiver.ReceiveDeferredMessagesAsync(new[] { sequenceNumber }, CancellationToken.None);
+                        if (single.Count > 0)
+                        {
+                            await TryAbandonAsync(receiver, single[0]);
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort: this sequence number could not be restored (e.g. it was no
+                        // longer deferred). Move on rather than aborting the rest of the restore pass.
+                    }
+                }
+            }
+        }
+    }
+
+    private static async Task TryAbandonAsync(ServiceBusReceiver receiver, ServiceBusReceivedMessage message)
+    {
+        try
+        {
+            await receiver.AbandonMessageAsync(message, cancellationToken: CancellationToken.None);
+        }
+        catch
+        {
+            // Best-effort: leave it deferred rather than letting an abandon failure (e.g. a lock
+            // lost to a concurrent consumer) abort the rest of the restore pass.
+        }
     }
 
     public async Task<int> PurgeDeadLetterMessagesAsync(string connectionString, string queueName, CancellationToken ct = default)
