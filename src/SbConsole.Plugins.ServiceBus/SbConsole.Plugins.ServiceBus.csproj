@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <ItemGroup>
     <ProjectReference Include="..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
@@ -6,6 +6,12 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pages/*.razor need Razor component + [Authorize] support, which live in the ASP.NET Core
+         shared framework, not a NuGet package — same pattern `dotnet new razorclasslib` uses. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <PropertyGroup>
