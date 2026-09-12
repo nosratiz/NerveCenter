@@ -19,6 +19,9 @@ public sealed class ServiceBusPlugin : IPlugin
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<IServiceBusOperations, AzureServiceBusOperations>();
+        services.AddScoped<Queues.ListQueuesQueryHandler>();
+        services.AddScoped<Queues.CreateQueueCommandHandler>();
+        services.AddScoped<Queues.DeleteQueueCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

@@ -1,4 +1,129 @@
 @page "/p/azure-servicebus/queues"
+@using Microsoft.AspNetCore.Components.Authorization
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Plugins.ServiceBus.Queues
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject ListQueuesQueryHandler ListHandler
+@inject DeleteQueueCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
 
 <PageTitle>Queues</PageTitle>
 <h1>Queues</h1>
+
+@if (_connections.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No connections yet. Add an Azure Service Bus connection to get started.</MudAlert>
+}
+else
+{
+    <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged">
+        @foreach (var connection in _connections)
+        {
+            <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate" Class="my-4">+ Create queue</MudButton>
+
+    <MudTable Items="_queues">
+        <HeaderContent>
+            <MudTh>Queue</MudTh>
+            <MudTh>Active</MudTh>
+            <MudTh>Dead-letter</MudTh>
+            <MudTh>Scheduled</MudTh>
+            <MudTh>Size</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.Name</MudTd>
+            <MudTd>@context.ActiveMessageCount</MudTd>
+            <MudTd>@context.DeadLetterMessageCount</MudTd>
+            <MudTd>@context.ScheduledMessageCount</MudTd>
+            <MudTd>@FormatSize(context.SizeInBytes)</MudTd>
+            <MudTd>
+                <MudButton Href="@PeekUrl(context.Name)">Peek</MudButton>
+                <MudButton Class="delete-queue" Color="Color.Error" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<QueueSummary> _queues = [];
+    private Guid _selectedConnectionId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("azure-servicebus");
+        if (_connections.Count > 0)
+        {
+            _selectedConnectionId = _connections[0].Id;
+            await LoadQueuesAsync();
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid connectionId)
+    {
+        _selectedConnectionId = connectionId;
+        await LoadQueuesAsync();
+    }
+
+    private async Task LoadQueuesAsync()
+    {
+        var result = await ListHandler.HandleAsync(_selectedConnectionId);
+        _queues = result.IsSuccess ? result.Value! : [];
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024.0):0.#} MB",
+    };
+
+    // The Peek page's purge action needs the connection's name (for a readable audit target) and
+    // its prod status (for typed-confirmation gating) — carried across navigation as query
+    // parameters since Peek.razor is reached via a full link, not a component parameter.
+    private string PeekUrl(string queueName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        return $"/p/azure-servicebus/queues/{queueName}/peek" +
+               $"?connectionId={connection.Id}" +
+               $"&connectionName={Uri.EscapeDataString(connection.Name)}" +
+               $"&isProd={connection.IsProd}";
+    }
+
+    private async Task OpenCreate()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateQueueDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateQueueDialog>("Create queue", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
+
+    private async Task DeleteAsync(string queueName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", queueName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
+        await LoadQueuesAsync();
+    }
+}

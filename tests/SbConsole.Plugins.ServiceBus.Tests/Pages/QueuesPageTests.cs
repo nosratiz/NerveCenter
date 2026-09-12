@@ -1,0 +1,86 @@
+using Bunit;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using MudBlazor.Services;
+using NSubstitute;
+using SbConsole.Plugins.ServiceBus.Client;
+using SbConsole.Plugins.ServiceBus.Pages;
+using SbConsole.Plugins.ServiceBus.Queues;
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.ServiceBus.Tests.Pages;
+
+public class QueuesPageTests : BunitContext, IAsyncLifetime
+{
+    // MudBlazor registers a few interop-backed services (key interception for popovers,
+    // pointer-events routing) that implement only IAsyncDisposable. xunit v2 tears down a test
+    // class via its synchronous IDisposable.Dispose() unless the class also implements
+    // Xunit.IAsyncLifetime, in which case DisposeAsync() runs first -- disposing those services
+    // the async-safe way before the base (synchronous) Dispose() runs as a no-op afterwards. See
+    // ConnectionsPageTests.cs for the same pattern.
+    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
+    async Task IAsyncLifetime.DisposeAsync() => await base.DisposeAsync();
+
+    private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
+    private readonly IServiceBusOperations _operations = Substitute.For<IServiceBusOperations>();
+    private readonly Guid _connectionId = Guid.NewGuid();
+
+    public QueuesPageTests()
+    {
+        Services.AddMudServices();
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>())
+            .Returns(new List<ConnectionInfo> { new(_connectionId, "sb-dev", "azure-servicebus", ["dev"]) });
+        _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        Services.AddSingleton(_connections);
+        Services.AddSingleton(_operations);
+        Services.AddSingleton(Substitute.For<IAuditScope>());
+        Services.AddSingleton(Substitute.For<IConfirmationService>());
+        Services.AddSingleton<ListQueuesQueryHandler>();
+        Services.AddSingleton<CreateQueueCommandHandler>();
+        Services.AddSingleton<DeleteQueueCommandHandler>();
+    }
+
+    [Fact]
+    public async Task Lists_queues_for_the_first_available_connection()
+    {
+        _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { new("orders-inbound", 12, 3, 0, 2048) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("orders-inbound");
+        cut.Markup.Should().Contain("12");
+    }
+
+    [Fact]
+    public async Task No_connections_shows_an_honest_empty_state()
+    {
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>()).Returns(new List<ConnectionInfo>());
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("No connections");
+    }
+
+    [Fact]
+    public async Task Delete_goes_through_confirmation_before_calling_the_handler()
+    {
+        _operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { new("orders-inbound", 0, 0, 0, 0) });
+        var confirmation = Services.GetRequiredService<IConfirmationService>();
+        confirmation.ConfirmAsync("Delete", "orders-inbound", false, null, Arg.Any<CancellationToken>()).Returns(true);
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.delete-queue").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).DeleteQueueAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>());
+    }
+}

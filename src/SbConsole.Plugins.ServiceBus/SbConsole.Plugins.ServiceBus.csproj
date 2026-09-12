@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+    <PackageReference Include="MudBlazor" Version="9.9.0" />
   </ItemGroup>
 
   <ItemGroup>
