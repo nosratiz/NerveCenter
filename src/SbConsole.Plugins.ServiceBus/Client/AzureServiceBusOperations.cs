@@ -23,9 +23,20 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
             return new ConnectionTestResult(true);
         }
-        catch (Azure.RequestFailedException ex) when (ex.Status is 401 or 403)
+        catch (UnauthorizedAccessException)
         {
-            return new ConnectionTestResult(false, $"Unauthorized ({ex.Status})");
+            // ServiceBusAdministrationClient never throws RequestFailedException directly — its
+            // HttpRequestAndResponse.ThrowIfRequestFailed rewraps a 401 response as
+            // UnauthorizedAccessException (verified via decompilation of 7.20.2).
+            return new ConnectionTestResult(false, "Unauthorized (401)");
+        }
+        catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.QuotaExceeded)
+        {
+            // A 403 response is rewrapped as either InvalidOperationException (the "forbidden by
+            // invalid operation" sub-code) or a ServiceBusException with Reason == QuotaExceeded
+            // (verified via decompilation of 7.20.2). The InvalidOperationException case falls
+            // through to the generic catch below, which still reports a readable message.
+            return new ConnectionTestResult(false, "Forbidden (403)");
         }
         catch (Exception ex)
         {
@@ -132,11 +143,19 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         await using var sender = client.CreateSender(queueName);
 
         var remaining = new HashSet<long>(sequenceNumbers);
+        var deferredSequenceNumbers = new List<long>();
         var resubmitted = 0;
+
         // Bounded scan: keep receiving batches until every requested sequence number has been
         // found or the dead-letter queue is exhausted, so resubmitting a handful of messages out
         // of a much larger dead-letter queue can't loop forever.
-        var maxAttempts = sequenceNumbers.Count * 4 + 10;
+        //
+        // Defer (not abandon) every non-matching message while scanning: abandoning would make it
+        // immediately redeliverable, causing the same head-of-queue messages to loop back before
+        // the scan ever reaches deeper ones. A deferred message is skipped by ordinary receive
+        // calls until explicitly re-received by sequence number, which is what makes forward
+        // progress possible.
+        var maxAttempts = sequenceNumbers.Count * 4 + 20;
         for (var attempt = 0; attempt < maxAttempts && remaining.Count > 0; attempt++)
         {
             var batch = await receiver.ReceiveMessagesAsync(maxMessages: 32, maxWaitTime: TimeSpan.FromSeconds(5), ct);
@@ -155,8 +174,21 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                 }
                 else
                 {
-                    await receiver.AbandonMessageAsync(message, cancellationToken: ct);
+                    await receiver.DeferMessageAsync(message, cancellationToken: ct);
+                    deferredSequenceNumbers.Add(message.SequenceNumber);
                 }
+            }
+        }
+
+        // Restore every deferred message back to normal delivery order — abandoning a deferred
+        // message un-defers it, the correct way to "put back" a message that was only set aside
+        // while scanning, not actually re-dead-lettered.
+        foreach (var sequenceNumber in deferredSequenceNumbers)
+        {
+            var deferred = await receiver.ReceiveDeferredMessageAsync(sequenceNumber, ct);
+            if (deferred is not null)
+            {
+                await receiver.AbandonMessageAsync(deferred, cancellationToken: ct);
             }
         }
 
