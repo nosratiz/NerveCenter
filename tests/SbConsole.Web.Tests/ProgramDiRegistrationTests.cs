@@ -71,7 +71,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect, "login must succeed for the page requests below to be authenticated");
         var authCookie = loginResponse.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith("sbc.auth", StringComparison.Ordinal)).Split(';')[0];
 
-        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings" })
+        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, route);
             request.Headers.Add("Cookie", authCookie);
@@ -101,6 +101,26 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         sp.GetRequiredService<UpdateConnectionCommandHandler>();
         sp.GetRequiredService<ListAuditEntriesQueryHandler>();
         sp.GetRequiredService<ListPluginsQueryHandler>();
+    }
+
+    /// <summary>
+    /// The manual smoke test's "anonymous GET to /p/azure-servicebus/queues redirects" check does not
+    /// actually prove the Queues component carries [Authorize] -- it passes just as well from
+    /// Program.cs's app-wide SetFallbackPolicy(...RequireAuthenticatedUser()...), which would redirect
+    /// an unauthenticated request regardless of whether the component itself declares [Authorize].
+    /// This pins the attribute directly on the compiled component type, which is what distinguishes
+    /// "the page has [Authorize]" from "the app has a fallback policy that happens to redirect anyway" --
+    /// e.g. it would catch @attribute [Authorize] being deleted from
+    /// SbConsole.Plugins.ServiceBus/Pages/_Imports.razor even though every route-level test above would
+    /// still pass (the fallback policy would still redirect anonymous requests).
+    /// </summary>
+    [Fact]
+    public void Queues_plugin_page_declares_Authorize_directly_on_the_component()
+    {
+        typeof(SbConsole.Plugins.ServiceBus.Pages.Queues)
+            .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+            .Should().NotBeEmpty("the Queues component itself must declare [Authorize], not merely rely on " +
+                "the app's fallback authorization policy to redirect anonymous requests");
     }
 
     public void Dispose()

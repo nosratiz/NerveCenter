@@ -35,6 +35,7 @@ public class NavMenuTests : BunitContext
 
         cut.Markup.Should().Contain("Connections");
         cut.Markup.Should().Contain("Audit");
+        cut.Markup.Should().Contain("/plugins");
         cut.Markup.Should().Contain("Fake Plugin");
         cut.Markup.Should().Contain("/p/fake/queues");
     }
