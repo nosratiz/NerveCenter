@@ -51,9 +51,23 @@
 
     private IReadOnlyList<PeekedMessage> _messages = [];
     private PeekedMessage? _selected;
+    private (Guid ConnectionId, string QueueName, bool DeadLetter)? _lastLoaded;
 
-    protected override async Task OnInitializedAsync()
+    // Blazor reuses this component instance across same-route navigations (e.g. flipping
+    // DeadLetter or ConnectionId in the query string while QueueName stays the same), so
+    // OnInitializedAsync only runs once per instance and would leave the message list stale.
+    // OnParametersSetAsync runs on every such navigation, so the reload lives here instead --
+    // guarded against re-running on renders that don't actually change these parameters.
+    protected override async Task OnParametersSetAsync()
     {
+        var current = (ConnectionId, QueueName, DeadLetter);
+        if (_lastLoaded == current)
+        {
+            return;
+        }
+
+        _lastLoaded = current;
+
         var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
         if (result.IsSuccess)
         {
