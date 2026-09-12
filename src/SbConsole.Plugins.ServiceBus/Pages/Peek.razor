@@ -1,0 +1,71 @@
+@* Read-only message browser: peeks a queue's active messages, or its dead-letter sub-queue when
+   DeadLetter is set. Destructive/mutating actions (resubmit, purge, send) are Task 9. *@
+@page "/p/azure-servicebus/queues/{QueueName}/peek"
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Plugins.ServiceBus.Messages
+@inject PeekMessagesQueryHandler PeekHandler
+@inject ISnackbar Snackbar
+
+<PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @QueueName</PageTitle>
+<h1>@(DeadLetter ? "Dead-letter" : "Peek"): @QueueName</h1>
+
+<MudGrid>
+    <MudItem xs="5">
+        <MudList T="PeekedMessage" SelectedValue="_selected" SelectedValueChanged="OnSelect">
+            @foreach (var message in _messages)
+            {
+                <MudListItem T="PeekedMessage" Value="message">
+                    #@message.SequenceNumber · @message.EnqueuedTime.ToLocalTime() · deliveries @message.DeliveryCount
+                </MudListItem>
+            }
+        </MudList>
+    </MudItem>
+    <MudItem xs="7">
+        @if (_selected is not null)
+        {
+            @if (_selected.DeadLetterReason is { } reason)
+            {
+                <MudAlert Severity="Severity.Warning">@reason — @_selected.DeadLetterErrorDescription</MudAlert>
+            }
+            <MudText Typo="Typo.subtitle2">@_selected.ContentType</MudText>
+            <pre>@_selected.Body</pre>
+            <MudText Typo="Typo.subtitle2" Class="mt-4">Application properties</MudText>
+            <MudTable Items="_selected.Properties">
+                <HeaderContent>
+                    <MudTh>Key</MudTh>
+                    <MudTh>Value</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Key</MudTd>
+                    <MudTd>@context.Value</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public string QueueName { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+    [SupplyParameterFromQuery] public bool DeadLetter { get; set; }
+
+    private IReadOnlyList<PeekedMessage> _messages = [];
+    private PeekedMessage? _selected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
+        if (result.IsSuccess)
+        {
+            _messages = result.Value!;
+            _selected = _messages.FirstOrDefault();
+        }
+        else
+        {
+            _messages = [];
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private void OnSelect(PeekedMessage message) => _selected = message;
+}
