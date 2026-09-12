@@ -5,6 +5,7 @@
 @using SbConsole.Web.Components.Connections
 @inject ListConnectionsQueryHandler ListHandler
 @inject DeleteConnectionCommandHandler DeleteHandler
+@inject TestConnectionCommandHandler TestHandler
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
 
@@ -29,8 +30,9 @@
                 <MudChip T="string" Color="@(string.Equals(tag, "prod", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default)">@tag</MudChip>
             }
         </MudTd>
-        <MudTd>Untested</MudTd>
+        <MudTd>@StatusText(context)</MudTd>
         <MudTd>
+            <MudButton Class="test-connection" OnClick="@(() => TestAsync(context))">Test</MudButton>
             <MudButton OnClick="@(() => OpenEdit(context))">Edit</MudButton>
             <MudButton Class="delete-connection" Color="Color.Error" OnClick="@(() => DeleteAsync(context))">Delete</MudButton>
         </MudTd>
@@ -45,6 +47,21 @@
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
     private async Task RefreshAsync() => _connections = await ListHandler.HandleAsync();
+
+    private static string StatusText(ConnectionInfo connection) => connection switch
+    {
+        { LastTestedAt: null } => "Never tested",
+        { LastTestSucceeded: true } => "OK",
+        { LastTestError: { } error } => error,
+        _ => "Failed",
+    };
+
+    private async Task TestAsync(ConnectionInfo connection)
+    {
+        var actor = await ActorResolver.ResolveAsync(AuthState);
+        await TestHandler.HandleAsync(new TestConnectionCommand(connection.Id, actor));
+        await RefreshAsync();
+    }
 
     private async Task OpenAdd()
     {
