@@ -1,4 +1,6 @@
 @inject PluginRegistry Registry
+@inject IConnectionProvider Connections
+@implements IDisposable
 
 <MudNavMenu>
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
@@ -12,8 +14,102 @@
         <MudNavGroup Title="@plugin.DisplayName" Expanded="true">
             @foreach (var item in plugin.NavItems)
             {
-                <MudNavLink Href="@item.Href" Icon="@(item.Icon ?? Icons.Material.Filled.Extension)">@item.Title</MudNavLink>
+                <MudNavLink Href="@item.Href" Icon="@(item.Icon ?? Icons.Material.Filled.Extension)">
+                    @item.Title
+                    @if (_badges.TryGetValue(item.Href, out var count) && count > 0)
+                    {
+                        <span class="nav-badge" style="margin-left:6px;font:600 10px monospace;padding:1px 6px;border-radius:9px;background:var(--mud-palette-error);color:#fff">@count</span>
+                    }
+                </MudNavLink>
             }
         </MudNavGroup>
     }
 </MudNavMenu>
+
+@code {
+    private readonly Dictionary<string, int> _badges = new();
+    private readonly CancellationTokenSource _cts = new();
+
+    // Fire-and-forget: never awaited from a lifecycle method, so the very first render of any page
+    // (this component is part of the persistent layout, not re-created per page) is never blocked
+    // on a Service Bus or database call (docs/design.md §5).
+    protected override void OnInitialized()
+    {
+        _ = RefreshLoopAsync(_cts.Token);
+    }
+
+    private async Task RefreshLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await RefreshBadgesAsync(ct);
+            }
+            catch
+            {
+                // Best-effort: a failed refresh tick leaves the last-known badges in place and
+                // tries again next tick, rather than tearing down the nav menu.
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(60), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    // Public so tests can call one refresh directly instead of waiting on the real loop/timer
+    // (docs/design.md §8) -- the loop above is just this method plus a delay, in a while loop.
+    public async Task RefreshBadgesAsync(CancellationToken ct = default)
+    {
+        foreach (var plugin in Registry.Plugins)
+        {
+            var connections = await Connections.ListAsync(plugin.ConnectionKind, ct);
+            foreach (var navItem in plugin.NavItems)
+            {
+                int? total = null;
+                foreach (var connection in connections)
+                {
+                    var secret = await Connections.GetSecretAsync(connection.Id, ct);
+                    if (secret is null)
+                    {
+                        continue;
+                    }
+
+                    int? count;
+                    try
+                    {
+                        count = await plugin.GetNavBadgeAsync(navItem.Href, secret, ct);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (count is { } c)
+                    {
+                        total = (total ?? 0) + c;
+                    }
+                }
+
+                if (total is { } t)
+                {
+                    _badges[navItem.Href] = t;
+                }
+                else
+                {
+                    _badges.Remove(navItem.Href);
+                }
+            }
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => _cts.Cancel();
+}
