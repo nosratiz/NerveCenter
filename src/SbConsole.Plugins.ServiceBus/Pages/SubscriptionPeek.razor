@@ -1,0 +1,160 @@
+@* Message browser for a subscription's messages/dead-letter sub-queue -- same shape as
+   Peek.razor, sharing DeadLetterMessageBrowser (Task 6), applying the same IConnectionProvider-
+   sourced IsProd/ConnectionName pattern that Peek.razor only gained after a Critical finding in
+   the Queues plan's final review. This page never trusts IsProd/ConnectionName off the URL. *@
+@page "/p/azure-servicebus/topics/{TopicName}/subscriptions/{SubscriptionName}/peek"
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Plugins.ServiceBus.Messages
+@using SbConsole.Sdk
+@inject PeekSubscriptionMessagesQueryHandler PeekHandler
+@inject ResubmitSubscriptionDeadLetterMessagesCommandHandler ResubmitHandler
+@inject PurgeSubscriptionDeadLetterMessagesCommandHandler PurgeHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+
+<PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @SubscriptionName</PageTitle>
+<h1>@(DeadLetter ? "Dead-letter" : "Peek"): @TopicName / @SubscriptionName</h1>
+
+@if (DeadLetter)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-2">
+        Resubmitting republishes onto the topic <b>@TopicName</b>, not directly into this subscription — the message
+        is re-evaluated against every subscription's filters, so it may also reach other subscriptions.
+    </MudAlert>
+}
+
+<DeadLetterMessageBrowser
+    Messages="_messages"
+    DeadLetter="DeadLetter"
+    SelectedSequenceNumbers="_selectedSequenceNumbers"
+    Selected="_selected"
+    Busy="_busy"
+    CanPurge="_connection is not null"
+    PurgeLabel="Purge subscription"
+    OnSelect="@(m => _selected = m)"
+    OnToggleSelection="@(t => ToggleSelection(t.SequenceNumber, t.Selected))"
+    OnResubmitSelected="ResubmitSelectedAsync"
+    OnPurge="PurgeAsync" />
+
+@code {
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public string SubscriptionName { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+    [SupplyParameterFromQuery] public bool DeadLetter { get; set; }
+    [SupplyParameterFromQuery] public long? DeadLetterCount { get; set; }
+
+    private IReadOnlyList<PeekedMessage> _messages = [];
+    private PeekedMessage? _selected;
+    private readonly HashSet<long> _selectedSequenceNumbers = [];
+    private bool _busy;
+    private (Guid ConnectionId, string TopicName, string SubscriptionName, bool DeadLetter)? _lastLoaded;
+
+    // ConnectionName and IsProd are looked up from the real connection record instead of being
+    // trusted off the URL -- see Peek.razor's identical comment. This page is greenfield, so this
+    // is the pattern from the start rather than a retrofit: ConnectionId/DeadLetter stay as query
+    // parameters since they're not security-relevant the same way.
+    private ConnectionInfo? _connection;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var current = (ConnectionId, TopicName, SubscriptionName, DeadLetter);
+        if (_lastLoaded == current)
+        {
+            return;
+        }
+
+        _lastLoaded = current;
+        var connections = await Connections.ListAsync("azure-servicebus");
+        _connection = connections.FirstOrDefault(c => c.Id == ConnectionId);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        try
+        {
+            var result = await PeekHandler.HandleAsync(ConnectionId, TopicName, SubscriptionName, DeadLetter);
+            _selectedSequenceNumbers.Clear();
+            if (result.IsSuccess)
+            {
+                _messages = result.Value!;
+                _selected = _messages.FirstOrDefault();
+            }
+            else
+            {
+                _messages = [];
+                _selected = null;
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ToggleSelection(long sequenceNumber, bool selected)
+    {
+        if (selected)
+        {
+            _selectedSequenceNumbers.Add(sequenceNumber);
+        }
+        else
+        {
+            _selectedSequenceNumbers.Remove(sequenceNumber);
+        }
+    }
+
+    private async Task ResubmitSelectedAsync()
+    {
+        var requested = _selectedSequenceNumbers.Count;
+        _busy = true;
+        try
+        {
+            var result = await ResubmitHandler.HandleAsync(new ResubmitSubscriptionDeadLetterMessagesCommand(
+                ConnectionId, _connection?.Name ?? "", TopicName, SubscriptionName, [.. _selectedSequenceNumbers]));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add($"{result.Value} of {requested} resubmitted", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task PurgeAsync()
+    {
+        var count = DeadLetterCount.HasValue ? (int)DeadLetterCount.Value : _messages.Count;
+        var confirmed = await Confirmation.ConfirmAsync("Purge", SubscriptionName, _connection?.IsProd ?? false, count: count);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await PurgeHandler.HandleAsync(new PurgeSubscriptionDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", TopicName, SubscriptionName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await LoadAsync();
+    }
+}
