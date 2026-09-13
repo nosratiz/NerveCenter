@@ -13,6 +13,7 @@ public sealed class ServiceBusPlugin : IPlugin
     [
         new("Queues", "/p/azure-servicebus/queues"),
         new("Topics & Subscriptions", "/p/azure-servicebus/topics"),
+        new("Dead-letter", DeadLetterNavHref),
     ];
     public string ConnectionKind => "azure-servicebus";
     public string ConnectionKindDisplayName => "Azure Service Bus";
@@ -38,6 +39,22 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Messages.PeekSubscriptionMessagesQueryHandler>();
         services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
+    }
+
+    private const string DeadLetterNavHref = "/p/azure-servicebus/dead-letter";
+
+    // Constructs AzureServiceBusOperations directly, same as TestConnectionAsync above -- plugins
+    // have no DI container at this layer (AddSbConsolePlugin<TPlugin>()'s `new()` constraint).
+    public Task<int?> GetNavBadgeAsync(string navItemHref, string connectionString, CancellationToken ct = default) =>
+        navItemHref == DeadLetterNavHref
+            ? GetDeadLetterBadgeAsync(connectionString, ct)
+            : Task.FromResult<int?>(null);
+
+    private static async Task<int?> GetDeadLetterBadgeAsync(string connectionString, CancellationToken ct)
+    {
+        var entries = await new AzureServiceBusOperations().ListDeadLetterEntriesAsync(connectionString, ct);
+        var total = entries.Sum(e => e.Count);
+        return total > 0 ? (int)total : null;
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`
