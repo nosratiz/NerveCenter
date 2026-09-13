@@ -30,4 +30,22 @@ public interface IServiceBusOperations
 
     /// <summary>Destructive. Drains and discards every message currently in the queue's dead-letter sub-queue. Returns how many were purged.</summary>
     Task<int> PurgeDeadLetterMessagesAsync(string connectionString, string queueName, CancellationToken ct = default);
+
+    Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string connectionString, CancellationToken ct = default);
+
+    Task CreateTopicAsync(string connectionString, CreateTopicRequest request, CancellationToken ct = default);
+
+    /// <summary>Destructive. Cascades: deletes every subscription on the topic too.</summary>
+    Task DeleteTopicAsync(string connectionString, string topicName, CancellationToken ct = default);
+
+    Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string connectionString, string topicName, CancellationToken ct = default);
+
+    Task CreateSubscriptionAsync(string connectionString, string topicName, CreateSubscriptionRequest request, CancellationToken ct = default);
+
+    /// <summary>Destructive.</summary>
+    Task DeleteSubscriptionAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default);
+
+    /// <summary>Every queue and subscription with a non-zero dead-letter count for this connection.
+    /// One seam shared by the Dead-letter nav badge and the Dead-letter overview page.</summary>
+    Task<IReadOnlyList<DeadLetterEntry>> ListDeadLetterEntriesAsync(string connectionString, CancellationToken ct = default);
 }

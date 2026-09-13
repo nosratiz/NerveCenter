@@ -33,10 +33,15 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     // per attempt) — not the AMQP client's ServiceBusRetryOptions (TryTimeout).
     internal static ServiceBusAdministrationClientOptions CreateAdministrationClientOptions()
     {
-        var options = new ServiceBusAdministrationClientOptions();
-        options.Retry.MaxRetries = MaxRetries;
-        options.Retry.NetworkTimeout = AttemptTimeout;
-        options.Retry.MaxDelay = MaxRetryDelay;
+        var options = new ServiceBusAdministrationClientOptions
+        {
+            Retry =
+            {
+                MaxRetries = MaxRetries,
+                NetworkTimeout = AttemptTimeout,
+                MaxDelay = MaxRetryDelay
+            }
+        };
         return options;
     }
 
@@ -177,6 +182,65 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     {
         var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
         await adminClient.DeleteQueueAsync(queueName, ct);
+    }
+
+    public async Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string connectionString, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var topics = new List<TopicSummary>();
+        await foreach (var props in adminClient.GetTopicsRuntimePropertiesAsync(ct).WithCancellation(ct))
+        {
+            topics.Add(new TopicSummary(props.Name, props.SubscriptionCount, props.SizeInBytes, props.ScheduledMessageCount));
+        }
+
+        return topics;
+    }
+
+    public async Task CreateTopicAsync(string connectionString, CreateTopicRequest request, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.CreateTopicAsync(new CreateTopicOptions(request.Name), ct);
+    }
+
+    public async Task DeleteTopicAsync(string connectionString, string topicName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.DeleteTopicAsync(topicName, ct);
+    }
+
+    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string connectionString, string topicName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var subscriptions = new List<SubscriptionSummary>();
+        await foreach (var props in adminClient.GetSubscriptionsRuntimePropertiesAsync(topicName, ct).WithCancellation(ct))
+        {
+            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount));
+        }
+
+        return subscriptions;
+    }
+
+    public async Task CreateSubscriptionAsync(string connectionString, string topicName, CreateSubscriptionRequest request, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var options = new CreateSubscriptionOptions(topicName, request.Name) { MaxDeliveryCount = request.MaxDeliveryCount };
+        if (request.LockDuration is { } lockDuration)
+        {
+            options.LockDuration = lockDuration;
+        }
+
+        if (request.DefaultMessageTimeToLive is { } ttl)
+        {
+            options.DefaultMessageTimeToLive = ttl;
+        }
+
+        await adminClient.CreateSubscriptionAsync(options, ct);
+    }
+
+    public async Task DeleteSubscriptionAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.DeleteSubscriptionAsync(topicName, subscriptionName, ct);
     }
 
     public async Task<IReadOnlyList<PeekedMessage>> PeekMessagesAsync(
@@ -406,5 +470,38 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
 
         return purged;
+    }
+
+    // Composes the admin-list methods above -- no new Azure SDK surface, just orchestration -- so
+    // it can be reused unchanged by both the Dead-letter nav badge (ServiceBusPlugin) and the
+    // Dead-letter overview page's handler (docs/design.md §6.3), rather than enumerating queues and
+    // topics/subscriptions in two separate places.
+    public async Task<IReadOnlyList<DeadLetterEntry>> ListDeadLetterEntriesAsync(string connectionString, CancellationToken ct = default)
+    {
+        var entries = new List<DeadLetterEntry>();
+
+        var queues = await ListQueuesAsync(connectionString, ct);
+        foreach (var queue in queues)
+        {
+            if (queue.DeadLetterMessageCount > 0)
+            {
+                entries.Add(new DeadLetterEntry("Queue", null, queue.Name, queue.DeadLetterMessageCount));
+            }
+        }
+
+        var topics = await ListTopicsAsync(connectionString, ct);
+        foreach (var topic in topics)
+        {
+            var subscriptions = await ListSubscriptionsAsync(connectionString, topic.Name, ct);
+            foreach (var subscription in subscriptions)
+            {
+                if (subscription.DeadLetterMessageCount > 0)
+                {
+                    entries.Add(new DeadLetterEntry("Subscription", topic.Name, subscription.Name, subscription.DeadLetterMessageCount));
+                }
+            }
+        }
+
+        return entries;
     }
 }
