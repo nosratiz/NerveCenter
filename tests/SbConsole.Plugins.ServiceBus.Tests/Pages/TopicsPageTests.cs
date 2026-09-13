@@ -1,0 +1,153 @@
+using Bunit;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using MudBlazor.Services;
+using NSubstitute;
+using SbConsole.Plugins.ServiceBus.Client;
+using SbConsole.Plugins.ServiceBus.Messages;
+using SbConsole.Plugins.ServiceBus.Pages;
+using SbConsole.Plugins.ServiceBus.Subscriptions;
+using SbConsole.Plugins.ServiceBus.Topics;
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.ServiceBus.Tests.Pages;
+
+public class TopicsPageTests : BunitContext, IAsyncLifetime
+{
+    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
+    async Task IAsyncLifetime.DisposeAsync() => await base.DisposeAsync();
+
+    private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
+    private readonly IServiceBusOperations _operations = Substitute.For<IServiceBusOperations>();
+    private readonly Guid _connectionId = Guid.NewGuid();
+    private readonly ConnectionInfo _connectionInfo;
+    private readonly IConfirmationService _confirmation = Substitute.For<IConfirmationService>();
+
+    public TopicsPageTests()
+    {
+        _connectionInfo = new ConnectionInfo(_connectionId, "sb-dev", "azure-servicebus", ["dev"]);
+        Services.AddMudServices();
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>())
+            .Returns(new List<ConnectionInfo> { _connectionInfo });
+        _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        Services.AddSingleton(_connections);
+        Services.AddSingleton(_operations);
+        Services.AddSingleton(Substitute.For<IAuditScope>());
+        Services.AddSingleton(_confirmation);
+        Services.AddLogging();
+        Services.AddSingleton<ListTopicsQueryHandler>();
+        Services.AddSingleton<CreateTopicCommandHandler>();
+        Services.AddSingleton<DeleteTopicCommandHandler>();
+        Services.AddSingleton<CreateSubscriptionCommandHandler>();
+        Services.AddSingleton<DeleteSubscriptionCommandHandler>();
+        Services.AddSingleton<SendMessageCommandHandler>();
+    }
+
+    [Fact]
+    public async Task Collapsed_topic_row_shows_aggregated_counts_without_expanding()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 2, 4096, 3) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6), new("eu-team", 2, 0, 2) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("orders");
+        cut.Markup.Should().Contain("7"); // aggregated Active (5 + 2)
+        cut.Markup.Should().Contain("1"); // aggregated Dead-letter (1 + 0)
+        cut.FindAll(".subscription-row").Should().BeEmpty("collapsed by default");
+    }
+
+    [Fact]
+    public async Task Expanding_a_topic_reveals_its_subscription_rows()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        cut.Render();
+
+        cut.FindAll(".subscription-row").Should().HaveCount(1);
+        cut.Markup.Should().Contain("uk-team");
+    }
+
+    [Fact]
+    public async Task No_connections_shows_an_honest_empty_state()
+    {
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>()).Returns(new List<ConnectionInfo>());
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("No connections");
+    }
+
+    [Fact]
+    public async Task Dead_letter_link_carries_connectionId_deadLetter_and_the_rows_live_count()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        cut.Render();
+
+        var link = cut.Find("a.dead-letter-action");
+        link.GetAttribute("href").Should().Be(
+            $"/p/azure-servicebus/topics/orders/subscriptions/uk-team/peek?connectionId={_connectionId}&deadLetter=true&deadLetterCount=1");
+    }
+
+    [Fact]
+    public async Task Delete_topic_goes_through_confirmation_with_the_subscription_count()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 2, 4096, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0), new("eu-team", 0, 0, 0) });
+        _confirmation.ConfirmAsync("Delete", "orders", _connectionInfo.IsProd, 2, Arg.Any<CancellationToken>()).Returns(true);
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.delete-topic").Click();
+        await Task.Delay(30);
+
+        await _confirmation.Received(1).ConfirmAsync("Delete", "orders", _connectionInfo.IsProd, 2, Arg.Any<CancellationToken>());
+        await _operations.Received(1).DeleteTopicAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Delete_subscription_goes_through_confirmation_before_calling_the_handler()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0) });
+        _confirmation.ConfirmAsync("Delete", "uk-team", false, null, Arg.Any<CancellationToken>()).Returns(true);
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        cut.Render();
+        cut.Find("button.delete-subscription").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).DeleteSubscriptionAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+}

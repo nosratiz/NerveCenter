@@ -9,7 +9,11 @@ public sealed class ServiceBusPlugin : IPlugin
     public string Id => "azure-servicebus";
     public string DisplayName => "Azure Service Bus";
     public string Version => "1.0.0";
-    public IReadOnlyList<PluginNavItem> NavItems => [new("Queues", "/p/azure-servicebus/queues")];
+    public IReadOnlyList<PluginNavItem> NavItems =>
+    [
+        new("Queues", "/p/azure-servicebus/queues"),
+        new("Topics & Subscriptions", "/p/azure-servicebus/topics"),
+    ];
     public string ConnectionKind => "azure-servicebus";
     public string ConnectionKindDisplayName => "Azure Service Bus";
 

@@ -71,7 +71,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect, "login must succeed for the page requests below to be authenticated");
         var authCookie = loginResponse.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith("sbc.auth", StringComparison.Ordinal)).Split(';')[0];
 
-        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues" })
+        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, route);
             request.Headers.Add("Cookie", authCookie);
@@ -104,23 +104,28 @@ public sealed class ProgramDiRegistrationTests : IDisposable
     }
 
     /// <summary>
-    /// The manual smoke test's "anonymous GET to /p/azure-servicebus/queues redirects" check does not
-    /// actually prove the Queues component carries [Authorize] -- it passes just as well from
-    /// Program.cs's app-wide SetFallbackPolicy(...RequireAuthenticatedUser()...), which would redirect
-    /// an unauthenticated request regardless of whether the component itself declares [Authorize].
-    /// This pins the attribute directly on the compiled component type, which is what distinguishes
-    /// "the page has [Authorize]" from "the app has a fallback policy that happens to redirect anyway" --
-    /// e.g. it would catch @attribute [Authorize] being deleted from
-    /// SbConsole.Plugins.ServiceBus/Pages/_Imports.razor even though every route-level test above would
-    /// still pass (the fallback policy would still redirect anonymous requests).
+    /// Pins [Authorize] directly on every compiled, routable component type in the plugin
+    /// assembly, rather than one named type -- broadened from the Queues plan's original version
+    /// (which pinned only the Queues component) because that plan's own final review flagged that a
+    /// future page could escape the check silently. This is that future page: Topics (this task)
+    /// and the subscription-peek / Dead-letter-overview pages (later tasks) are all covered
+    /// automatically, as would any later page, with no test change required.
     /// </summary>
     [Fact]
-    public void Queues_plugin_page_declares_Authorize_directly_on_the_component()
+    public void Every_service_bus_plugin_page_declares_Authorize_directly_on_the_component()
     {
-        typeof(SbConsole.Plugins.ServiceBus.Pages.Queues)
-            .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
-            .Should().NotBeEmpty("the Queues component itself must declare [Authorize], not merely rely on " +
-                "the app's fallback authorization policy to redirect anonymous requests");
+        var routableTypes = typeof(SbConsole.Plugins.ServiceBus.Pages.Queues).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttributes(typeof(Microsoft.AspNetCore.Components.RouteAttribute), inherit: false).Length > 0)
+            .ToList();
+
+        routableTypes.Should().NotBeEmpty("this assembly is expected to contain at least one @page component");
+        foreach (var type in routableTypes)
+        {
+            type.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+                .Should().NotBeEmpty($"{type.Name} must declare [Authorize] directly (or inherit it from " +
+                    "Pages/_Imports.razor), not merely rely on the app's fallback authorization policy to " +
+                    "redirect anonymous requests");
+        }
     }
 
     public void Dispose()
