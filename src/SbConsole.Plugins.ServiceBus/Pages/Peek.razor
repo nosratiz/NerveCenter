@@ -13,66 +13,18 @@
 <PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @QueueName</PageTitle>
 <h1>@(DeadLetter ? "Dead-letter" : "Peek"): @QueueName</h1>
 
-@if (DeadLetter)
-{
-    <div class="d-flex align-center gap-2 mb-2">
-        <MudButton Class="resubmit-selected" Disabled="@(_selectedSequenceNumbers.Count == 0 || _busy)" OnClick="ResubmitSelectedAsync">
-            Resubmit selected (@_selectedSequenceNumbers.Count)
-        </MudButton>
-        @* Disabled until the real connection record resolves: PurgeAsync reads _connection.IsProd to
-           decide between the typed-confirmation gate and a plain two-button confirm, and while
-           OnParametersSetAsync's lookup is still in flight `_connection?.IsProd ?? false` would
-           fail open and downgrade a prod purge. Also disabled while any dead-letter operation is
-           in flight -- unlike the per-row flags on Queues.razor, purge and resubmit act on the same
-           sub-queue, so letting one start while the other runs is a conflict, not independence. *@
-        <MudButton Class="purge-queue" Color="Color.Error" Disabled="@(_connection is null || _busy)" OnClick="PurgeAsync">Purge queue</MudButton>
-        @if (_busy)
-        {
-            <MudProgressCircular Class="peek-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
-        }
-    </div>
-}
-
-<MudGrid>
-    <MudItem xs="5">
-        @foreach (var message in _messages)
-        {
-            <div class="d-flex align-center gap-2">
-                @if (DeadLetter)
-                {
-                    <input type="checkbox" class="select-message"
-                           checked="@_selectedSequenceNumbers.Contains(message.SequenceNumber)"
-                           @onchange="@(e => ToggleSelection(message.SequenceNumber, (bool)e.Value!))" />
-                }
-                <MudButton OnClick="@(() => _selected = message)">
-                    #@message.SequenceNumber · @message.EnqueuedTime.ToLocalTime() · deliveries @message.DeliveryCount
-                </MudButton>
-            </div>
-        }
-    </MudItem>
-    <MudItem xs="7">
-        @if (_selected is not null)
-        {
-            @if (_selected.DeadLetterReason is { } reason)
-            {
-                <MudAlert Severity="Severity.Warning">@reason — @_selected.DeadLetterErrorDescription</MudAlert>
-            }
-            <MudText Typo="Typo.subtitle2">@_selected.ContentType</MudText>
-            <pre>@_selected.Body</pre>
-            <MudText Typo="Typo.subtitle2" Class="mt-4">Application properties</MudText>
-            <MudTable Items="_selected.Properties">
-                <HeaderContent>
-                    <MudTh>Key</MudTh>
-                    <MudTh>Value</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd>@context.Key</MudTd>
-                    <MudTd>@context.Value</MudTd>
-                </RowTemplate>
-            </MudTable>
-        }
-    </MudItem>
-</MudGrid>
+<DeadLetterMessageBrowser
+    Messages="_messages"
+    DeadLetter="DeadLetter"
+    SelectedSequenceNumbers="_selectedSequenceNumbers"
+    Selected="_selected"
+    Busy="_busy"
+    CanPurge="_connection is not null"
+    PurgeLabel="Purge queue"
+    OnSelect="@(m => _selected = m)"
+    OnToggleSelection="@(t => ToggleSelection(t.SequenceNumber, t.Selected))"
+    OnResubmitSelected="ResubmitSelectedAsync"
+    OnPurge="PurgeAsync" />
 
 @code {
     [Parameter] public string QueueName { get; set; } = "";
