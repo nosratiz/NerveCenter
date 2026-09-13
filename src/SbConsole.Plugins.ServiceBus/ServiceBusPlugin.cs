@@ -29,6 +29,11 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Topics.ListTopicsQueryHandler>();
         services.AddScoped<Topics.CreateTopicCommandHandler>();
         services.AddScoped<Topics.DeleteTopicCommandHandler>();
+        services.AddScoped<Subscriptions.CreateSubscriptionCommandHandler>();
+        services.AddScoped<Subscriptions.DeleteSubscriptionCommandHandler>();
+        services.AddScoped<Messages.PeekSubscriptionMessagesQueryHandler>();
+        services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
+        services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`
