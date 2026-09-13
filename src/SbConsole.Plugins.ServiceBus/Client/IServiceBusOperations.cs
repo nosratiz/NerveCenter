@@ -48,4 +48,21 @@ public interface IServiceBusOperations
     /// <summary>Every queue and subscription with a non-zero dead-letter count for this connection.
     /// One seam shared by the Dead-letter nav badge and the Dead-letter overview page.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListDeadLetterEntriesAsync(string connectionString, CancellationToken ct = default);
+
+    /// <summary>Non-destructive. Set fromDeadLetter to browse the subscription's dead-letter sub-queue instead.</summary>
+    Task<IReadOnlyList<PeekedMessage>> PeekSubscriptionMessagesAsync(
+        string connectionString, string topicName, string subscriptionName, bool fromDeadLetter, int maxMessages,
+        long? fromSequenceNumber = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Moves the named dead-lettered messages (by sequence number) back into normal delivery by
+    /// republishing them onto the topic -- Service Bus has no way to inject a message directly into
+    /// one subscription's queue, so a resubmitted message is re-evaluated against every
+    /// subscription's filters, not routed back only to this one. Returns how many were actually
+    /// found and resubmitted.
+    /// </summary>
+    Task<int> ResubmitSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default);
+
+    /// <summary>Destructive. Drains and discards every message currently in the subscription's dead-letter sub-queue. Returns how many were purged.</summary>
+    Task<int> PurgeSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default);
 }

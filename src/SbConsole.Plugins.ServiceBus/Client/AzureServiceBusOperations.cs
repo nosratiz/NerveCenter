@@ -266,6 +266,27 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
             m.DeadLetterErrorDescription)).ToList();
     }
 
+    public async Task<IReadOnlyList<PeekedMessage>> PeekSubscriptionMessagesAsync(
+        string connectionString, string topicName, string subscriptionName, bool fromDeadLetter, int maxMessages,
+        long? fromSequenceNumber = null, CancellationToken ct = default)
+    {
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = fromDeadLetter ? SubQueue.DeadLetter : SubQueue.None };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+
+        var received = await receiver.PeekMessagesAsync(maxMessages, fromSequenceNumber, ct);
+
+        return received.Select(m => new PeekedMessage(
+            m.SequenceNumber,
+            m.Body.ToString(),
+            m.ContentType,
+            m.EnqueuedTime,
+            m.DeliveryCount,
+            m.ApplicationProperties.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? ""),
+            m.DeadLetterReason,
+            m.DeadLetterErrorDescription)).ToList();
+    }
+
     public async Task SendMessageAsync(string connectionString, string queueName, SendMessageRequest request, CancellationToken ct = default)
     {
         await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
@@ -290,11 +311,6 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
     }
 
-    // Design tradeoff: non-matching messages are deferred (not abandoned) during the scan so the
-    // scan can make forward progress through the queue instead of looping on the same head-of-queue
-    // messages; the cost is that deferral is durable (it does NOT self-heal like an expiring
-    // PeekLock does), so an explicit, best-effort restoration pass is required afterward — see the
-    // try/finally below — to avoid permanently stranding messages if the scan is cancelled or fails.
     public async Task<int> ResubmitDeadLetterMessagesAsync(string connectionString, string queueName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default)
     {
         if (sequenceNumbers.Count == 0)
@@ -306,7 +322,34 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.PeekLock };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
         await using var sender = client.CreateSender(queueName);
+        return await ResubmitDeadLetterCoreAsync(receiver, sender, sequenceNumbers, ct);
+    }
 
+    public async Task<int> ResubmitSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default)
+    {
+        if (sequenceNumbers.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.PeekLock };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+        // Resubmitting publishes back onto the TOPIC, not the subscription -- see the interface's
+        // doc comment on ResubmitSubscriptionDeadLetterMessagesAsync for why.
+        await using var sender = client.CreateSender(topicName);
+        return await ResubmitDeadLetterCoreAsync(receiver, sender, sequenceNumbers, ct);
+    }
+
+    // Design tradeoff: non-matching messages are deferred (not abandoned) during the scan so the
+    // scan can make forward progress through the dead-letter sub-queue instead of looping on the
+    // same head-of-queue messages; the cost is that deferral is durable (it does NOT self-heal like
+    // an expiring PeekLock does), so an explicit, best-effort restoration pass is required afterward
+    // -- see the try/finally below -- to avoid permanently stranding messages if the scan is
+    // cancelled or fails. Shared by both the queue and subscription resubmit methods above, which
+    // differ only in how `receiver`/`sender` were constructed.
+    private static async Task<int> ResubmitDeadLetterCoreAsync(ServiceBusReceiver receiver, ServiceBusSender sender, IReadOnlyList<long> sequenceNumbers, CancellationToken ct)
+    {
         // Wall-clock ceiling on the scan below. maxAttempts already bounds the iteration count, but
         // not how long each iteration can take, so a degraded namespace could still keep the scan
         // running for many minutes. On expiry the receive/send/defer call throws
@@ -448,12 +491,22 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
+        return await PurgeDeadLetterCoreAsync(receiver, ct);
+    }
 
-        // Wall-clock ceiling on the drain loop below, which is otherwise bounded only by how many
-        // messages the dead-letter queue holds and how fast the broker gives them up. Live testing
-        // against an unreachable namespace saw this loop never return. On expiry ReceiveMessagesAsync
-        // throws OperationCanceledException, which propagates to the calling handler's existing
-        // catch (and is audited there as a failed purge) rather than through a second error path.
+    public async Task<int> PurgeSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default)
+    {
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+        return await PurgeDeadLetterCoreAsync(receiver, ct);
+    }
+
+    // Wall-clock ceiling on the drain loop below. On expiry ReceiveMessagesAsync throws
+    // OperationCanceledException, which propagates to the calling handler's existing catch. Shared
+    // by both purge methods above.
+    private static async Task<int> PurgeDeadLetterCoreAsync(ServiceBusReceiver receiver, CancellationToken ct)
+    {
         using var purgeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         purgeCts.CancelAfter(BulkOperationTimeout);
 
