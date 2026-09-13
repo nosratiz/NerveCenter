@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -18,7 +19,7 @@ public class PurgeDeadLetterMessagesCommandHandlerTests
         operations.PurgeDeadLetterMessagesAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>()).Returns(214);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new PurgeDeadLetterMessagesCommandHandler(operations, connections, audit)
+        var result = await new PurgeDeadLetterMessagesCommandHandler(operations, connections, audit, NullLogger<PurgeDeadLetterMessagesCommandHandler>.Instance)
             .HandleAsync(new PurgeDeadLetterMessagesCommand(connectionId, "sb-dev", "orders-inbound"));
 
         result.IsSuccess.Should().BeTrue();

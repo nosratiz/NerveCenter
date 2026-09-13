@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -18,7 +19,7 @@ public class ListQueuesQueryHandlerTests
         var queues = new[] { new QueueSummary("orders-inbound", 12, 0, 0, 1024) };
         operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>()).Returns(queues);
 
-        var result = await new ListQueuesQueryHandler(operations, connections).HandleAsync(connectionId);
+        var result = await new ListQueuesQueryHandler(operations, connections, NullLogger<ListQueuesQueryHandler>.Instance).HandleAsync(connectionId);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().BeEquivalentTo(queues);
@@ -30,7 +31,7 @@ public class ListQueuesQueryHandlerTests
         var connections = Substitute.For<IConnectionProvider>();
         connections.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((string?)null);
 
-        var result = await new ListQueuesQueryHandler(Substitute.For<IServiceBusOperations>(), connections).HandleAsync(Guid.NewGuid());
+        var result = await new ListQueuesQueryHandler(Substitute.For<IServiceBusOperations>(), connections, NullLogger<ListQueuesQueryHandler>.Instance).HandleAsync(Guid.NewGuid());
 
         result.IsSuccess.Should().BeFalse();
     }
@@ -45,7 +46,7 @@ public class ListQueuesQueryHandlerTests
         operations.ListQueuesAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<QueueSummary>>(new InvalidOperationException("namespace unreachable")));
 
-        var result = await new ListQueuesQueryHandler(operations, connections).HandleAsync(connectionId);
+        var result = await new ListQueuesQueryHandler(operations, connections, NullLogger<ListQueuesQueryHandler>.Instance).HandleAsync(connectionId);
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Contain("namespace unreachable");

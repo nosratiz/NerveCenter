@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Sdk;
 
@@ -5,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Queues;
 
 public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string QueueName);
 
-public sealed class DeleteQueueCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class DeleteQueueCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(DeleteQueueCommand cmd, CancellationToken ct = default)
     {
@@ -22,8 +23,9 @@ public sealed class DeleteQueueCommandHandler(IServiceBusOperations operations, 
         }
         catch (Exception ex)
         {
-            await audit.RecordAsync("queue.delete", target, ActionRisk.Destructive, succeeded: false, detail: ex.Message, ct: ct);
-            return PluginResult.Fail(ex.Message);
+            logger.LogError(ex, "Deleting queue {Target} failed.", target);
+            await audit.RecordAsync("queue.delete", target, ActionRisk.Destructive, succeeded: false, detail: FriendlyError.From(ex), ct: ct);
+            return PluginResult.Fail(ex);
         }
 
         await audit.RecordAsync("queue.delete", target, ActionRisk.Destructive, succeeded: true, ct: ct);

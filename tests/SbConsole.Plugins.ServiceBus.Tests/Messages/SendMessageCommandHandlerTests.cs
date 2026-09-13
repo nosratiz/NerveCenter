@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -17,7 +18,7 @@ public class SendMessageCommandHandlerTests
         var operations = Substitute.For<IServiceBusOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new SendMessageCommandHandler(operations, connections, audit)
+        var result = await new SendMessageCommandHandler(operations, connections, audit, NullLogger<SendMessageCommandHandler>.Instance)
             .HandleAsync(new SendMessageCommand(connectionId, "sb-dev", "orders-inbound", """{"a":1}""", "application/json", null, null));
 
         result.IsSuccess.Should().BeTrue();

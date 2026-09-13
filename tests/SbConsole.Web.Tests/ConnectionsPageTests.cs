@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
 using NSubstitute;
@@ -45,6 +46,7 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<DeleteConnectionCommandHandler>();
         Services.AddSingleton<UpdateConnectionCommandHandler>();
         Services.AddSingleton<ListConnectionsQueryHandler>();
+        Services.AddLogging();
         Services.AddSingleton<TestConnectionCommandHandler>();
         // Connections.razor injects IConfirmationService on every render; give every test a
         // default (tests that care about the confirm/cancel outcome override this before Render()).
@@ -136,6 +138,7 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
     public async Task Test_button_runs_the_test_and_updates_the_status_to_ok()
     {
         Services.AddSingleton<IEnumerable<IPlugin>>([new FakeServiceBusPlugin(new ConnectionTestResult(true))]);
+        Services.AddLogging();
         Services.AddSingleton<TestConnectionCommandHandler>();
         await Services.GetRequiredService<CreateConnectionCommandHandler>()
             .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
@@ -153,6 +156,7 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
     public async Task Test_button_shows_the_error_message_on_failure()
     {
         Services.AddSingleton<IEnumerable<IPlugin>>([new FakeServiceBusPlugin(new ConnectionTestResult(false, "Unauthorized (401)"))]);
+        Services.AddLogging();
         Services.AddSingleton<TestConnectionCommandHandler>();
         await Services.GetRequiredService<CreateConnectionCommandHandler>()
             .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));

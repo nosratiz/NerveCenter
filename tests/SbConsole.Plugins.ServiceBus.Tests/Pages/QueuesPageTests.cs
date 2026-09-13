@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -38,6 +39,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_operations);
         Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddSingleton(Substitute.For<IConfirmationService>());
+        Services.AddLogging(); // handlers take an ILogger<T> so they can log the full exception behind a truncated UI message
         Services.AddSingleton<ListQueuesQueryHandler>();
         Services.AddSingleton<CreateQueueCommandHandler>();
         Services.AddSingleton<DeleteQueueCommandHandler>();

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -18,7 +19,7 @@ public class PeekMessagesQueryHandlerTests
         var messages = new[] { new PeekedMessage(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>(), "MaxDeliveryCountExceeded", "boom") };
         operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>()).Returns(messages);
 
-        var result = await new PeekMessagesQueryHandler(operations, connections)
+        var result = await new PeekMessagesQueryHandler(operations, connections, NullLogger<PeekMessagesQueryHandler>.Instance)
             .HandleAsync(connectionId, "orders-inbound", fromDeadLetter: true);
 
         result.IsSuccess.Should().BeTrue();
@@ -31,7 +32,7 @@ public class PeekMessagesQueryHandlerTests
         var connections = Substitute.For<IConnectionProvider>();
         connections.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((string?)null);
 
-        var result = await new PeekMessagesQueryHandler(Substitute.For<IServiceBusOperations>(), connections)
+        var result = await new PeekMessagesQueryHandler(Substitute.For<IServiceBusOperations>(), connections, NullLogger<PeekMessagesQueryHandler>.Instance)
             .HandleAsync(Guid.NewGuid(), "orders-inbound", fromDeadLetter: false);
 
         result.IsSuccess.Should().BeFalse();
@@ -47,7 +48,7 @@ public class PeekMessagesQueryHandlerTests
         operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", false, 32, null, Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<PeekedMessage>>(new InvalidOperationException("namespace unreachable")));
 
-        var result = await new PeekMessagesQueryHandler(operations, connections)
+        var result = await new PeekMessagesQueryHandler(operations, connections, NullLogger<PeekMessagesQueryHandler>.Instance)
             .HandleAsync(connectionId, "orders-inbound", fromDeadLetter: false);
 
         result.IsSuccess.Should().BeFalse();

@@ -1,9 +1,10 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Queues;
 
-public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections)
+public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger)
 {
     public async Task<PluginResult<IReadOnlyList<QueueSummary>>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {
@@ -20,7 +21,8 @@ public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, ICo
         }
         catch (Exception ex)
         {
-            return PluginResult<IReadOnlyList<QueueSummary>>.Fail(ex.Message);
+            logger.LogError(ex, "Listing queues for connection {ConnectionId} failed.", connectionId);
+            return PluginResult<IReadOnlyList<QueueSummary>>.Fail(ex);
         }
     }
 }

@@ -25,7 +25,13 @@ else
         }
     </MudSelect>
 
-    <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate" Class="my-4">+ Create queue</MudButton>
+    <div class="d-flex align-center gap-2 my-4">
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate">+ Create queue</MudButton>
+        @if (_loading)
+        {
+            <MudProgressCircular Class="queues-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
 
     <MudTable Items="_queues">
         <HeaderContent>
@@ -46,7 +52,11 @@ else
                 <MudButton Href="@PeekUrl(context.Name)">Peek</MudButton>
                 <MudButton Class="dead-letter-action" Href="@PeekUrl(context.Name, deadLetter: true, deadLetterCount: context.DeadLetterMessageCount)">Dead-letter</MudButton>
                 <MudButton Class="send-message-action" OnClick="@(() => OpenSend(context.Name))">Send</MudButton>
-                <MudButton Class="delete-queue" Color="Color.Error" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
+                <MudButton Class="delete-queue" Color="Color.Error" Disabled="@(_deletingQueue == context.Name)" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
+                @if (_deletingQueue == context.Name)
+                {
+                    <MudProgressCircular Class="delete-queue-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                }
             </MudTd>
         </RowTemplate>
     </MudTable>
@@ -56,6 +66,17 @@ else
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private IReadOnlyList<QueueSummary> _queues = [];
     private Guid _selectedConnectionId;
+
+    // Busy-state convention for this plugin's pages (the host had none to match -- Connections.razor
+    // grew the same shape in the same change). Every button that awaits an Azure call flips a flag
+    // before the await and clears it in a `finally`, binds that flag to its own Disabled, and shows
+    // a small inline MudProgressCircular beside itself. The flag is scoped to the thing being acted
+    // on (a queue name here, a connection id on Connections.razor) so an in-flight call never
+    // disables unrelated rows. Timeouts (AzureServiceBusOperations' tightened RetryOptions and the
+    // 2-minute cap on the looping operations) are what actually bound the wait -- this is only so a
+    // bounded wait doesn't look like a frozen page.
+    private bool _loading;
+    private string? _deletingQueue;
 
     protected override async Task OnInitializedAsync()
     {
@@ -75,15 +96,23 @@ else
 
     private async Task LoadQueuesAsync()
     {
-        var result = await ListHandler.HandleAsync(_selectedConnectionId);
-        if (result.IsSuccess)
+        _loading = true;
+        try
         {
-            _queues = result.Value!;
+            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            if (result.IsSuccess)
+            {
+                _queues = result.Value!;
+            }
+            else
+            {
+                _queues = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
         }
-        else
+        finally
         {
-            _queues = [];
-            Snackbar.Add(result.Error!, Severity.Error);
+            _loading = false;
         }
     }
 
@@ -158,10 +187,18 @@ else
             return;
         }
 
-        var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
-        if (!result.IsSuccess)
+        _deletingQueue = queueName;
+        try
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingQueue = null;
         }
 
         await LoadQueuesAsync();

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Sdk;
 
@@ -5,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Messages;
 
 public sealed record ResubmitDeadLetterMessagesCommand(Guid ConnectionId, string ConnectionName, string QueueName, IReadOnlyList<long> SequenceNumbers);
 
-public sealed class ResubmitDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class ResubmitDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ResubmitDeadLetterMessagesCommandHandler> logger)
 {
     public async Task<PluginResult<int>> HandleAsync(ResubmitDeadLetterMessagesCommand cmd, CancellationToken ct = default)
     {
@@ -23,8 +24,9 @@ public sealed class ResubmitDeadLetterMessagesCommandHandler(IServiceBusOperatio
         }
         catch (Exception ex)
         {
-            await audit.RecordAsync("message.resubmit", target, ActionRisk.Mutating, succeeded: false, detail: ex.Message, ct: ct);
-            return PluginResult<int>.Fail(ex.Message);
+            logger.LogError(ex, "Resubmitting {Count} dead-letter message(s) from {Target} failed.", cmd.SequenceNumbers.Count, target);
+            await audit.RecordAsync("message.resubmit", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyError.From(ex), ct: ct);
+            return PluginResult<int>.Fail(ex);
         }
 
         await audit.RecordAsync("message.resubmit", target, ActionRisk.Mutating, succeeded: true, detail: $"{resubmitted} of {cmd.SequenceNumbers.Count} resubmitted", ct: ct);

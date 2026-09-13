@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -17,7 +18,7 @@ public class DeleteQueueCommandHandlerTests
         var operations = Substitute.For<IServiceBusOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteQueueCommandHandler(operations, connections, audit)
+        var result = await new DeleteQueueCommandHandler(operations, connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
             .HandleAsync(new DeleteQueueCommand(connectionId, "sb-dev", false, "orders-inbound"));
 
         result.IsSuccess.Should().BeTrue();

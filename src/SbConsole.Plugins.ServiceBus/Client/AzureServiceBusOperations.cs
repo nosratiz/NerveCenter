@@ -1,3 +1,4 @@
+using Azure;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using SbConsole.Sdk;
@@ -11,11 +12,71 @@ namespace SbConsole.Plugins.ServiceBus.Client;
 /// </summary>
 public sealed class AzureServiceBusOperations : IServiceBusOperations
 {
+    // docs/design.md §7 wants "a clear 'namespace unreachable' state instead of indefinite
+    // spinners". The SDK's defaults do not deliver that: Azure.Core's RetryOptions defaults to
+    // MaxRetries 3 with a 100s NetworkTimeout, and ServiceBusRetryOptions to MaxRetries 3 with a
+    // 60s TryTimeout, so one operation against an unreachable namespace can sit for minutes.
+    // These values bound a single attempt at 10s and allow 2 retries — worst case roughly
+    // 3 x 10s plus ~2.4s of exponential backoff, i.e. well under a minute before the UI gets an
+    // answer — while still absorbing the ordinary transient blip the design relies on retry for.
+    internal static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(10);
+    internal const int MaxRetries = 2;
+    internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(5);
+
+    // Hard wall-clock cap for the two operations that loop over an unbounded number of broker
+    // round-trips (purge, and resubmit's scan). Tightened retry options bound each individual
+    // attempt but not the number of attempts a loop makes, so these get their own ceiling.
+    internal static readonly TimeSpan BulkOperationTimeout = TimeSpan.FromMinutes(2);
+
+    // ServiceBusAdministrationClient is HTTP-based: it derives its options from Azure.Core's
+    // ClientOptions, whose read-only Retry property is an Azure.Core RetryOptions (NetworkTimeout
+    // per attempt) — not the AMQP client's ServiceBusRetryOptions (TryTimeout).
+    internal static ServiceBusAdministrationClientOptions CreateAdministrationClientOptions()
+    {
+        var options = new ServiceBusAdministrationClientOptions();
+        options.Retry.MaxRetries = MaxRetries;
+        options.Retry.NetworkTimeout = AttemptTimeout;
+        options.Retry.MaxDelay = MaxRetryDelay;
+        return options;
+    }
+
+    internal static ServiceBusClientOptions CreateClientOptions() => new()
+    {
+        RetryOptions = new ServiceBusRetryOptions
+        {
+            MaxRetries = MaxRetries,
+            TryTimeout = AttemptTimeout,
+            MaxDelay = MaxRetryDelay,
+        },
+    };
+
     public async Task<ConnectionTestResult> TestConnectionAsync(string connectionString, CancellationToken ct = default)
     {
+        ServiceBusAdministrationClient adminClient;
         try
         {
-            var adminClient = new ServiceBusAdministrationClient(connectionString);
+            adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            // Construction is pure client-side parsing — no network call — so anything thrown here
+            // is a bad connection string, and catching it separately keeps it unambiguous. Verified
+            // via decompilation of Azure.Messaging.ServiceBus 7.20.2:
+            //   * ServiceBusConnectionStringProperties.Parse throws System.FormatException for a
+            //     malformed pair or a non-"sb" / unparseable endpoint, and System.UriFormatException
+            //     (which derives from FormatException — this is the live-observed "Invalid URI: The
+            //     hostname could not be parsed.") from its `new UriBuilder(value)` fallback.
+            //   * The ServiceBusAdministrationClient(string, options) ctor itself throws
+            //     System.ArgumentException ("MissingConnectionInformation") when Endpoint host,
+            //     SharedAccessKeyName or SharedAccessKey is absent, and ArgumentException /
+            //     ArgumentNullException from Argument.AssertNotNullOrEmpty for null-or-empty input.
+            // Deliberately scoped to construction: the SDK also rewraps an HTTP 400 *response* as
+            // ArgumentException, which is a server verdict, not a malformed string.
+            return new ConnectionTestResult(false, "Invalid connection string format");
+        }
+
+        try
+        {
             await foreach (var _ in adminClient.GetQueuesRuntimePropertiesAsync(ct).WithCancellation(ct))
             {
                 break; // one item (or a confirmed-empty-but-authenticated page) is enough
@@ -25,8 +86,8 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
         catch (UnauthorizedAccessException)
         {
-            // ServiceBusAdministrationClient never throws RequestFailedException directly — its
-            // HttpRequestAndResponse.ThrowIfRequestFailed rewraps a 401 response as
+            // ServiceBusAdministrationClient never throws RequestFailedException for a *response* —
+            // its HttpRequestAndResponse.ThrowIfRequestFailed rewraps a 401 response as
             // UnauthorizedAccessException (verified via decompilation of 7.20.2).
             return new ConnectionTestResult(false, "Unauthorized (401)");
         }
@@ -38,19 +99,38 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
             // through to the generic catch below, which still reports a readable message.
             return new ConnectionTestResult(false, "Forbidden (403)");
         }
+        catch (RequestFailedException)
+        {
+            // No HTTP response ever came back. Verified via decompilation of Azure.Core 1.60.0:
+            // HttpClientTransport.ProcessAsync catches System.Net.Http.HttpRequestException (DNS
+            // failure, refused connection, TLS failure) and rethrows it as
+            // Azure.RequestFailedException. ThrowIfRequestFailed above converts every *response*
+            // into some other type, so a RequestFailedException escaping the admin client means
+            // the namespace was never reached. Azure.Core's RetryPolicy rethrows the single
+            // captured exception unchanged when only one attempt failed.
+            return new ConnectionTestResult(false, "Namespace unreachable");
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.Count > 0 && ex.InnerExceptions.All(inner => inner is RequestFailedException))
+        {
+            // Same failure, retried. Azure.Core 1.60.0's RetryPolicy throws
+            // `new AggregateException($"Retry failed after {n} tries. Retry settings can be
+            // adjusted in ClientOptions.Retry...", exceptions)` once more than one attempt threw —
+            // this is the 543-character message live testing saw against a real unreachable
+            // namespace, with the same DNS error repeated once per attempt.
+            return new ConnectionTestResult(false, "Namespace unreachable");
+        }
         catch (Exception ex)
         {
-            // Covers malformed connection strings (thrown synchronously at client construction,
-            // before any network call) and every other reachability/auth failure. The SDK's exact
-            // exception type for a bad connection string isn't load-bearing here — every failure
-            // path becomes a readable ConnectionTestResult, never an unhandled throw.
-            return new ConnectionTestResult(false, ex.Message);
+            // Last resort for genuinely unanticipated failures. Still never returns raw SDK text:
+            // FriendlyError collapses and caps it so it can't flood a snackbar or the persisted
+            // Connection.LastTestError column.
+            return new ConnectionTestResult(false, FriendlyError.From(ex));
         }
     }
 
     public async Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string connectionString, CancellationToken ct = default)
     {
-        var adminClient = new ServiceBusAdministrationClient(connectionString);
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
         var queues = new List<QueueSummary>();
         await foreach (var props in adminClient.GetQueuesRuntimePropertiesAsync(ct).WithCancellation(ct))
         {
@@ -62,7 +142,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
     public async Task CreateQueueAsync(string connectionString, CreateQueueRequest request, CancellationToken ct = default)
     {
-        var adminClient = new ServiceBusAdministrationClient(connectionString);
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
         var options = new CreateQueueOptions(request.Name) { MaxDeliveryCount = request.MaxDeliveryCount };
         if (request.LockDuration is { } lockDuration)
         {
@@ -79,7 +159,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
     public async Task DeleteQueueAsync(string connectionString, string queueName, CancellationToken ct = default)
     {
-        var adminClient = new ServiceBusAdministrationClient(connectionString);
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
         await adminClient.DeleteQueueAsync(queueName, ct);
     }
 
@@ -87,7 +167,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         string connectionString, string queueName, bool fromDeadLetter, int maxMessages,
         long? fromSequenceNumber = null, CancellationToken ct = default)
     {
-        await using var client = new ServiceBusClient(connectionString);
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = fromDeadLetter ? SubQueue.DeadLetter : SubQueue.None };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
 
@@ -108,7 +188,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
     public async Task SendMessageAsync(string connectionString, string queueName, SendMessageRequest request, CancellationToken ct = default)
     {
-        await using var client = new ServiceBusClient(connectionString);
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         await using var sender = client.CreateSender(queueName);
 
         var message = new ServiceBusMessage(request.Body) { ContentType = request.ContentType };
@@ -142,10 +222,19 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
             return 0;
         }
 
-        await using var client = new ServiceBusClient(connectionString);
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.PeekLock };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
         await using var sender = client.CreateSender(queueName);
+
+        // Wall-clock ceiling on the scan below. maxAttempts already bounds the iteration count, but
+        // not how long each iteration can take, so a degraded namespace could still keep the scan
+        // running for many minutes. On expiry the receive/send/defer call throws
+        // OperationCanceledException, which propagates to the calling handler's existing catch —
+        // no second error path — after the `finally` has restored every deferred message.
+        using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        scanCts.CancelAfter(BulkOperationTimeout);
+        var scanToken = scanCts.Token;
 
         var remaining = new HashSet<long>(sequenceNumbers);
         var deferredSequenceNumbers = new List<long>();
@@ -169,7 +258,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
             var maxAttempts = sequenceNumbers.Count * 4 + 20;
             for (var attempt = 0; attempt < maxAttempts && remaining.Count > 0; attempt++)
             {
-                var batch = await receiver.ReceiveMessagesAsync(maxMessages: 32, maxWaitTime: TimeSpan.FromSeconds(5), ct);
+                var batch = await receiver.ReceiveMessagesAsync(maxMessages: 32, maxWaitTime: TimeSpan.FromSeconds(5), scanToken);
                 if (batch.Count == 0)
                 {
                     break; // dead-letter queue exhausted before every requested message was found
@@ -179,8 +268,8 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                 {
                     if (remaining.Remove(message.SequenceNumber))
                     {
-                        await sender.SendMessageAsync(new ServiceBusMessage(message), ct);
-                        await receiver.CompleteMessageAsync(message, ct);
+                        await sender.SendMessageAsync(new ServiceBusMessage(message), scanToken);
+                        await receiver.CompleteMessageAsync(message, scanToken);
                         resubmitted++;
                     }
                     else
@@ -192,7 +281,7 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                         // worst one harmless MessageNotFound if the defer never actually applied,
                         // versus a permanently stranded message if we recorded after and never got there.
                         deferredSequenceNumbers.Add(message.SequenceNumber);
-                        await receiver.DeferMessageAsync(message, cancellationToken: ct);
+                        await receiver.DeferMessageAsync(message, cancellationToken: scanToken);
                     }
                 }
             }
@@ -276,14 +365,22 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
     public async Task<int> PurgeDeadLetterMessagesAsync(string connectionString, string queueName, CancellationToken ct = default)
     {
-        await using var client = new ServiceBusClient(connectionString);
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
+
+        // Wall-clock ceiling on the drain loop below, which is otherwise bounded only by how many
+        // messages the dead-letter queue holds and how fast the broker gives them up. Live testing
+        // against an unreachable namespace saw this loop never return. On expiry ReceiveMessagesAsync
+        // throws OperationCanceledException, which propagates to the calling handler's existing
+        // catch (and is audited there as a failed purge) rather than through a second error path.
+        using var purgeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        purgeCts.CancelAfter(BulkOperationTimeout);
 
         var purged = 0;
         while (true)
         {
-            var batch = await receiver.ReceiveMessagesAsync(maxMessages: 100, maxWaitTime: TimeSpan.FromSeconds(3), ct);
+            var batch = await receiver.ReceiveMessagesAsync(maxMessages: 100, maxWaitTime: TimeSpan.FromSeconds(3), purgeCts.Token);
             if (batch.Count == 0)
             {
                 break;

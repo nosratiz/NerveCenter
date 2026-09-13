@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using SbConsole.Core.Audit;
 using SbConsole.Core.Data;
 using SbConsole.Core.Data.Entities;
@@ -15,7 +16,8 @@ public sealed class TestConnectionCommandHandler(
     ISecretProtector protector,
     IEnumerable<IPlugin> plugins,
     IAuditWriter audit,
-    TimeProvider clock)
+    TimeProvider clock,
+    ILogger<TestConnectionCommandHandler> logger)
 {
     public async Task<Result<ConnectionTestResult>> HandleAsync(TestConnectionCommand cmd, CancellationToken ct = default)
     {
@@ -35,9 +37,22 @@ public sealed class TestConnectionCommandHandler(
         var secret = protector.Unprotect(connection.SecretCiphertext);
         var testResult = await plugin.TestConnectionAsync(secret, ct);
 
+        // A plugin is free to hand back whatever its SDK produced. LastTestError is a persisted
+        // column rendered in the Connections page's Status cell and Detail is an audit column, so
+        // both are capped here rather than trusting every plugin to have done it — the untruncated
+        // text is logged first so nothing is actually lost.
+        if (!testResult.Success && testResult.ErrorMessage is { Length: > FriendlyError.MaxLength })
+        {
+            logger.LogWarning(
+                "Connection test for {ConnectionName} failed; full error: {Error}",
+                connection.Name, testResult.ErrorMessage);
+        }
+
+        var errorMessage = FriendlyError.Truncate(testResult.ErrorMessage);
+
         connection.LastTestSucceeded = testResult.Success;
         connection.LastTestedAt = clock.GetUtcNow();
-        connection.LastTestError = testResult.ErrorMessage;
+        connection.LastTestError = errorMessage;
         await db.SaveChangesAsync(ct);
 
         await audit.WriteAsync(new AuditEntry
@@ -48,9 +63,10 @@ public sealed class TestConnectionCommandHandler(
             Target = connection.Name,
             Risk = ActionRisk.Safe,
             Succeeded = testResult.Success,
-            Detail = testResult.ErrorMessage,
+            Detail = errorMessage,
         }, ct);
 
-        return Result<ConnectionTestResult>.Ok(testResult);
+        // The caller (Connections.razor) renders the same text, so return the capped version too.
+        return Result<ConnectionTestResult>.Ok(testResult with { ErrorMessage = errorMessage });
     }
 }

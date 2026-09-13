@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -17,7 +18,7 @@ public class CreateQueueCommandHandlerTests
         var operations = Substitute.For<IServiceBusOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+        var result = await new CreateQueueCommandHandler(operations, connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(connectionId, "sb-dev", "orders-inbound", 10));
 
         result.IsSuccess.Should().BeTrue();
@@ -36,7 +37,7 @@ public class CreateQueueCommandHandlerTests
             .Returns(Task.FromException(new InvalidOperationException("already exists")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+        var result = await new CreateQueueCommandHandler(operations, connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(connectionId, "sb-dev", "orders-inbound", 10));
 
         result.IsSuccess.Should().BeFalse();

@@ -2,6 +2,7 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
@@ -36,6 +37,7 @@ public class SendMessageDialogTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
         Services.AddSingleton(Substitute.For<IAuditScope>());
+        Services.AddLogging(); // handlers take an ILogger<T> so they can log the full exception behind a truncated UI message
         Services.AddSingleton<SendMessageCommandHandler>();
 
         _dialogInstance = (IMudDialogInstance)Substitute.For(

@@ -2,6 +2,8 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
@@ -33,10 +35,11 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         SeedConnection(isProd: false);
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
+        Services.AddLogging(); // handlers take an ILogger<T> so they can log the full exception behind a truncated UI message
         Services.AddSingleton<PeekMessagesQueryHandler>();
         Services.AddSingleton(_confirmation);
-        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.ResubmitDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
-        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.PurgeDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>()));
+        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.ResubmitDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>(), NullLogger<SbConsole.Plugins.ServiceBus.Messages.ResubmitDeadLetterMessagesCommandHandler>.Instance));
+        Services.AddSingleton(new SbConsole.Plugins.ServiceBus.Messages.PurgeDeadLetterMessagesCommandHandler(_operations, _connections, Substitute.For<IAuditScope>(), NullLogger<SbConsole.Plugins.ServiceBus.Messages.PurgeDeadLetterMessagesCommandHandler>.Instance));
     }
 
     // Peek.razor no longer trusts ConnectionName/IsProd off the URL (that made the prod-purge
@@ -289,5 +292,67 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
 
         await _confirmation.Received(1).ConfirmAsync("Purge", "orders-inbound", true, Arg.Any<int?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Purge_is_disabled_until_the_real_connection_record_has_resolved()
+    {
+        // The residual fail-open window left by the test above: the connection lookup in
+        // OnParametersSetAsync is async, and until it resolves `_connection` is null, so
+        // PurgeAsync's `_connection?.IsProd ?? false` would gate a prod purge behind a plain
+        // two-button confirm. Holding the provider call open makes that window observable.
+        var pendingLookup = new TaskCompletionSource<IReadOnlyList<ConnectionInfo>>();
+        _connections.ListAsync("azure-servicebus", Arg.Any<CancellationToken>()).Returns(pendingLookup.Task);
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find("button.purge-queue").HasAttribute("disabled").Should().BeTrue();
+
+        pendingLookup.SetResult(new List<ConnectionInfo> { new(_connectionId, "sb-conn", "azure-servicebus", ["prod"]) });
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find("button.purge-queue").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Dead_letter_actions_are_disabled_and_show_a_spinner_while_a_purge_is_in_flight()
+    {
+        // Busy-state coverage for this page (see the convention note on Queues.razor). Purge and
+        // resubmit share one flag here because they target the same sub-queue.
+        _operations.PeekMessagesAsync("Endpoint=sb://real", "orders-inbound", true, 32, null, Arg.Any<CancellationToken>())
+            .Returns(new List<PeekedMessage> { new(1, "{}", "application/json", DateTimeOffset.UtcNow, 10, new Dictionary<string, string>()) });
+        _confirmation.ConfirmAsync("Purge", "orders-inbound", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        var pendingPurge = new TaskCompletionSource<int>();
+        _operations.PurgeDeadLetterMessagesAsync("Endpoint=sb://real", "orders-inbound", Arg.Any<CancellationToken>())
+            .Returns(pendingPurge.Task);
+
+        NavigateToPeekQuery(_connectionId, true);
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Peek>(parameters => parameters
+            .Add(p => p.QueueName, "orders-inbound"));
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.purge-queue").HasAttribute("disabled").Should().BeFalse();
+
+        cut.Find("button.purge-queue").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find("button.purge-queue").HasAttribute("disabled").Should().BeTrue();
+        cut.Find("button.resubmit-selected").HasAttribute("disabled").Should().BeTrue();
+        cut.FindAll(".peek-busy").Should().NotBeEmpty();
+
+        pendingPurge.SetResult(3);
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find("button.purge-queue").HasAttribute("disabled").Should().BeFalse();
+        cut.FindAll(".peek-busy").Should().BeEmpty();
     }
 }

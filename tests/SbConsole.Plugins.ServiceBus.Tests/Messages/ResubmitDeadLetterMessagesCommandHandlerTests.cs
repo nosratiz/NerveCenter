@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -19,7 +20,7 @@ public class ResubmitDeadLetterMessagesCommandHandlerTests
             .Returns(3);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new ResubmitDeadLetterMessagesCommandHandler(operations, connections, audit)
+        var result = await new ResubmitDeadLetterMessagesCommandHandler(operations, connections, audit, NullLogger<ResubmitDeadLetterMessagesCommandHandler>.Instance)
             .HandleAsync(new ResubmitDeadLetterMessagesCommand(connectionId, "sb-dev", "orders-inbound", [1, 2, 3]));
 
         result.IsSuccess.Should().BeTrue();

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using SbConsole.Core.Audit;
@@ -51,7 +52,7 @@ public class TestConnectionCommandHandlerTests
         var audit = Substitute.For<IAuditWriter>();
         var id = await SeedAsync(testDb, audit, secret: "Endpoint=sb://real");
         var plugin = new FakePlugin("azure-servicebus", new ConnectionTestResult(true), expectedSecret: "Endpoint=sb://real");
-        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider());
+        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance);
 
         var result = await handler.HandleAsync(new TestConnectionCommand(id, "admin"));
 
@@ -74,7 +75,7 @@ public class TestConnectionCommandHandlerTests
         var audit = Substitute.For<IAuditWriter>();
         var id = await SeedAsync(testDb, audit);
         var plugin = new FakePlugin("azure-servicebus", new ConnectionTestResult(false, "Unauthorized (401)"));
-        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider());
+        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance);
 
         var result = await handler.HandleAsync(new TestConnectionCommand(id, "admin"));
 
@@ -94,7 +95,7 @@ public class TestConnectionCommandHandlerTests
     {
         using var testDb = new TestDb();
 
-        var result = await new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [], Substitute.For<IAuditWriter>(), new FakeTimeProvider())
+        var result = await new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [], Substitute.For<IAuditWriter>(), new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance)
             .HandleAsync(new TestConnectionCommand(Guid.NewGuid(), "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.NotFound);
@@ -107,9 +108,53 @@ public class TestConnectionCommandHandlerTests
         var audit = Substitute.For<IAuditWriter>();
         var id = await SeedAsync(testDb, audit, kind: "kafka");
 
-        var result = await new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [], audit, new FakeTimeProvider())
+        var result = await new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [], audit, new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance)
             .HandleAsync(new TestConnectionCommand(id, "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.NotFound);
+    }
+
+    [Fact]
+    public async Task A_plugins_oversized_error_is_capped_before_it_is_persisted_or_audited()
+    {
+        // LastTestError is a persisted column rendered straight into the Connections page's Status
+        // cell, and Detail is an audit column. A plugin is free to hand back whatever its SDK
+        // produced -- live testing produced a 2,608-character message that wrapped five lines and
+        // squeezed every other column -- so this handler caps it rather than trusting each plugin.
+        using var testDb = new TestDb();
+        var audit = Substitute.For<IAuditWriter>();
+        var id = await SeedAsync(testDb, audit);
+        var oversized = new string('x', 3_000);
+        var plugin = new FakePlugin("azure-servicebus", new ConnectionTestResult(false, oversized));
+        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance);
+
+        var result = await handler.HandleAsync(new TestConnectionCommand(id, "admin"));
+
+        var capped = new string('x', FriendlyError.MaxLength) + FriendlyError.TruncationMarker;
+        result.Value!.ErrorMessage.Should().Be(capped);
+        await using var db = testDb.CreateDbContext();
+        var saved = await db.Connections.SingleAsync(c => c.Id == id);
+        saved.LastTestError.Should().Be(capped);
+        await audit.Received(1).WriteAsync(
+            Arg.Is<global::SbConsole.Core.Data.Entities.AuditEntry>(a => a.Action == "connection.test" && a.Detail == capped),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_short_error_is_persisted_verbatim()
+    {
+        // The cap must not disturb the distinct, fixed messages docs/design.md §6 asks the plugin
+        // for ("Unauthorized (401)", "Namespace unreachable", "Invalid connection string format").
+        using var testDb = new TestDb();
+        var audit = Substitute.For<IAuditWriter>();
+        var id = await SeedAsync(testDb, audit);
+        var plugin = new FakePlugin("azure-servicebus", new ConnectionTestResult(false, "Namespace unreachable"));
+        var handler = new TestConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), [plugin], audit, new FakeTimeProvider(), NullLogger<TestConnectionCommandHandler>.Instance);
+
+        var result = await handler.HandleAsync(new TestConnectionCommand(id, "admin"));
+
+        result.Value!.ErrorMessage.Should().Be("Namespace unreachable");
+        await using var db = testDb.CreateDbContext();
+        (await db.Connections.SingleAsync(c => c.Id == id)).LastTestError.Should().Be("Namespace unreachable");
     }
 }

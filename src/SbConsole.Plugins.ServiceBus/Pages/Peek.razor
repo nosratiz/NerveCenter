@@ -15,11 +15,21 @@
 
 @if (DeadLetter)
 {
-    <div class="d-flex gap-2 mb-2">
-        <MudButton Class="resubmit-selected" Disabled="@(_selectedSequenceNumbers.Count == 0)" OnClick="ResubmitSelectedAsync">
+    <div class="d-flex align-center gap-2 mb-2">
+        <MudButton Class="resubmit-selected" Disabled="@(_selectedSequenceNumbers.Count == 0 || _busy)" OnClick="ResubmitSelectedAsync">
             Resubmit selected (@_selectedSequenceNumbers.Count)
         </MudButton>
-        <MudButton Class="purge-queue" Color="Color.Error" OnClick="PurgeAsync">Purge queue</MudButton>
+        @* Disabled until the real connection record resolves: PurgeAsync reads _connection.IsProd to
+           decide between the typed-confirmation gate and a plain two-button confirm, and while
+           OnParametersSetAsync's lookup is still in flight `_connection?.IsProd ?? false` would
+           fail open and downgrade a prod purge. Also disabled while any dead-letter operation is
+           in flight -- unlike the per-row flags on Queues.razor, purge and resubmit act on the same
+           sub-queue, so letting one start while the other runs is a conflict, not independence. *@
+        <MudButton Class="purge-queue" Color="Color.Error" Disabled="@(_connection is null || _busy)" OnClick="PurgeAsync">Purge queue</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="peek-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+        }
     </div>
 }
 
@@ -75,6 +85,10 @@
     private IReadOnlyList<PeekedMessage> _messages = [];
     private PeekedMessage? _selected;
     private readonly HashSet<long> _selectedSequenceNumbers = [];
+
+    // See the busy-state note on Queues.razor. One flag for the whole dead-letter toolbar here,
+    // because peek/resubmit/purge all target the same sub-queue and must not overlap.
+    private bool _busy;
     private (Guid ConnectionId, string QueueName, bool DeadLetter)? _lastLoaded;
 
     // ConnectionName and IsProd used to be [SupplyParameterFromQuery], but that made the
@@ -106,18 +120,26 @@
 
     private async Task LoadAsync()
     {
-        var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
-        _selectedSequenceNumbers.Clear();
-        if (result.IsSuccess)
+        _busy = true;
+        try
         {
-            _messages = result.Value!;
-            _selected = _messages.FirstOrDefault();
+            var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
+            _selectedSequenceNumbers.Clear();
+            if (result.IsSuccess)
+            {
+                _messages = result.Value!;
+                _selected = _messages.FirstOrDefault();
+            }
+            else
+            {
+                _messages = [];
+                _selected = null;
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
         }
-        else
+        finally
         {
-            _messages = [];
-            _selected = null;
-            Snackbar.Add(result.Error!, Severity.Error);
+            _busy = false;
         }
     }
 
@@ -136,14 +158,22 @@
     private async Task ResubmitSelectedAsync()
     {
         var requested = _selectedSequenceNumbers.Count;
-        var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName, [.. _selectedSequenceNumbers]));
-        if (result.IsSuccess)
+        _busy = true;
+        try
         {
-            Snackbar.Add($"{result.Value} of {requested} resubmitted", Severity.Success);
+            var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName, [.. _selectedSequenceNumbers]));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add($"{result.Value} of {requested} resubmitted", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
         }
-        else
+        finally
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            _busy = false;
         }
 
         await LoadAsync();
@@ -163,10 +193,18 @@
             return;
         }
 
-        var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName));
-        if (!result.IsSuccess)
+        _busy = true;
+        try
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
         }
 
         await LoadAsync();

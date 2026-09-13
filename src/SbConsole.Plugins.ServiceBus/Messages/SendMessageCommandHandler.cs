@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Sdk;
 
@@ -7,7 +8,7 @@ public sealed record SendMessageCommand(
     Guid ConnectionId, string ConnectionName, string QueueName, string Body, string ContentType,
     IReadOnlyDictionary<string, string>? Properties, DateTimeOffset? ScheduledEnqueueTime);
 
-public sealed class SendMessageCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class SendMessageCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SendMessageCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(SendMessageCommand cmd, CancellationToken ct = default)
     {
@@ -25,8 +26,9 @@ public sealed class SendMessageCommandHandler(IServiceBusOperations operations, 
         }
         catch (Exception ex)
         {
-            await audit.RecordAsync("message.send", target, ActionRisk.Mutating, succeeded: false, detail: ex.Message, ct: ct);
-            return PluginResult.Fail(ex.Message);
+            logger.LogError(ex, "Sending a message to {Target} failed.", target);
+            await audit.RecordAsync("message.send", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyError.From(ex), ct: ct);
+            return PluginResult.Fail(ex);
         }
 
         await audit.RecordAsync("message.send", target, ActionRisk.Mutating, succeeded: true, ct: ct);

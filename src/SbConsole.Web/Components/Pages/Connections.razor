@@ -32,7 +32,11 @@
         </MudTd>
         <MudTd>@StatusText(context)</MudTd>
         <MudTd>
-            <MudButton Class="test-connection" OnClick="@(() => TestAsync(context))">Test</MudButton>
+            <MudButton Class="test-connection" Disabled="@(_testingConnectionId == context.Id)" OnClick="@(() => TestAsync(context))">Test</MudButton>
+            @if (_testingConnectionId == context.Id)
+            {
+                <MudProgressCircular Class="test-connection-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+            }
             <MudButton OnClick="@(() => OpenEdit(context))">Edit</MudButton>
             <MudButton Class="delete-connection" Color="Color.Error" OnClick="@(() => DeleteAsync(context))">Delete</MudButton>
         </MudTd>
@@ -43,6 +47,11 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
     private IReadOnlyList<ConnectionInfo> _connections = [];
+
+    // Busy state for the one button on this page that awaits a remote call. A connection test hits
+    // a real namespace and took ~9s live with no visual feedback at all. Scoped to the row that was
+    // clicked (not a page-level flag) so testing one connection doesn't disable the others.
+    private Guid? _testingConnectionId;
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
@@ -59,7 +68,16 @@
     private async Task TestAsync(ConnectionInfo connection)
     {
         var actor = await ActorResolver.ResolveAsync(AuthState);
-        await TestHandler.HandleAsync(new TestConnectionCommand(connection.Id, actor));
+        _testingConnectionId = connection.Id;
+        try
+        {
+            await TestHandler.HandleAsync(new TestConnectionCommand(connection.Id, actor));
+        }
+        finally
+        {
+            _testingConnectionId = null;
+        }
+
         await RefreshAsync();
     }
 

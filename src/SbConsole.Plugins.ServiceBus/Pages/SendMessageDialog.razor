@@ -9,7 +9,12 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Class="send-message" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_body)" OnClick="Send">Send</MudButton>
+        @* See the busy-state note on Queues.razor. *@
+        @if (_busy)
+        {
+            <MudProgressCircular Class="send-message-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="send-message" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_body) || _busy)" OnClick="Send">Send</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -23,17 +28,26 @@
 
     private string _body = "";
     private string _contentType = "application/json";
+    private bool _busy;
 
     private async Task Send()
     {
-        var result = await SendHandler.HandleAsync(new SendMessageCommand(ConnectionId, ConnectionName, QueueName, _body, _contentType, null, null));
-        if (result.IsSuccess)
+        _busy = true;
+        try
         {
-            MudDialog.Close(DialogResult.Ok(true));
+            var result = await SendHandler.HandleAsync(new SendMessageCommand(ConnectionId, ConnectionName, QueueName, _body, _contentType, null, null));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
         }
-        else
+        finally
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            _busy = false;
         }
     }
 

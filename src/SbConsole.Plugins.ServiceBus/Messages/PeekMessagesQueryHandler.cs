@@ -1,9 +1,10 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Messages;
 
-public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections)
+public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<PeekMessagesQueryHandler> logger)
 {
     public async Task<PluginResult<IReadOnlyList<PeekedMessage>>> HandleAsync(
         Guid connectionId, string queueName, bool fromDeadLetter,
@@ -22,7 +23,8 @@ public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, I
         }
         catch (Exception ex)
         {
-            return PluginResult<IReadOnlyList<PeekedMessage>>.Fail(ex.Message);
+            logger.LogError(ex, "Peeking {QueueName} (dead-letter: {FromDeadLetter}) failed.", queueName, fromDeadLetter);
+            return PluginResult<IReadOnlyList<PeekedMessage>>.Fail(ex);
         }
     }
 }

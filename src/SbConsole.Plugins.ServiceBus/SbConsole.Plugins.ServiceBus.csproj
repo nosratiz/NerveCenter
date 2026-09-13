@@ -5,6 +5,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The retry/timeout constants and client-options factories on AzureServiceBusOperations are
+         asserted directly by unit tests (there is no broker to observe them against). -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.ServiceBus.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
     <PackageReference Include="MudBlazor" Version="9.9.0" />
   </ItemGroup>
