@@ -110,13 +110,29 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
             // captured exception unchanged when only one attempt failed.
             return new ConnectionTestResult(false, "Namespace unreachable");
         }
-        catch (AggregateException ex) when (ex.InnerExceptions.Count > 0 && ex.InnerExceptions.All(inner => inner is RequestFailedException))
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // Same failure, retried. Azure.Core 1.60.0's RetryPolicy throws
+            // A per-attempt NetworkTimeout expiry (e.g. a blackholed namespace behind a firewall
+            // that drops the SYN instead of refusing it) doesn't produce a RequestFailedException —
+            // verified via decompilation of Azure.Core 1.60.0: ResponseBodyPolicy throws a
+            // TaskCanceledException via CancellationHelper.CreateOperationCanceledException when
+            // its own timeout token fires, and ResponseClassifier.IsRetriable treats any
+            // OperationCanceledException whose *caller* token isn't the one that fired as
+            // retriable. The `!ct.IsCancellationRequested` guard is what distinguishes this SDK
+            // timeout from the caller genuinely cancelling — the latter must propagate, not be
+            // reported as a connectivity result.
+            return new ConnectionTestResult(false, "Namespace unreachable");
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.Count > 0
+            && ex.InnerExceptions.All(inner => inner is RequestFailedException || (inner is OperationCanceledException && !ct.IsCancellationRequested)))
+        {
+            // Same failures, retried. Azure.Core 1.60.0's RetryPolicy throws
             // `new AggregateException($"Retry failed after {n} tries. Retry settings can be
             // adjusted in ClientOptions.Retry...", exceptions)` once more than one attempt threw —
             // this is the 543-character message live testing saw against a real unreachable
-            // namespace, with the same DNS error repeated once per attempt.
+            // namespace. A repeatedly-timing-out attempt retries as TaskCanceledExceptions, not
+            // RequestFailedExceptions, so both are accepted here (guarded the same way as the
+            // single-attempt case above).
             return new ConnectionTestResult(false, "Namespace unreachable");
         }
         catch (Exception ex)
