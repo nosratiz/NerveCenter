@@ -39,6 +39,7 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Messages.PeekSubscriptionMessagesQueryHandler>();
         services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
+        services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
     }
 
     private const string DeadLetterNavHref = "/p/azure-servicebus/dead-letter";

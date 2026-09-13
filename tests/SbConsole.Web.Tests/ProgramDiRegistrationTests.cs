@@ -71,7 +71,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect, "login must succeed for the page requests below to be authenticated");
         var authCookie = loginResponse.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith("sbc.auth", StringComparison.Ordinal)).Split(';')[0];
 
-        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics" })
+        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics", "/p/azure-servicebus/dead-letter" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, route);
             request.Headers.Add("Cookie", authCookie);

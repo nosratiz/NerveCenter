@@ -1,0 +1,58 @@
+@page "/p/azure-servicebus/dead-letter"
+@using SbConsole.Plugins.ServiceBus.DeadLetter
+@inject ListDeadLetterOverviewQueryHandler ListHandler
+
+<PageTitle>Dead-letter</PageTitle>
+<h1>Dead-letter</h1>
+
+@if (_loading)
+{
+    <MudProgressCircular Class="dead-letter-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_entries.Count == 0)
+{
+    <MudAlert Severity="Severity.Success">No dead-lettered messages across any connection.</MudAlert>
+}
+else
+{
+    <MudTable Items="_entries">
+        <HeaderContent>
+            <MudTh>Namespace</MudTh>
+            <MudTh>Entity</MudTh>
+            <MudTh>Type</MudTh>
+            <MudTh>Count</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.ConnectionName</MudTd>
+            <MudTd>@EntityLabel(context)</MudTd>
+            <MudTd>@context.EntityType</MudTd>
+            <MudTd>@context.Count</MudTd>
+            <MudTd><MudButton Class="peek-dead-letter" Href="@PeekUrl(context)">Peek</MudButton></MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<DeadLetterOverviewEntry> _entries = [];
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _entries = await ListHandler.HandleAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string EntityLabel(DeadLetterOverviewEntry entry) =>
+        entry.TopicName is { } topic ? $"{topic} / {entry.EntityName}" : entry.EntityName;
+
+    private static string PeekUrl(DeadLetterOverviewEntry entry) => entry.TopicName is { } topic
+        ? $"/p/azure-servicebus/topics/{Uri.EscapeDataString(topic)}/subscriptions/{Uri.EscapeDataString(entry.EntityName)}/peek?connectionId={entry.ConnectionId}&deadLetter=true&deadLetterCount={entry.Count}"
+        : $"/p/azure-servicebus/queues/{Uri.EscapeDataString(entry.EntityName)}/peek?connectionId={entry.ConnectionId}&deadLetter=true&deadLetterCount={entry.Count}";
+}
