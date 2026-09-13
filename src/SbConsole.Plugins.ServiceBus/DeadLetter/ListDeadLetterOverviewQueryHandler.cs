@@ -21,14 +21,20 @@ public sealed class ListDeadLetterOverviewQueryHandler(IServiceBusOperations ope
         var allConnections = await connections.ListAsync("azure-servicebus", ct);
         foreach (var connection in allConnections)
         {
-            var secret = await connections.GetSecretAsync(connection.Id, ct);
-            if (secret is null)
-            {
-                continue;
-            }
-
             try
             {
+                // Inside the try, not before it: ISecretProtector.Unprotect throws
+                // CryptographicException/AuthenticationTagMismatchException for a corrupt or
+                // wrong-key ciphertext (realistic after an SBC_DATA_KEY rotation or a database
+                // restored against a different key). Fetching outside would let one bad connection
+                // break the whole overview page, the opposite of this handler's documented
+                // per-connection isolation.
+                var secret = await connections.GetSecretAsync(connection.Id, ct);
+                if (secret is null)
+                {
+                    continue;
+                }
+
                 var entries = await operations.ListDeadLetterEntriesAsync(secret, ct);
                 results.AddRange(entries.Select(e => new DeadLetterOverviewEntry(connection.Id, connection.Name, e.EntityType, e.TopicName, e.EntityName, e.Count)));
             }

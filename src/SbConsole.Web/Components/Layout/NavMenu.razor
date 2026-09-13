@@ -1,5 +1,6 @@
 @inject PluginRegistry Registry
 @inject IConnectionProvider Connections
+@inject ILogger<NavMenu> Logger
 @implements IDisposable
 
 <MudNavMenu>
@@ -46,10 +47,14 @@
             {
                 await RefreshBadgesAsync(ct);
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort: a failed refresh tick leaves the last-known badges in place and
-                // tries again next tick, rather than tearing down the nav menu.
+                // tries again next tick, rather than tearing down the nav menu. Logged so a
+                // systematic failure (a plugin that always throws, or Registry.Plugins /
+                // Connections.ListAsync itself failing) leaves at least one diagnosable trace
+                // instead of badges silently freezing for the life of the circuit.
+                Logger.LogWarning(ex, "Refreshing plugin nav badges failed for this tick; keeping the last-known badges.");
             }
 
             try
@@ -75,19 +80,25 @@
                 int? total = null;
                 foreach (var connection in connections)
                 {
-                    var secret = await Connections.GetSecretAsync(connection.Id, ct);
-                    if (secret is null)
-                    {
-                        continue;
-                    }
-
                     int? count;
                     try
                     {
+                        // GetSecretAsync inside the try, not before it: ISecretProtector.Unprotect
+                        // throws for a corrupt or wrong-key ciphertext, and a throw here would
+                        // escape before any later connection or plugin is reached in this tick.
+                        // Since the bad connection is hit first on every subsequent tick too, that
+                        // silently froze ALL badges for ALL plugins for the life of the circuit.
+                        var secret = await Connections.GetSecretAsync(connection.Id, ct);
+                        if (secret is null)
+                        {
+                            continue;
+                        }
+
                         count = await plugin.GetNavBadgeAsync(navItem.Href, secret, ct);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        Logger.LogDebug(ex, "Computing the {Href} badge for connection {ConnectionId} failed; skipping it for this tick.", navItem.Href, connection.Id);
                         continue;
                     }
 
@@ -111,5 +122,12 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    public void Dispose() => _cts.Cancel();
+    // Dispose the CTS as well as cancelling it: the loop's own catch (OperationCanceledException)
+    // { break; } guarantees it has stopped observing _cts.Token by the time this returns, so
+    // disposing here can't race an in-flight token registration.
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
 }
