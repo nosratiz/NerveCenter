@@ -13,8 +13,8 @@ public sealed class ServiceBusPlugin : IPlugin
     public string ConnectionKind => "azure-servicebus";
     public string ConnectionKindDisplayName => "Azure Service Bus";
 
-    // Create/Delete queue, Peek, Send, Resubmit dead-letter, Purge dead-letter.
-    public PluginContribution Contribution => new(PageCount: 1, ActionCount: 6);
+    // Create/Delete queue, Peek, Send, Resubmit dead-letter, Purge dead-letter. Create/Delete topic.
+    public PluginContribution Contribution => new(PageCount: 2, ActionCount: 8);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -26,6 +26,9 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Messages.SendMessageCommandHandler>();
         services.AddScoped<Messages.ResubmitDeadLetterMessagesCommandHandler>();
         services.AddScoped<Messages.PurgeDeadLetterMessagesCommandHandler>();
+        services.AddScoped<Topics.ListTopicsQueryHandler>();
+        services.AddScoped<Topics.CreateTopicCommandHandler>();
+        services.AddScoped<Topics.DeleteTopicCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

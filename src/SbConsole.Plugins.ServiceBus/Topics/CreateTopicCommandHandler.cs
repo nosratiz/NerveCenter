@@ -1,0 +1,34 @@
+using Microsoft.Extensions.Logging;
+using SbConsole.Plugins.ServiceBus.Client;
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.ServiceBus.Topics;
+
+public sealed record CreateTopicCommand(Guid ConnectionId, string ConnectionName, string TopicName);
+
+public sealed class CreateTopicCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger)
+{
+    public async Task<PluginResult> HandleAsync(CreateTopicCommand cmd, CancellationToken ct = default)
+    {
+        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        if (secret is null)
+        {
+            return PluginResult.Fail("Connection not found.");
+        }
+
+        var target = $"{cmd.ConnectionName}/{cmd.TopicName}";
+        try
+        {
+            await operations.CreateTopicAsync(secret, new CreateTopicRequest(cmd.TopicName), ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Creating topic {Target} failed.", target);
+            await audit.RecordAsync("topic.create", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyError.From(ex), ct: ct);
+            return PluginResult.Fail(ex);
+        }
+
+        await audit.RecordAsync("topic.create", target, ActionRisk.Mutating, succeeded: true, ct: ct);
+        return PluginResult.Ok();
+    }
+}
