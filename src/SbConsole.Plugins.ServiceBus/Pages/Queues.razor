@@ -1,8 +1,11 @@
 @page "/p/azure-servicebus/queues"
+@using System.Text.Json
 @using SbConsole.Plugins.ServiceBus.Client
 @using SbConsole.Plugins.ServiceBus.Queues
 @using SbConsole.Sdk
 @inject IConnectionProvider Connections
+@inject IPluginStore Store
+@inject TimeProvider Clock
 @inject ListQueuesQueryHandler ListHandler
 @inject DeleteQueueCommandHandler DeleteHandler
 @inject IConfirmationService Confirmation
@@ -19,36 +22,63 @@
 else
 {
     <div class="d-flex align-center flex-wrap gap-4 my-4">
-        <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged" Style="max-width:260px">
-            @foreach (var connection in _connections)
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Namespace</MudText>
+            <MudMenu Class="namespace-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Typo="Typo.subtitle1" Style="font-family:monospace">@SelectedConnection?.Name</MudText>
+                        @if (SelectedConnection?.IsProd == true)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+                        }
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var connection in _connections)
+                    {
+                        <MudMenuItem Class="namespace-option" OnClick="@(() => OnConnectionChanged(connection.Id))">@connection.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        <MudTextField T="string" Class="queue-filter" Placeholder="Filter queues..." @bind-Value="_filterText" Immediate="true" Style="max-width:220px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        <MudButtonGroup Class="metric-range" Variant="Variant.Outlined">
+            @foreach (var range in AllRanges)
             {
-                <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                <MudButton Class="@($"range-{RangeLabel(range)}")" Variant="@(range == _range ? Variant.Filled : Variant.Outlined)" OnClick="@(() => SelectRange(range))">@RangeLabel(range)</MudButton>
             }
-        </MudSelect>
-        <MudTextField T="string" Class="queue-filter" Placeholder="Filter queues..." @bind-Value="_filterText" Immediate="true" Style="max-width:260px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
-        <MudText Class="queues-summary mud-text-secondary" Typo="Typo.body2">@QueueCount @(QueueCount == 1 ? "queue" : "queues") &middot; @DeadLetterCount dead-lettered</MudText>
+        </MudButtonGroup>
+
         <MudSpacer />
-        <MudButton Class="create-queue-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate">+ Create queue</MudButton>
+        <MudButton Class="create-queue-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenCreate">+ Create queue</MudButton>
         @if (_loading)
         {
             <MudProgressCircular Class="queues-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }
     </div>
 
+    <MudText Class="queues-summary mud-text-secondary mb-2" Typo="Typo.body2">@QueueCount @(QueueCount == 1 ? "queue" : "queues") &middot; @DeadLetterCount dead-lettered</MudText>
+
     <MudTable Items="FilteredQueues">
         <HeaderContent>
             <MudTh>Queue</MudTh>
+            <MudTh>Active (@RangeLabel(_range))</MudTh>
             <MudTh>Active</MudTh>
-            <MudTh>Dead-letter</MudTh>
-            <MudTh>Scheduled</MudTh>
+            <MudTh>DLQ (@RangeLabel(_range))</MudTh>
+            <MudTh>DLQ</MudTh>
             <MudTh>Size</MudTh>
             <MudTh>Actions</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd>@context.Name</MudTd>
+            <MudTd Style="font-family:monospace">@context.Name</MudTd>
+            <MudTd><Sparkline Values="@ActiveSeries(context.Name)" Max="@ActiveMax" Color="var(--mud-palette-primary)" /></MudTd>
             <MudTd>@context.ActiveMessageCount</MudTd>
-            <MudTd>@context.DeadLetterMessageCount</MudTd>
-            <MudTd>@context.ScheduledMessageCount</MudTd>
+            <MudTd><Sparkline Values="@DeadLetterSeries(context.Name)" Max="@DeadLetterMax" Color="var(--mud-palette-error)" /></MudTd>
+            <MudTd Style="@(context.DeadLetterMessageCount > 0 ? "color:var(--mud-palette-error)" : null)">@context.DeadLetterMessageCount</MudTd>
             <MudTd>@FormatSize(context.SizeInBytes)</MudTd>
             <MudTd>
                 <MudButton Href="@PeekUrl(context.Name)">Peek</MudButton>
@@ -62,12 +92,34 @@ else
             </MudTd>
         </RowTemplate>
     </MudTable>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Sparklines share a y-scale per column, so a flat line means flat — not small.</MudText>
 }
 
 @code {
+    private enum MetricRange { OneHour, SixHours, TwentyFourHours }
+    private static readonly MetricRange[] AllRanges = [MetricRange.OneHour, MetricRange.SixHours, MetricRange.TwentyFourHours];
+
+    private static TimeSpan RangeSpan(MetricRange range) => range switch
+    {
+        MetricRange.OneHour => TimeSpan.FromHours(1),
+        MetricRange.SixHours => TimeSpan.FromHours(6),
+        _ => TimeSpan.FromHours(24),
+    };
+
+    private static string RangeLabel(MetricRange range) => range switch
+    {
+        MetricRange.OneHour => "1h",
+        MetricRange.SixHours => "6h",
+        _ => "24h",
+    };
+
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private IReadOnlyList<QueueSummary> _queues = [];
+    private Dictionary<string, IReadOnlyList<MetricSnapshotPoint>> _history = new();
     private Guid _selectedConnectionId;
+    private MetricRange _range = MetricRange.SixHours;
+
+    private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
 
     // Busy-state convention for this plugin's pages (the host had none to match -- Connections.razor
     // grew the same shape in the same change). Every button that awaits an Azure call flips a flag
@@ -87,6 +139,28 @@ else
     private IEnumerable<QueueSummary> FilteredQueues => string.IsNullOrWhiteSpace(_filterText)
         ? _queues
         : _queues.Where(q => q.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+
+    // Shared per-column y-scale (the mockup's own point: a flat sparkline must mean flat, not
+    // "too small to see next to a bigger row's line") -- the max is taken across every row
+    // currently shown, not each row's own history.
+    private long ActiveMax => FilteredQueues.SelectMany(q => HistoryWithin(q.Name).Select(p => p.ActiveCount)).DefaultIfEmpty(0).Max();
+    private long DeadLetterMax => FilteredQueues.SelectMany(q => HistoryWithin(q.Name).Select(p => p.DeadLetterCount)).DefaultIfEmpty(0).Max();
+
+    private IReadOnlyList<long> ActiveSeries(string queueName) => [.. HistoryWithin(queueName).Select(p => p.ActiveCount)];
+    private IReadOnlyList<long> DeadLetterSeries(string queueName) => [.. HistoryWithin(queueName).Select(p => p.DeadLetterCount)];
+
+    private IEnumerable<MetricSnapshotPoint> HistoryWithin(string queueName)
+    {
+        if (!_history.TryGetValue(queueName, out var points))
+        {
+            return [];
+        }
+
+        var cutoff = Clock.GetUtcNow() - RangeSpan(_range);
+        return points.Where(p => p.At >= cutoff);
+    }
+
+    private void SelectRange(MetricRange range) => _range = range;
 
     protected override async Task OnInitializedAsync()
     {
@@ -119,11 +193,25 @@ else
                 _queues = [];
                 Snackbar.Add(result.Error!, Severity.Error);
             }
+
+            await LoadHistoryAsync();
         }
         finally
         {
             _loading = false;
         }
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
+        foreach (var queue in _queues)
+        {
+            var json = await Store.GetAsync(MetricHistoryKey.For(_selectedConnectionId, queue.Name));
+            history[queue.Name] = json is null ? [] : JsonSerializer.Deserialize<List<MetricSnapshotPoint>>(json) ?? [];
+        }
+
+        _history = history;
     }
 
     private static string FormatSize(long bytes) => bytes switch

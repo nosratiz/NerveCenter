@@ -66,6 +66,7 @@ builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
 // Plugins (compile-time registration; see docs/design.md §2)
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.ServiceBus.ServiceBusPlugin>();
+builder.Services.AddHostedService<MetricsCollectorService>();
 
 var app = builder.Build();
 

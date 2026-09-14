@@ -43,6 +43,10 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
+
+        // Pre-bound to this plugin's own Id so pages (Queues.razor) can @inject IPluginStore
+        // directly instead of going through the factory + this plugin's Id at every call site.
+        services.AddScoped<IPluginStore>(sp => sp.GetRequiredService<IPluginStoreFactory>().For(Id));
     }
 
     private const string DeadLetterNavHref = "/p/azure-servicebus/dead-letter";
@@ -73,6 +77,12 @@ public sealed class ServiceBusPlugin : IPlugin
             new PluginDashboardMetric("Topics", topics.Count),
             new PluginDashboardMetric("Subscriptions", subscriptions),
         ];
+    }
+
+    public async Task<IReadOnlyList<PluginResourceMetric>> GetResourceMetricsAsync(string connectionString, CancellationToken ct = default)
+    {
+        var queues = await new AzureServiceBusOperations().ListQueuesAsync(connectionString, ct);
+        return [.. queues.Select(q => new PluginResourceMetric(q.Name, q.ActiveMessageCount, q.DeadLetterMessageCount))];
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

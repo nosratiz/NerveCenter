@@ -49,4 +49,15 @@ public interface IPlugin
     /// </summary>
     Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PluginDashboardMetric>>([]);
+
+    /// <summary>
+    /// Optional point-in-time Active/DeadLetter reading for every one of this plugin's named
+    /// resources (e.g. queues) on one connection. The host's background collector calls this
+    /// periodically and appends each reading to that resource's metric history, which a plugin's
+    /// own UI can then read back (via the same IPluginStore) to draw trend sparklines. Returning
+    /// an empty list means "nothing to report" -- the default implementation does exactly that, so
+    /// a plugin written before this method existed needs no change at all.
+    /// </summary>
+    Task<IReadOnlyList<PluginResourceMetric>> GetResourceMetricsAsync(string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginResourceMetric>>([]);
 }
