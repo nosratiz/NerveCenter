@@ -1,5 +1,4 @@
 @page "/p/azure-servicebus/queues"
-@using System.Text.Json
 @using SbConsole.Plugins.ServiceBus.Client
 @using SbConsole.Plugins.ServiceBus.Queues
 @using SbConsole.Sdk
@@ -216,8 +215,7 @@ else
         var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
         foreach (var queue in _queues)
         {
-            var json = await Store.GetAsync(MetricHistoryKey.For(_selectedConnectionId, queue.Name));
-            history[queue.Name] = json is null ? [] : JsonSerializer.Deserialize<List<MetricSnapshotPoint>>(json) ?? [];
+            history[queue.Name] = await MetricHistoryStore.ReadAsync(Store, _selectedConnectionId, queue.Name);
         }
 
         _history = history;

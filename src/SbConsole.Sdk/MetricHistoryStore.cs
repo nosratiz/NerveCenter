@@ -28,4 +28,17 @@ public static class MetricHistoryStore
 
         await store.SetAsync(key, JsonSerializer.Serialize(points), ct);
     }
+
+    /// <summary>
+    /// Reads a resource's metric history back (oldest first), or an empty list if nothing has been
+    /// recorded for it yet. Shared by a plugin's own UI (e.g. Queues.razor's sparklines) and any
+    /// plugin logic that needs to reason about a resource's history (e.g. a Dashboard problem
+    /// computing a delta over the last hour).
+    /// </summary>
+    public static async Task<IReadOnlyList<MetricSnapshotPoint>> ReadAsync(
+        IPluginStore store, Guid connectionId, string resourceName, CancellationToken ct = default)
+    {
+        var json = await store.GetAsync(MetricHistoryKey.For(connectionId, resourceName), ct);
+        return json is null ? [] : JsonSerializer.Deserialize<List<MetricSnapshotPoint>>(json) ?? [];
+    }
 }
