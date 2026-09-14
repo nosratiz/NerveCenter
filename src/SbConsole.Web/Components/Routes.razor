@@ -1,4 +1,6 @@
-<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+@inject SbConsole.Web.Plugins.PluginRegistry Registry
+
+<Router AppAssembly="typeof(Program).Assembly" AdditionalAssemblies="_pluginAssemblies" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
         <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
             <NotAuthorized>
@@ -8,3 +10,12 @@
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>
+
+@code {
+    private IEnumerable<System.Reflection.Assembly> _pluginAssemblies = [];
+
+    protected override void OnInitialized()
+    {
+        _pluginAssemblies = Registry.Plugins.Select(p => p.GetType().Assembly).Distinct();
+    }
+}

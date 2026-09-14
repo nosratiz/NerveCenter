@@ -36,11 +36,12 @@ public class AddEditConnectionDialogTests : BunitContext, IAsyncLifetime
         public string DisplayName => displayName;
         public string Version => "1.0.0";
         public IReadOnlyList<PluginNavItem> NavItems => [];
-        public Type RootComponent => typeof(object);
         public string ConnectionKind => kind;
         public string ConnectionKindDisplayName => displayName;
         public PluginContribution Contribution => new(0, 0);
         public void ConfigureServices(IServiceCollection services) { }
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
+            Task.FromResult(new ConnectionTestResult(Success: true));
     }
 
     private readonly TestDb _testDb = new();

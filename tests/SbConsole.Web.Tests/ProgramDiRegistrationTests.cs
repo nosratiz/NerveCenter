@@ -71,7 +71,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect, "login must succeed for the page requests below to be authenticated");
         var authCookie = loginResponse.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith("sbc.auth", StringComparison.Ordinal)).Split(';')[0];
 
-        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings" })
+        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics", "/p/azure-servicebus/dead-letter" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, route);
             request.Headers.Add("Cookie", authCookie);
@@ -101,6 +101,31 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         sp.GetRequiredService<UpdateConnectionCommandHandler>();
         sp.GetRequiredService<ListAuditEntriesQueryHandler>();
         sp.GetRequiredService<ListPluginsQueryHandler>();
+    }
+
+    /// <summary>
+    /// Pins [Authorize] directly on every compiled, routable component type in the plugin
+    /// assembly, rather than one named type -- broadened from the Queues plan's original version
+    /// (which pinned only the Queues component) because that plan's own final review flagged that a
+    /// future page could escape the check silently. This is that future page: Topics (this task)
+    /// and the subscription-peek / Dead-letter-overview pages (later tasks) are all covered
+    /// automatically, as would any later page, with no test change required.
+    /// </summary>
+    [Fact]
+    public void Every_service_bus_plugin_page_declares_Authorize_directly_on_the_component()
+    {
+        var routableTypes = typeof(SbConsole.Plugins.ServiceBus.Pages.Queues).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttributes(typeof(Microsoft.AspNetCore.Components.RouteAttribute), inherit: false).Length > 0)
+            .ToList();
+
+        routableTypes.Should().NotBeEmpty("this assembly is expected to contain at least one @page component");
+        foreach (var type in routableTypes)
+        {
+            type.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+                .Should().NotBeEmpty($"{type.Name} must declare [Authorize] directly (or inherit it from " +
+                    "Pages/_Imports.razor), not merely rely on the app's fallback authorization policy to " +
+                    "redirect anonymous requests");
+        }
     }
 
     public void Dispose()

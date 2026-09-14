@@ -1,7 +1,24 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <ItemGroup>
     <ProjectReference Include="..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The retry/timeout constants and client-options factories on AzureServiceBusOperations are
+         asserted directly by unit tests (there is no broker to observe them against). -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.ServiceBus.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+    <PackageReference Include="MudBlazor" Version="9.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pages/*.razor need Razor component + [Authorize] support, which live in the ASP.NET Core
+         shared framework, not a NuGet package — same pattern `dotnet new razorclasslib` uses. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <PropertyGroup>

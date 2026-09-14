@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
 using NSubstitute;
@@ -45,6 +46,8 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<DeleteConnectionCommandHandler>();
         Services.AddSingleton<UpdateConnectionCommandHandler>();
         Services.AddSingleton<ListConnectionsQueryHandler>();
+        Services.AddLogging();
+        Services.AddSingleton<TestConnectionCommandHandler>();
         // Connections.razor injects IConfirmationService on every render; give every test a
         // default (tests that care about the confirm/cancel outcome override this before Render()).
         Services.AddSingleton(Substitute.For<SbConsole.Sdk.IConfirmationService>());
@@ -105,5 +108,64 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
 
         var remaining = await Services.GetRequiredService<ListConnectionsQueryHandler>().HandleAsync();
         remaining.Should().Contain(c => c.Name == "sb-dev");
+    }
+
+    private sealed class FakeServiceBusPlugin(ConnectionTestResult result) : IPlugin
+    {
+        public string Id => "azure-servicebus";
+        public string DisplayName => "Azure Service Bus";
+        public string Version => "1.0.0";
+        public IReadOnlyList<PluginNavItem> NavItems => [];
+        public string ConnectionKind => "azure-servicebus";
+        public string ConnectionKindDisplayName => "Azure Service Bus";
+        public PluginContribution Contribution => new(0, 0);
+        public void ConfigureServices(IServiceCollection services) { }
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) => Task.FromResult(result);
+    }
+
+    [Fact]
+    public async Task Shows_never_tested_for_a_connection_that_has_no_recorded_test()
+    {
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = Render<Connections>();
+
+        cut.Markup.Should().Contain("Never tested");
+    }
+
+    [Fact]
+    public async Task Test_button_runs_the_test_and_updates_the_status_to_ok()
+    {
+        Services.AddSingleton<IEnumerable<IPlugin>>([new FakeServiceBusPlugin(new ConnectionTestResult(true))]);
+        Services.AddLogging();
+        Services.AddSingleton<TestConnectionCommandHandler>();
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = Render<Connections>();
+        cut.Find("button.test-connection").Click();
+        await Task.Delay(50);
+        cut.Render();
+
+        cut.Markup.Should().Contain("OK");
+        cut.Markup.Should().NotContain("Never tested");
+    }
+
+    [Fact]
+    public async Task Test_button_shows_the_error_message_on_failure()
+    {
+        Services.AddSingleton<IEnumerable<IPlugin>>([new FakeServiceBusPlugin(new ConnectionTestResult(false, "Unauthorized (401)"))]);
+        Services.AddLogging();
+        Services.AddSingleton<TestConnectionCommandHandler>();
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = Render<Connections>();
+        cut.Find("button.test-connection").Click();
+        await Task.Delay(50);
+        cut.Render();
+
+        cut.Markup.Should().Contain("Unauthorized (401)");
     }
 }

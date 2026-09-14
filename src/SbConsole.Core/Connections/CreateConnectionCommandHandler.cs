@@ -25,15 +25,15 @@ public sealed class CreateConnectionCommandHandler(
             return Result<Guid>.Fail(ErrorCategory.Conflict, $"A connection named '{cmd.Name}' already exists.");
         }
 
-        var connection = new Data.Entities.Connection
+        var connection = new Connection
         {
-            Id = Guid.NewGuid(),
             Name = cmd.Name,
             Kind = cmd.Kind,
-            TagsCsv = string.Join(',', cmd.Tags),
             SecretCiphertext = protector.Protect(cmd.Secret),
-            CreatedAt = clock.GetUtcNow(),
         };
+        connection.Id = Guid.NewGuid();
+        connection.TagsCsv = string.Join(',', cmd.Tags);
+        connection.CreatedAt = clock.GetUtcNow();
         db.Connections.Add(connection);
         await db.SaveChangesAsync(ct);
 

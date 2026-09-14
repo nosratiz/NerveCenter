@@ -1,0 +1,206 @@
+@page "/p/azure-servicebus/queues"
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Plugins.ServiceBus.Queues
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject ListQueuesQueryHandler ListHandler
+@inject DeleteQueueCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Queues</PageTitle>
+<h1>Queues</h1>
+
+@if (_connections.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No connections yet. Add an Azure Service Bus connection to get started.</MudAlert>
+}
+else
+{
+    <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged">
+        @foreach (var connection in _connections)
+        {
+            <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+        }
+    </MudSelect>
+
+    <div class="d-flex align-center gap-2 my-4">
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate">+ Create queue</MudButton>
+        @if (_loading)
+        {
+            <MudProgressCircular Class="queues-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+
+    <MudTable Items="_queues">
+        <HeaderContent>
+            <MudTh>Queue</MudTh>
+            <MudTh>Active</MudTh>
+            <MudTh>Dead-letter</MudTh>
+            <MudTh>Scheduled</MudTh>
+            <MudTh>Size</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.Name</MudTd>
+            <MudTd>@context.ActiveMessageCount</MudTd>
+            <MudTd>@context.DeadLetterMessageCount</MudTd>
+            <MudTd>@context.ScheduledMessageCount</MudTd>
+            <MudTd>@FormatSize(context.SizeInBytes)</MudTd>
+            <MudTd>
+                <MudButton Href="@PeekUrl(context.Name)">Peek</MudButton>
+                <MudButton Class="dead-letter-action" Href="@PeekUrl(context.Name, deadLetter: true, deadLetterCount: context.DeadLetterMessageCount)">Dead-letter</MudButton>
+                <MudButton Class="send-message-action" OnClick="@(() => OpenSend(context.Name))">Send</MudButton>
+                <MudButton Class="delete-queue" Color="Color.Error" Disabled="@(_deletingQueue == context.Name)" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
+                @if (_deletingQueue == context.Name)
+                {
+                    <MudProgressCircular Class="delete-queue-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<QueueSummary> _queues = [];
+    private Guid _selectedConnectionId;
+
+    // Busy-state convention for this plugin's pages (the host had none to match -- Connections.razor
+    // grew the same shape in the same change). Every button that awaits an Azure call flips a flag
+    // before the await and clears it in a `finally`, binds that flag to its own Disabled, and shows
+    // a small inline MudProgressCircular beside itself. The flag is scoped to the thing being acted
+    // on (a queue name here, a connection id on Connections.razor) so an in-flight call never
+    // disables unrelated rows. Timeouts (AzureServiceBusOperations' tightened RetryOptions and the
+    // 2-minute cap on the looping operations) are what actually bound the wait -- this is only so a
+    // bounded wait doesn't look like a frozen page.
+    private bool _loading;
+    private string? _deletingQueue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("azure-servicebus");
+        if (_connections.Count > 0)
+        {
+            _selectedConnectionId = _connections[0].Id;
+            await LoadQueuesAsync();
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid connectionId)
+    {
+        _selectedConnectionId = connectionId;
+        await LoadQueuesAsync();
+    }
+
+    private async Task LoadQueuesAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            if (result.IsSuccess)
+            {
+                _queues = result.Value!;
+            }
+            else
+            {
+                _queues = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024.0):0.#} MB",
+    };
+
+    // Peek.razor looks the connection's name and prod status up itself from ConnectionId via
+    // IConnectionProvider, rather than trusting them off the URL (a hand-typed link omitting
+    // isProd used to silently downgrade a prod dead-letter purge to a plain two-button confirm).
+    // So this only needs to carry ConnectionId, plus DeadLetter/DeadLetterCount when linking into
+    // dead-letter mode -- deadLetterCount is the row's live count, used so the purge confirmation
+    // shows the real message count rather than the peek page's capped page size.
+    private string PeekUrl(string queueName, bool deadLetter = false, long? deadLetterCount = null)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var url = $"/p/azure-servicebus/queues/{Uri.EscapeDataString(queueName)}/peek?connectionId={connection.Id}";
+        if (deadLetter)
+        {
+            url += "&deadLetter=true";
+            if (deadLetterCount is not null)
+            {
+                url += $"&deadLetterCount={deadLetterCount}";
+            }
+        }
+
+        return url;
+    }
+
+    private async Task OpenCreate()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateQueueDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateQueueDialog>("Create queue", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
+
+    private async Task OpenSend(string queueName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<SendMessageDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.QueueName, queueName },
+        };
+        var dialog = await DialogService.ShowAsync<SendMessageDialog>("Send message", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
+
+    private async Task DeleteAsync(string queueName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", queueName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _deletingQueue = queueName;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(connection.Id, connection.Name, connection.IsProd, queueName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingQueue = null;
+        }
+
+        await LoadQueuesAsync();
+    }
+}

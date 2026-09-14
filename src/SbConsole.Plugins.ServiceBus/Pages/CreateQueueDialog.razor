@@ -1,0 +1,54 @@
+@using SbConsole.Plugins.ServiceBus.Queues
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="queue-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudNumericField @bind-Value="_maxDeliveryCount" Label="Max delivery count" Min="1" Max="2000" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @* See the busy-state note on Queues.razor. Cancel stays enabled on purpose -- only the
+           button whose call is in flight is disabled. *@
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-queue-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-queue" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || _busy)" OnClick="Save">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+
+    [Inject] private CreateQueueCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private int _maxDeliveryCount = 10;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var result = await CreateHandler.HandleAsync(new CreateQueueCommand(ConnectionId, ConnectionName, _name, _maxDeliveryCount));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

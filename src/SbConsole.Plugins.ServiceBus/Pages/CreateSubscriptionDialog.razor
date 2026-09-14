@@ -1,0 +1,53 @@
+@using SbConsole.Plugins.ServiceBus.Subscriptions
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="subscription-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudNumericField @bind-Value="_maxDeliveryCount" Label="Max delivery count" Min="1" Max="2000" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-subscription-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-subscription" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || _busy)" OnClick="Save">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+
+    [Inject] private CreateSubscriptionCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private int _maxDeliveryCount = 10;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var result = await CreateHandler.HandleAsync(new CreateSubscriptionCommand(ConnectionId, ConnectionName, TopicName, _name, _maxDeliveryCount));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

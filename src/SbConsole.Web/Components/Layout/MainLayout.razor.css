@@ -1,3 +1,10 @@
+/* MudBlazor's own .mud-main-content padding-top:var(--mud-appbar-height) reserves space below
+   the fixed MudAppBar; a plain "pa-4" utility class overrides that (its padding shorthand carries
+   !important), which pushed every page's own <h1> title underneath the fixed app bar. */
+.page-content {
+    padding: calc(var(--mud-appbar-height) + 16px) 16px 16px 16px;
+}
+
 #blazor-error-ui {
     color-scheme: light only;
     background: lightyellow;

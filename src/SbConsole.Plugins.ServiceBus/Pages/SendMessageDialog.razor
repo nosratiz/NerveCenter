@@ -1,0 +1,55 @@
+@using SbConsole.Plugins.ServiceBus.Messages
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @QueueName</MudText>
+        <MudTextField id="message-body" @bind-Value="_body" Label="Body" Lines="8" Immediate="true" />
+        <MudTextField @bind-Value="_contentType" Label="Content type" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @* See the busy-state note on Queues.razor. *@
+        @if (_busy)
+        {
+            <MudProgressCircular Class="send-message-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="send-message" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_body) || _busy)" OnClick="Send">Send</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string QueueName { get; set; } = "";
+
+    [Inject] private SendMessageCommandHandler SendHandler { get; set; } = default!;
+
+    private string _body = "";
+    private string _contentType = "application/json";
+    private bool _busy;
+
+    private async Task Send()
+    {
+        _busy = true;
+        try
+        {
+            var result = await SendHandler.HandleAsync(new SendMessageCommand(ConnectionId, ConnectionName, QueueName, _body, _contentType, null, null));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

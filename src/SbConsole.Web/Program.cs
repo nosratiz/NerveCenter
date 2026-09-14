@@ -51,18 +51,21 @@ builder.Services.AddSingleton<ISecretProtector>(new AesGcmSecretProtector(bootst
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ISettings, DbSettings>();
 builder.Services.AddSingleton<IAuditWriter, EfAuditWriter>();
+builder.Services.AddScoped<IAuditScope, EfAuditScope>();
 builder.Services.AddSingleton<IPluginStoreFactory, EfPluginStoreFactory>();
 builder.Services.AddSingleton<IConnectionProvider, EfConnectionProvider>();
 builder.Services.AddScoped<CreateConnectionCommandHandler>();
 builder.Services.AddScoped<ListConnectionsQueryHandler>();
 builder.Services.AddScoped<DeleteConnectionCommandHandler>();
 builder.Services.AddScoped<UpdateConnectionCommandHandler>();
+builder.Services.AddScoped<TestConnectionCommandHandler>();
 builder.Services.AddScoped<ListAuditEntriesQueryHandler>();
 builder.Services.AddScoped<ListPluginsQueryHandler>();
 builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
 
 // Plugins (compile-time registration; see docs/design.md §2)
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));
+builder.Services.AddSbConsolePlugin<SbConsole.Plugins.ServiceBus.ServiceBusPlugin>();
 
 var app = builder.Build();
 
@@ -74,11 +77,18 @@ using (var scope = app.Services.CreateScope())
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 }
 
+var pluginAssemblies = app.Services.GetRequiredService<PluginRegistry>().Plugins
+    .Select(p => p.GetType().Assembly)
+    .Distinct()
+    .ToArray();
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
 app.MapStaticAssets().AllowAnonymous();
-app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode()
+    .AddAdditionalAssemblies(pluginAssemblies);
 
 app.MapPost("/auth/login", async (HttpContext http, BootstrapOptions options, IAuditWriter audit, TimeProvider clock) =>
 {

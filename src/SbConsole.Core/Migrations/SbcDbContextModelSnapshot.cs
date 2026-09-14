@@ -82,6 +82,15 @@ namespace SbConsole.Core.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("LastTestError")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("LastTestSucceeded")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LastTestedAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
