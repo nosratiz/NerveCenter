@@ -8,9 +8,10 @@
 
     <MudLayout>
         <MudAppBar Elevation="0">
-            <MudText Typo="Typo.h6">SbConsole</MudText>
+            <MudIconButton Class="drawer-toggle" Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" OnClick="ToggleDrawer" />
+            <MudText Typo="Typo.h6" Class="ml-2">SbConsole</MudText>
         </MudAppBar>
-        <MudDrawer Open="true" Elevation="0">
+        <MudDrawer Variant="DrawerVariant.Mini" Open="_drawerOpen" OpenChanged="@(open => _drawerOpen = open)" Elevation="0">
             <NavMenu />
         </MudDrawer>
         <MudMainContent Class="page-content">
@@ -18,3 +19,12 @@
         </MudMainContent>
     </MudLayout>
 </ThemedRoot>
+
+@code {
+    // Mini variant (not the default Responsive/Temporary one): closing it shrinks the drawer to
+    // an icon-only rail rather than hiding it entirely, so navigation is always reachable while
+    // giving the user back the horizontal space when they want it -- a toggle, not a hide/show.
+    private bool _drawerOpen = true;
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+}

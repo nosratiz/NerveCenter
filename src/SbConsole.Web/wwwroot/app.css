@@ -17,6 +17,22 @@ h1:focus {
     background: var(--mud-palette-surface);
 }
 
+/* Collapsed (mini/icon-rail) sidebar: MudBlazor already visually hides each MudNavLink's own text
+   this same way (clipped to 1px, not display:none, so it stays announced to screen readers) --
+   the plugin section's plain-text label needs the same treatment, since it isn't a MudNavLink and
+   would otherwise overflow the icon-only rail. */
+.mud-drawer--closed.mud-drawer-mini .nav-section-label {
+    position: absolute;
+    clip: rect(1px, 1px, 1px, 1px);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    padding: 0;
+    border: 0;
+    height: 1px;
+    width: 1px;
+    overflow: hidden;
+}
+
 .valid.modified:not([type=checkbox]) {
     outline: 1px solid #26b050;
 }

@@ -3,7 +3,7 @@
 @inject ILogger<NavMenu> Logger
 @implements IDisposable
 
-<MudNavMenu>
+<MudNavMenu Color="Color.Primary" Rounded="true">
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
     <MudNavLink Href="/connections" Icon="@Icons.Material.Filled.Cable">Connections</MudNavLink>
     <MudNavLink Href="/audit" Icon="@Icons.Material.Filled.History">Audit</MudNavLink>
@@ -12,18 +12,22 @@
 
     @foreach (var plugin in Registry.Plugins)
     {
-        <MudNavGroup Title="@plugin.DisplayName" Expanded="true">
-            @foreach (var item in plugin.NavItems)
-            {
-                <MudNavLink Href="@item.Href" Icon="@(item.Icon ?? Icons.Material.Filled.Extension)">
-                    @item.Title
-                    @if (_badges.TryGetValue(item.Href, out var count) && count > 0)
-                    {
-                        <span class="nav-badge" style="margin-left:6px;font:600 10px monospace;padding:1px 6px;border-radius:9px;background:var(--mud-palette-error);color:#fff">@count</span>
-                    }
-                </MudNavLink>
-            }
-        </MudNavGroup>
+        @* A plain section label instead of a collapsible MudNavGroup: with one plugin there is
+           nothing worth hiding, so a permanently-expanded, always-clickable group just adds an
+           extra (pointless) toggle interaction. Matches the mockup's own flat-sections call for
+           up to three plugins (docs/design.md). *@
+        <MudDivider Class="my-2 mx-4" />
+        <MudText Typo="Typo.overline" Class="nav-section-label px-4 mud-text-secondary">@plugin.DisplayName</MudText>
+        @foreach (var item in plugin.NavItems)
+        {
+            <MudNavLink Href="@item.Href" Icon="@(item.Icon ?? Icons.Material.Filled.Extension)">
+                @item.Title
+                @if (_badges.TryGetValue(item.Href, out var count) && count > 0)
+                {
+                    <span class="nav-badge" style="margin-left:6px;font:600 10px monospace;padding:1px 6px;border-radius:9px;background:var(--mud-palette-error);color:#fff">@count</span>
+                }
+            </MudNavLink>
+        }
     }
 </MudNavMenu>
 
