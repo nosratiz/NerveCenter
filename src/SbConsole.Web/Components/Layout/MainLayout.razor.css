@@ -1,9 +1,7 @@
-/* MudBlazor's own .mud-main-content padding-top:var(--mud-appbar-height) reserves space below
-   the fixed MudAppBar; a plain "pa-4" utility class overrides that (its padding shorthand carries
-   !important), which pushed every page's own <h1> title underneath the fixed app bar. */
-.page-content {
-    padding: calc(var(--mud-appbar-height) + 16px) 16px 16px 16px;
-}
+/* .page-content's rules live in wwwroot/app.css, not here: MudMainContent doesn't forward the
+   Blazor CSS-isolation scope attribute onto its own rendered root element, so a scoped rule in
+   this file would target [class="mud-main-content page-content"][b-xxxxx] and silently never
+   match the real (unscoped) element. */
 
 #blazor-error-ui {
     color-scheme: light only;

@@ -2,6 +2,21 @@ h1:focus {
     outline: none;
 }
 
+/* MudBlazor's own .mud-main-content padding-top:var(--mud-appbar-height) reserves space below
+   the fixed MudAppBar; a plain "pa-4" utility class overrides that (its padding shorthand carries
+   !important), which pushed every page's own <h1> title underneath the fixed app bar. Global (not
+   MainLayout.razor.css-scoped) because MudMainContent doesn't forward the Blazor CSS-isolation
+   scope attribute onto its own rendered root element, so a scoped .page-content rule here would
+   silently never match it.
+   Also gives the sidebar visual weight as its own panel: the drawer/app-bar stay on
+   --mud-palette-background (the darker of the two theme tones) while the content pane sits on
+   --mud-palette-surface (the lighter tone already used for cards/tables), instead of both
+   inheriting the same body background. */
+.page-content {
+    padding: calc(var(--mud-appbar-height) + 16px) 16px 16px 16px;
+    background: var(--mud-palette-surface);
+}
+
 .valid.modified:not([type=checkbox]) {
     outline: 1px solid #26b050;
 }
