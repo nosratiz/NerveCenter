@@ -10,15 +10,17 @@ public sealed class CreateTopicCommandHandler(IServiceBusOperations operations, 
 {
     public async Task<PluginResult> HandleAsync(CreateTopicCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult.Fail("Connection not found.");
-        }
-
         var target = $"{cmd.ConnectionName}/{cmd.TopicName}";
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult.Fail("Connection not found.");
+            }
+
             await operations.CreateTopicAsync(secret, new CreateTopicRequest(cmd.TopicName), ct);
         }
         catch (Exception ex)

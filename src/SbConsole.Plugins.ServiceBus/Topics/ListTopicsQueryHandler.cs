@@ -13,14 +13,16 @@ public sealed class ListTopicsQueryHandler(IServiceBusOperations operations, ICo
 {
     public async Task<PluginResult<IReadOnlyList<TopicRow>>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(connectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult<IReadOnlyList<TopicRow>>.Fail("Connection not found.");
-        }
-
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(connectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult<IReadOnlyList<TopicRow>>.Fail("Connection not found.");
+            }
+
             var topics = await operations.ListTopicsAsync(secret, ct);
             var rows = new List<TopicRow>();
             foreach (var topic in topics)

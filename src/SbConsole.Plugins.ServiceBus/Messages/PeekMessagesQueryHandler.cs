@@ -10,14 +10,16 @@ public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, I
         Guid connectionId, string queueName, bool fromDeadLetter,
         long? fromSequenceNumber = null, int maxMessages = 32, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(connectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult<IReadOnlyList<PeekedMessage>>.Fail("Connection not found.");
-        }
-
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(connectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult<IReadOnlyList<PeekedMessage>>.Fail("Connection not found.");
+            }
+
             var messages = await operations.PeekMessagesAsync(secret, queueName, fromDeadLetter, maxMessages, fromSequenceNumber, ct);
             return PluginResult<IReadOnlyList<PeekedMessage>>.Ok(messages);
         }

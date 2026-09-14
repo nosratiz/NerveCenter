@@ -12,16 +12,18 @@ public sealed class SendMessageCommandHandler(IServiceBusOperations operations, 
 {
     public async Task<PluginResult> HandleAsync(SendMessageCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult.Fail("Connection not found.");
-        }
-
         var target = $"{cmd.ConnectionName}/{cmd.QueueName}";
         var request = new SendMessageRequest(cmd.Body, cmd.ContentType, cmd.Properties, cmd.ScheduledEnqueueTime);
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult.Fail("Connection not found.");
+            }
+
             await operations.SendMessageAsync(secret, cmd.QueueName, request, ct);
         }
         catch (Exception ex)

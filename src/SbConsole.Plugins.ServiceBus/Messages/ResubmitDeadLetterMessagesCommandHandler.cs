@@ -10,16 +10,18 @@ public sealed class ResubmitDeadLetterMessagesCommandHandler(IServiceBusOperatio
 {
     public async Task<PluginResult<int>> HandleAsync(ResubmitDeadLetterMessagesCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult<int>.Fail("Connection not found.");
-        }
-
         var target = $"{cmd.ConnectionName}/{cmd.QueueName}";
         int resubmitted;
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult<int>.Fail("Connection not found.");
+            }
+
             resubmitted = await operations.ResubmitDeadLetterMessagesAsync(secret, cmd.QueueName, cmd.SequenceNumbers, ct);
         }
         catch (Exception ex)

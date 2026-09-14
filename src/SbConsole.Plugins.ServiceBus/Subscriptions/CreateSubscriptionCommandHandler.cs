@@ -10,15 +10,17 @@ public sealed class CreateSubscriptionCommandHandler(IServiceBusOperations opera
 {
     public async Task<PluginResult> HandleAsync(CreateSubscriptionCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult.Fail("Connection not found.");
-        }
-
         var target = $"{cmd.ConnectionName}/{cmd.TopicName}/{cmd.SubscriptionName}";
         try
         {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult.Fail("Connection not found.");
+            }
+
             await operations.CreateSubscriptionAsync(secret, cmd.TopicName, new CreateSubscriptionRequest(cmd.SubscriptionName, cmd.MaxDeliveryCount), ct);
         }
         catch (Exception ex)
