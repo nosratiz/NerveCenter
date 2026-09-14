@@ -1,25 +1,60 @@
 @page "/"
+@using Microsoft.AspNetCore.Components.Authorization
 @using SbConsole.Core.Audit
 @using SbConsole.Core.Connections
 @using SbConsole.Core.Data.Entities
+@using SbConsole.Sdk
+@using SbConsole.Web.Auth
+@using SbConsole.Web.Plugins
 @inject ListConnectionsQueryHandler ConnectionsHandler
 @inject ListAuditEntriesQueryHandler AuditHandler
+@inject TestConnectionCommandHandler TestHandler
+@inject PluginRegistry Registry
+@inject IConnectionProvider ConnectionProvider
+@inject ILogger<Home> Logger
+@inject ISnackbar Snackbar
 
 <PageTitle>Dashboard</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-2">Dashboard</MudText>
-<MudText Typo="Typo.body2" Class="mb-4">@_connectionCount connection(s) saved</MudText>
+<div class="d-flex align-center gap-4 mb-4">
+    <MudText Typo="Typo.h4">Dashboard</MudText>
+    <MudSpacer />
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</MudText>
+    <MudButton Class="refresh-dashboard" OnClick="RefreshAsync">Refresh</MudButton>
+</div>
+
+<div class="d-flex flex-wrap gap-4 mb-4">
+    @foreach (var tile in Tiles)
+    {
+        <MudPaper Class="dashboard-tile pa-4" Style="min-width:160px" Elevation="1">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@tile.Label.ToUpperInvariant()</MudText>
+            <MudText Typo="Typo.h4" Color="@(tile.Alert ? Color.Error : Color.Default)">@tile.Value</MudText>
+        </MudPaper>
+    }
+</div>
 
 <MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
-@if (_needsAttention.Count == 0)
+@if (_unreachable.Count == 0)
 {
     <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
 }
 else
 {
-    @* Populated once a plugin reports problems (Plan 3+); intentionally empty for now. *@
+    @foreach (var connection in _unreachable)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-2">
+            <b>@connection.Name</b> unreachable since @connection.LastTestedAt?.ToLocalTime() — @connection.LastTestError
+            <MudButton Class="retry-connection" Style="margin-left:16px" Disabled="@(_retryingConnectionId == connection.Id)" OnClick="@(() => RetryAsync(connection))">Retry</MudButton>
+            @if (_retryingConnectionId == connection.Id)
+            {
+                <MudProgressCircular Class="retry-connection-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+            }
+            <MudLink Href="/connections" Class="ml-4">Edit connection</MudLink>
+        </MudAlert>
+    }
 }
 
 <MudText Typo="Typo.h6" Class="mb-2">Recent activity</MudText>
+<MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">last 10 actions</MudText>
 <MudTable Items="_recentActivity">
     <HeaderContent>
         <MudTh>Time</MudTh>
@@ -41,14 +76,84 @@ else
 <MudLink Href="/audit">Open audit log →</MudLink>
 
 @code {
-    private int _connectionCount;
-    private List<string> _needsAttention = [];
-    private IReadOnlyList<AuditEntry> _recentActivity = [];
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
-    protected override async Task OnInitializedAsync()
+    private int _connectionCount;
+    private List<ConnectionInfo> _unreachable = [];
+    private List<KeyValuePair<string, int>> _pluginMetrics = [];
+    private IReadOnlyList<AuditEntry> _recentActivity = [];
+    private DateTimeOffset _refreshedAt = DateTimeOffset.UtcNow;
+    private Guid? _retryingConnectionId;
+
+    private IEnumerable<(string Label, string Value, bool Alert)> Tiles =>
+    [
+        ("Connections", _connectionCount.ToString(), false),
+        .. _pluginMetrics.Select(m => (m.Key, m.Value.ToString(), false)),
+        ("Unreachable", _unreachable.Count.ToString(), _unreachable.Count > 0),
+    ];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task RefreshAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
     {
-        _connectionCount = (await ConnectionsHandler.HandleAsync()).Count;
+        var connections = await ConnectionsHandler.HandleAsync();
+        _connectionCount = connections.Count;
+        _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
+
+        var metrics = new Dictionary<string, int>();
+        foreach (var plugin in Registry.Plugins)
+        {
+            foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
+            {
+                try
+                {
+                    // GetSecretAsync inside the try, not before it -- see NavMenu.RefreshBadgesAsync's
+                    // identical comment: a throw here must not stop the rest of the connections/plugins
+                    // in this pass.
+                    var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
+                    if (secret is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var metric in await plugin.GetDashboardMetricsAsync(secret))
+                    {
+                        metrics[metric.Label] = metrics.GetValueOrDefault(metric.Label) + metric.Count;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Computing dashboard metrics for connection {ConnectionId} failed; skipping it.", connection.Id);
+                }
+            }
+        }
+
+        _pluginMetrics = [.. metrics];
+
         var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
         _recentActivity = page.Entries;
+        _refreshedAt = DateTimeOffset.UtcNow;
+    }
+
+    private async Task RetryAsync(ConnectionInfo connection)
+    {
+        var actor = await ActorResolver.ResolveAsync(AuthState);
+        _retryingConnectionId = connection.Id;
+        try
+        {
+            var result = await TestHandler.HandleAsync(new TestConnectionCommand(connection.Id, actor));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!.Message, Severity.Error);
+            }
+        }
+        finally
+        {
+            _retryingConnectionId = null;
+        }
+
+        await LoadAsync();
     }
 }

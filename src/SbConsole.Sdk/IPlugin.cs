@@ -40,4 +40,13 @@ public interface IPlugin
     /// </summary>
     Task<int?> GetNavBadgeAsync(string navItemHref, string connectionString, CancellationToken ct = default) =>
         Task.FromResult<int?>(null);
+
+    /// <summary>
+    /// Optional Dashboard KPI metrics for one connection of this plugin's ConnectionKind. The host
+    /// calls this once per connection and sums same-Label metrics into one Dashboard tile per
+    /// label. Returning an empty list means "nothing to report" -- the default implementation does
+    /// exactly that, so a plugin written before this method existed needs no change at all.
+    /// </summary>
+    Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginDashboardMetric>>([]);
 }

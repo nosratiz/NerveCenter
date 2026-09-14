@@ -18,22 +18,24 @@
 }
 else
 {
-    <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged">
-        @foreach (var connection in _connections)
-        {
-            <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
-        }
-    </MudSelect>
-
-    <div class="d-flex align-center gap-2 my-4">
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate">+ Create queue</MudButton>
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged" Style="max-width:260px">
+            @foreach (var connection in _connections)
+            {
+                <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string" Class="queue-filter" Placeholder="Filter queues..." @bind-Value="_filterText" Immediate="true" Style="max-width:260px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+        <MudText Class="queues-summary mud-text-secondary" Typo="Typo.body2">@QueueCount @(QueueCount == 1 ? "queue" : "queues") &middot; @DeadLetterCount dead-lettered</MudText>
+        <MudSpacer />
+        <MudButton Class="create-queue-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreate">+ Create queue</MudButton>
         @if (_loading)
         {
             <MudProgressCircular Class="queues-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }
     </div>
 
-    <MudTable Items="_queues">
+    <MudTable Items="FilteredQueues">
         <HeaderContent>
             <MudTh>Queue</MudTh>
             <MudTh>Active</MudTh>
@@ -77,6 +79,14 @@ else
     // bounded wait doesn't look like a frozen page.
     private bool _loading;
     private string? _deletingQueue;
+    private string _filterText = "";
+
+    private int QueueCount => _queues.Count;
+    private long DeadLetterCount => _queues.Sum(q => q.DeadLetterMessageCount);
+
+    private IEnumerable<QueueSummary> FilteredQueues => string.IsNullOrWhiteSpace(_filterText)
+        ? _queues
+        : _queues.Where(q => q.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
     {

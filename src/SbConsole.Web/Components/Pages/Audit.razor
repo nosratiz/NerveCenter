@@ -18,6 +18,7 @@
         <MudSelectItem T="ActionRisk?" Value="ActionRisk.Destructive">Destructive</MudSelectItem>
     </MudSelect>
     <MudTextField T="string" Label="Search target" @bind-Value="_targetContains" @bind-Value:after="ReloadAsync" />
+    <MudButton Class="reset-audit-filters" OnClick="ResetFiltersAsync">Reset</MudButton>
 </div>
 
 <MudTable Items="_page.Entries">
@@ -87,5 +88,15 @@
     {
         _pageNumber++;
         await LoadAsync();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = null;
+        _toDate = null;
+        _actor = null;
+        _risk = null;
+        _targetContains = null;
+        await ReloadAsync();
     }
 }

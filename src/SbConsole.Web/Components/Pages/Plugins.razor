@@ -4,7 +4,8 @@
 @inject ListPluginsQueryHandler ListHandler
 
 <PageTitle>Plugins</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4">Plugins</MudText>
+<MudText Typo="Typo.h4" Class="mb-2">Plugins</MudText>
+<MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">@_plugins.Count installed</MudText>
 
 <MudTable Items="_plugins">
     <HeaderContent>

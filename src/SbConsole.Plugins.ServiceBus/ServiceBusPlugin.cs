@@ -61,6 +61,20 @@ public sealed class ServiceBusPlugin : IPlugin
         return total > 0 ? (int)total : null;
     }
 
+    public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
+    {
+        var ops = new AzureServiceBusOperations();
+        var queues = await ops.ListQueuesAsync(connectionString, ct);
+        var topics = await ops.ListTopicsAsync(connectionString, ct);
+        var subscriptions = topics.Sum(t => t.SubscriptionCount);
+        return
+        [
+            new PluginDashboardMetric("Queues", queues.Count),
+            new PluginDashboardMetric("Topics", topics.Count),
+            new PluginDashboardMetric("Subscriptions", subscriptions),
+        ];
+    }
+
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`
     // constraint), so there's no DI container to pull a registered IServiceBusOperations from at
     // this layer — construct the real implementation directly, same as any other plugin would.

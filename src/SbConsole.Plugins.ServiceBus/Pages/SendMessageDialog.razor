@@ -6,6 +6,20 @@
         <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @QueueName</MudText>
         <MudTextField id="message-body" @bind-Value="_body" Label="Body" Lines="8" Immediate="true" />
         <MudTextField @bind-Value="_contentType" Label="Content type" />
+        <MudDatePicker Label="Schedule (optional)" @bind-Date="_scheduleDate" />
+        <MudTimePicker Label="Schedule time" @bind-Time="_scheduleTime" Disabled="@(_scheduleDate is null)" />
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Application properties</MudText>
+        @for (var i = 0; i < _properties.Count; i++)
+        {
+            var index = i;
+            <div class="d-flex gap-2 align-center mb-1">
+                <MudTextField Class="property-key" @bind-Value="_properties[index].Key" Placeholder="Key" />
+                <MudTextField Class="property-value" @bind-Value="_properties[index].Value" Placeholder="Value" />
+                <MudIconButton Class="remove-property" Icon="@Icons.Material.Filled.Close" OnClick="@(() => RemoveProperty(index))" />
+            </div>
+        }
+        <MudButton Class="add-property" OnClick="AddProperty">+ Add property</MudButton>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
@@ -28,14 +42,37 @@
 
     private string _body = "";
     private string _contentType = "application/json";
+    private DateTime? _scheduleDate;
+    private TimeSpan? _scheduleTime;
+    private readonly List<PropertyRow> _properties = [];
     private bool _busy;
+
+    private sealed class PropertyRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private void AddProperty() => _properties.Add(new PropertyRow());
+
+    private void RemoveProperty(int index) => _properties.RemoveAt(index);
 
     private async Task Send()
     {
         _busy = true;
         try
         {
-            var result = await SendHandler.HandleAsync(new SendMessageCommand(ConnectionId, ConnectionName, QueueName, _body, _contentType, null, null));
+            DateTimeOffset? scheduled = _scheduleDate is { } date
+                ? new DateTimeOffset(date.Date + (_scheduleTime ?? TimeSpan.Zero), TimeZoneInfo.Local.GetUtcOffset(date))
+                : null;
+
+            var properties = _properties
+                .Where(p => !string.IsNullOrWhiteSpace(p.Key))
+                .ToDictionary(p => p.Key, p => p.Value);
+
+            var result = await SendHandler.HandleAsync(new SendMessageCommand(
+                ConnectionId, ConnectionName, QueueName, _body, _contentType,
+                properties.Count > 0 ? properties : null, scheduled));
             if (result.IsSuccess)
             {
                 MudDialog.Close(DialogResult.Ok(true));

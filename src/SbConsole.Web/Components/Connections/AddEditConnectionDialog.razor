@@ -15,6 +15,7 @@
         </MudSelect>
         <MudTextField id="connection-secret" @bind-Value="_secret" InputType="InputType.Password" Immediate="true"
                       Label="@(Existing is null ? "Connection string" : "Replace connection string (leave blank to keep)")" />
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">Encrypted at rest · never displayed again</MudText>
         <div class="d-flex gap-2 align-center">
             <MudTextField id="connection-tag-input" @bind-Value="_tagInput" Label="Add tag" Immediate="true" />
             <MudButton id="add-tag" OnClick="AddTag">Add</MudButton>

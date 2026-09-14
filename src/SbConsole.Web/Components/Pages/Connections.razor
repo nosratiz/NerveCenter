@@ -10,14 +10,21 @@
 @inject IDialogService DialogService
 
 <PageTitle>Connections</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4">Connections</MudText>
-<MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenAdd" Class="mb-4">+ Add connection</MudButton>
+<MudText Typo="Typo.h4" Class="mb-2">Connections</MudText>
+<MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">@_connections.Count saved</MudText>
 
-<MudTable Items="_connections">
+<div class="d-flex align-center flex-wrap gap-4 mb-4">
+    <MudTextField T="string" Class="connection-filter" Placeholder="Filter by name or tag..." @bind-Value="_filterText" Immediate="true" Style="max-width:280px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+    <MudSpacer />
+    <MudButton Class="add-connection-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenAdd">+ Add connection</MudButton>
+</div>
+
+<MudTable Items="FilteredConnections">
     <HeaderContent>
         <MudTh>Name</MudTh>
         <MudTh>Kind</MudTh>
         <MudTh>Tags</MudTh>
+        <MudTh>Created</MudTh>
         <MudTh>Status</MudTh>
         <MudTh>Actions</MudTh>
     </HeaderContent>
@@ -30,6 +37,7 @@
                 <MudChip T="string" Color="@(string.Equals(tag, "prod", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default)">@tag</MudChip>
             }
         </MudTd>
+        <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@StatusText(context)</MudTd>
         <MudTd>
             <MudButton Class="test-connection" Disabled="@(_testingConnectionId == context.Id)" OnClick="@(() => TestAsync(context))">Test</MudButton>
@@ -42,11 +50,19 @@
         </MudTd>
     </RowTemplate>
 </MudTable>
+<MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Secrets are write-only — stored encrypted, never returned to the browser.</MudText>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
     private IReadOnlyList<ConnectionInfo> _connections = [];
+    private string _filterText = "";
+
+    private IEnumerable<ConnectionInfo> FilteredConnections => string.IsNullOrWhiteSpace(_filterText)
+        ? _connections
+        : _connections.Where(c =>
+            c.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase) ||
+            c.Tags.Any(t => t.Contains(_filterText, StringComparison.OrdinalIgnoreCase)));
 
     // Busy state for the one button on this page that awaits a remote call. A connection test hits
     // a real namespace and took ~9s live with no visual feedback at all. Scoped to the row that was

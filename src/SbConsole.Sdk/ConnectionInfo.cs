@@ -8,7 +8,8 @@ public sealed record ConnectionInfo(
     IReadOnlyList<string> Tags,
     bool? LastTestSucceeded = null,
     DateTimeOffset? LastTestedAt = null,
-    string? LastTestError = null)
+    string? LastTestError = null,
+    DateTimeOffset CreatedAt = default)
 {
     public bool IsProd => Tags.Contains("prod", StringComparer.OrdinalIgnoreCase);
 }
