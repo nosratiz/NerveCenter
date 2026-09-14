@@ -55,6 +55,6 @@ public class SettingsPageTests : BunitContext, IAsyncLifetime
     {
         var cut = Render<Settings>();
 
-        cut.Markup.Should().Contain("max-width:320px");
+        System.Text.RegularExpressions.Regex.Matches(cut.Markup, "max-width:320px").Count.Should().Be(4);
     }
 }

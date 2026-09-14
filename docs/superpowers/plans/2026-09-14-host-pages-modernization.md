@@ -30,7 +30,7 @@
 - Consumes: MudBlazor CSS custom properties already used elsewhere in this codebase — `--mud-palette-lines-inputs`, `--mud-palette-primary`, `--mud-palette-primary-hover`, `--mud-palette-primary-darken`, `--mud-palette-primary-text`, `--mud-palette-surface`, `--mud-palette-text-primary`, `--mud-default-borderradius` (all confirmed present in `MudBlazor.min.css` 9.9.0).
 - Produces: nothing consumed by later tasks (Login is not touched by Task 2 or 3).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/SbConsole.Web.Tests/LoginTests.cs`:
 
@@ -79,13 +79,13 @@ public class LoginTests : BunitContext
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~LoginTests`
 
 Expected: both tests FAIL — `Card_is_flat_with_no_shadow` because the `MudPaper` has no `Elevation` set (defaults to `mud-elevation-1`, not `mud-elevation-0`), and `Password_field_and_submit_button_keep_their_form_wiring` because the input/button don't have the `login-password`/`login-submit` classes yet.
 
-- [ ] **Step 3: Implement — flatten the card and add styling hooks to the native controls**
+- [x] **Step 3: Implement — flatten the card and add styling hooks to the native controls**
 
 Replace the full contents of `src/SbConsole.Web/Components/Pages/Login.razor` with:
 
@@ -161,19 +161,19 @@ Create `src/SbConsole.Web/Components/Pages/Login.razor.css`:
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~LoginTests`
 
 Expected: both tests PASS.
 
-- [ ] **Step 5: Run the full build and test gate**
+- [x] **Step 5: Run the full build and test gate**
 
 Run: `dotnet build -warnaserror && dotnet test`
 
 Expected: build succeeds with no warnings/errors; all tests pass (including the pre-existing `AuthEndpointsTests`, unaffected since it posts directly to `/auth/login` and never renders `Login.razor`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Login.razor src/SbConsole.Web/Components/Pages/Login.razor.css tests/SbConsole.Web.Tests/LoginTests.cs
@@ -203,7 +203,7 @@ EOF
 - Consumes: `--mud-palette-lines-default` (confirmed present in `MudBlazor.min.css` 9.9.0).
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/SbConsole.Web.Tests/HomeTests.cs`, inside the `HomeTests` class (after `Connections_tile_reflects_the_saved_connection_count`):
 
@@ -226,13 +226,13 @@ Add to `tests/SbConsole.Web.Tests/HomeTests.cs`, inside the `HomeTests` class (a
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Dashboard_tiles_are_flat_with_no_shadow`
 
 Expected: FAIL — the tile currently renders with `Elevation="1"`, so it has class `mud-elevation-1`, not `mud-elevation-0`.
 
-- [ ] **Step 3: Implement — drop the shadow, add a themed border**
+- [x] **Step 3: Implement — drop the shadow, add a themed border**
 
 In `src/SbConsole.Web/Components/Pages/Home.razor`, change line 28 from:
 
@@ -246,19 +246,19 @@ to:
         <MudPaper Class="dashboard-tile pa-4" Style="min-width:160px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Dashboard_tiles_are_flat_with_no_shadow`
 
 Expected: PASS.
 
-- [ ] **Step 5: Run the full build and test gate**
+- [x] **Step 5: Run the full build and test gate**
 
 Run: `dotnet build -warnaserror && dotnet test`
 
 Expected: build succeeds; all tests pass, including the pre-existing `Connections_tile_reflects_the_saved_connection_count` (unaffected — it asserts on tile content, not elevation).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Home.razor tests/SbConsole.Web.Tests/HomeTests.cs
@@ -287,7 +287,7 @@ EOF
 - Consumes: nothing new.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/SbConsole.Web.Tests/SettingsPageTests.cs`, inside the `SettingsPageTests` class (after `Saving_persists_instance_name_and_theme`):
 
@@ -301,13 +301,13 @@ Add to `tests/SbConsole.Web.Tests/SettingsPageTests.cs`, inside the `SettingsPag
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Form_fields_are_width_capped_for_visual_consistency`
 
 Expected: FAIL — none of Settings' fields currently set a `max-width`.
 
-- [ ] **Step 3: Implement — cap the text/select/number field widths**
+- [x] **Step 3: Implement — cap the text/select/number field widths**
 
 In `src/SbConsole.Web/Components/Pages/Settings.razor`, replace:
 
@@ -343,19 +343,19 @@ with:
 
 (`MudSwitch` is a compact toggle, not a text-entry field, so it's left uncapped — matching why filter/text inputs elsewhere are capped but buttons and switches aren't.)
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Form_fields_are_width_capped_for_visual_consistency`
 
 Expected: PASS.
 
-- [ ] **Step 5: Run the full build and test gate**
+- [x] **Step 5: Run the full build and test gate**
 
 Run: `dotnet build -warnaserror && dotnet test`
 
 Expected: build succeeds; all tests pass, including the pre-existing `Saving_persists_instance_name_and_theme` (unaffected — it interacts with `#instance-name` and `.save-settings`, neither of which changed).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Settings.razor tests/SbConsole.Web.Tests/SettingsPageTests.cs
@@ -380,13 +380,13 @@ EOF
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Start the app**
+- [x] **Step 1: Start the app**
 
 Run: `dotnet run --project src/SbConsole.Web --launch-profile http`
 
 (If a dev instance is already running on port 5249, reuse it instead of starting a second one.)
 
-- [ ] **Step 2: Verify Login**
+- [x] **Step 2: Verify Login**
 
 Open `http://localhost:5249/login`. Confirm:
 - The card has no drop shadow.
@@ -394,15 +394,15 @@ Open `http://localhost:5249/login`. Confirm:
 - Signing in with the correct admin password (from `SBC_ADMIN_PASSWORD` in `launchSettings.json`) still redirects past login.
 - Signing in with a wrong password still shows "Wrong password." and keeps the same styling.
 
-- [ ] **Step 3: Verify Home**
+- [x] **Step 3: Verify Home**
 
 Open `http://localhost:5249/`. Confirm the dashboard tiles read as flat, bordered blocks with no shadow, in both light and dark theme (toggle via Settings → Theme).
 
-- [ ] **Step 4: Verify Settings**
+- [x] **Step 4: Verify Settings**
 
 Open `http://localhost:5249/settings`. Confirm the Instance name, Theme, Session timeout, and Audit retention fields no longer stretch full-width, and Save/Discard still work.
 
-- [ ] **Step 5: Confirm no regressions on the untouched pages**
+- [x] **Step 5: Confirm no regressions on the untouched pages**
 
 Open Connections, Audit, and Plugins. Confirm they look unchanged from before this plan.
 

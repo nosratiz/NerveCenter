@@ -113,6 +113,7 @@ public class HomeTests : BunitContext, IAsyncLifetime
         var tile = cut.Find(".dashboard-tile");
         tile.ClassList.Should().Contain("mud-elevation-0");
         tile.ClassList.Should().NotContain("mud-elevation-1");
+        tile.GetAttribute("style").Should().Contain("--mud-palette-lines-default");
     }
 
     [Fact]

@@ -14,7 +14,7 @@
 .login-password:focus {
     outline: none;
     border-color: var(--mud-palette-primary);
-    box-shadow: 0 0 0 2px var(--mud-palette-primary-hover);
+    box-shadow: 0 0 0 2px var(--mud-palette-primary-lighten);
 }
 
 .login-submit {
