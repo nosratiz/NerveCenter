@@ -99,6 +99,23 @@ public class HomeTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dashboard_tiles_are_flat_with_no_shadow()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.FindAll(".dashboard-tile").Count > 0);
+
+        var tile = cut.Find(".dashboard-tile");
+        tile.ClassList.Should().Contain("mud-elevation-0");
+        tile.ClassList.Should().NotContain("mud-elevation-1");
+    }
+
+    [Fact]
     public async Task Unreachable_connection_shows_an_alert_with_a_working_retry_button()
     {
         await using (var db = _testDb.CreateDbContext())
