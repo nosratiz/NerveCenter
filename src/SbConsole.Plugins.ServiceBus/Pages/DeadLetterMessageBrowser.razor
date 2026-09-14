@@ -23,6 +23,11 @@
     </div>
 }
 
+@if (Messages.Count == 0 && !Busy)
+{
+    <MudAlert Severity="Severity.Info">No messages found.</MudAlert>
+}
+
 <MudGrid>
     <MudItem xs="5">
         @foreach (var message in Messages)

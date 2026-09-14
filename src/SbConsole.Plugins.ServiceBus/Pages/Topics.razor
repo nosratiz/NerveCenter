@@ -21,15 +21,17 @@
 }
 else
 {
-    <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged">
-        @foreach (var connection in _connections)
-        {
-            <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
-        }
-    </MudSelect>
-
-    <div class="d-flex align-center gap-2 my-4">
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreateTopic">+ Create topic</MudButton>
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged" Style="max-width:260px">
+            @foreach (var connection in _connections)
+            {
+                <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string" Class="topic-filter" Placeholder="Filter topics..." @bind-Value="_filterText" Immediate="true" Style="max-width:260px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+        <MudText Class="topics-summary mud-text-secondary" Typo="Typo.body2">@TopicCount @(TopicCount == 1 ? "topic" : "topics") &middot; @SubscriptionCount @(SubscriptionCount == 1 ? "subscription" : "subscriptions")</MudText>
+        <MudSpacer />
+        <MudButton Class="create-topic-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreateTopic">+ Create topic</MudButton>
         @if (_loading)
         {
             <MudProgressCircular Class="topics-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
@@ -68,7 +70,7 @@ else
             else if (context is SubscriptionRowEntry subRow)
             {
                 var rowKey = $"{subRow.TopicName}/{subRow.Subscription.Name}";
-                <MudTd Style="padding-left:34px">@subRow.Subscription.Name</MudTd>
+                <MudTd Style="padding-left:56px">— @subRow.Subscription.Name</MudTd>
                 <MudTd>@subRow.Subscription.ActiveMessageCount</MudTd>
                 <MudTd>@subRow.Subscription.DeadLetterMessageCount</MudTd>
                 <MudTd>—</MudTd>
@@ -97,8 +99,16 @@ else
     private Guid _selectedConnectionId;
     private bool _loading;
     private string? _deletingEntity;
+    private string _filterText = "";
 
-    private IReadOnlyList<TopicsTableRow> _rows => _topics.SelectMany(FlattenRows).ToList();
+    private int TopicCount => _topics.Count;
+    private int SubscriptionCount => _topics.Sum(t => t.Topic.SubscriptionCount);
+
+    private IEnumerable<TopicRow> FilteredTopics => string.IsNullOrWhiteSpace(_filterText)
+        ? _topics
+        : _topics.Where(t => t.Topic.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<TopicsTableRow> _rows => FilteredTopics.SelectMany(FlattenRows).ToList();
 
     private IEnumerable<TopicsTableRow> FlattenRows(TopicRow topic)
     {
