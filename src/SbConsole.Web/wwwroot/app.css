@@ -39,7 +39,13 @@ body {
 /* Gradient-glass app-bar and drawer (docs/design.md §10 addendum, 2026-09-14): replaces the flush,
    same-as-background app-bar/drawer from the prior sidebar modernization with a translucent,
    blurred gradient that reveals the body glow above. Colors are color-mix()'d from the same
-   tokens as the glow, so both themes stay in sync automatically. */
+   tokens as the glow, so both themes stay in sync automatically. The drawer's color-mix
+   percentages (35%/18%) are intentionally denser than the app-bar's
+   (30%/14%), matching the approved mockup — not a drift to "harmonize" later. Note for future
+   maintainers: backdrop-filter makes both elements a containing block for any
+   position:fixed descendant (e.g. a popover rendered inside the app-bar or
+   drawer would mis-position) — not an issue today since neither holds
+   anything that renders one, but worth knowing before adding one. */
 .mud-appbar {
     background: linear-gradient(100deg, color-mix(in srgb, var(--mud-palette-primary) 30%, transparent), color-mix(in srgb, var(--mud-palette-info) 14%, transparent));
     backdrop-filter: blur(18px) saturate(160%);

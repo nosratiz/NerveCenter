@@ -26,6 +26,8 @@ public static class NocturneTheme
             PrimaryDarken = "#796cbf",
             PrimaryLighten = "#b5abfc",
             TextPrimary = "#e9e9ed",
+            AppbarText = "#e9e9ed",
+            DrawerText = "#e9e9ed",
             TextSecondary = "#e9e9ed8c", // ~55% alpha over TextPrimary, mirroring Nocturne's color-mix(text 55%, transparent)
             Divider = "#e9e9ed29",       // ~16% alpha, mirroring Nocturne's color-mix(text 16%, transparent)
             LinesDefault = "#e9e9ed29",
@@ -68,6 +70,8 @@ public static class NocturneTheme
             PrimaryDarken = "#423a6a",
             PrimaryLighten = "#796cbf",
             TextPrimary = "#292b31",
+            AppbarText = "#292b31",
+            DrawerText = "#292b31",
             TextSecondary = "#292b318c",
             Divider = "#292b3129",
             LinesDefault = "#292b3129",

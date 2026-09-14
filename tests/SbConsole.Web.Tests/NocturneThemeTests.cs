@@ -15,6 +15,8 @@ public class NocturneThemeTests
         palette.Surface.ToString(MudColorOutputFormats.Hex).Should().Be("#232532");
         palette.TextPrimary.ToString(MudColorOutputFormats.Hex).Should().Be("#e9e9ed");
         palette.Primary.ToString(MudColorOutputFormats.Hex).Should().Be("#9184d9");
+        palette.AppbarText.ToString(MudColorOutputFormats.Hex).Should().Be("#e9e9ed");
+        palette.DrawerText.ToString(MudColorOutputFormats.Hex).Should().Be("#e9e9ed");
     }
 
     [Fact]
@@ -28,6 +30,8 @@ public class NocturneThemeTests
         palette.Primary.ToString(MudColorOutputFormats.Hex).Should().Be("#5d5294");
         palette.Background.ToString(MudColorOutputFormats.Hex).Should().Be("#f3f5fe");
         palette.TextPrimary.ToString(MudColorOutputFormats.Hex).Should().Be("#292b31");
+        palette.AppbarText.ToString(MudColorOutputFormats.Hex).Should().Be("#292b31");
+        palette.DrawerText.ToString(MudColorOutputFormats.Hex).Should().Be("#292b31");
     }
 
     [Fact]

@@ -540,3 +540,6 @@ just recolored and retyped.
   for `Divider`/`TextSecondary`), so both Light and Dark theme render correctly
   without any `prefers-color-scheme` branching. Full rationale and the approved
   mockups' color/intensity choices: `docs/superpowers/specs/2026-09-14-glass-shell-design.md`.
+  Because the glow lives on
+  `body`, it also renders behind Login's `EmptyLayout` card — an approved
+  consequence of the whole-app scope, not an oversight.

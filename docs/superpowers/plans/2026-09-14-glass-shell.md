@@ -27,7 +27,7 @@
 - Consumes: `--mud-palette-primary`, `--mud-palette-info`, `--mud-palette-primary-darken`, `--mud-palette-text-primary`, `--mud-palette-surface` (all confirmed present in `MudBlazor.min.css` 9.9.0, and/or set by `NocturneTheme.cs` for both palettes).
 - Produces: nothing consumed by other tasks (Task 2 is docs-only).
 
-- [ ] **Step 1: Add the ambient body glow**
+- [x] **Step 1: Add the ambient body glow**
 
 In `src/SbConsole.Web/wwwroot/app.css`, add this new rule immediately after the existing `.page-content { ... }` rule (after line 18, before the "Collapsed (mini/icon-rail) sidebar" comment):
 
@@ -49,7 +49,7 @@ body {
 }
 ```
 
-- [ ] **Step 2: Make the app-bar and drawer gradient-glass**
+- [x] **Step 2: Make the app-bar and drawer gradient-glass**
 
 In the same file, add these two new rules directly after the body rule from Step 1:
 
@@ -73,7 +73,7 @@ In the same file, add these two new rules directly after the body rule from Step
 }
 ```
 
-- [ ] **Step 3: Let the glow bleed into the content area**
+- [x] **Step 3: Let the glow bleed into the content area**
 
 In the same file, change the existing `.page-content` rule's `background` line (currently line 17: `background: var(--mud-palette-surface);`) to:
 
@@ -93,13 +93,13 @@ Update the comment above `.page-content` (lines 5-14) to note the new behavior �
    docs/superpowers/specs/2026-09-14-glass-shell-design.md.) */
 ```
 
-- [ ] **Step 4: Verify the build is still clean**
+- [x] **Step 4: Verify the build is still clean**
 
 Run: `dotnet build -warnaserror`
 
 Expected: build succeeds, 0 warnings, 0 errors (this task touches no `.cs`/`.razor` file, so this just confirms the CSS edit didn't break anything else).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/SbConsole.Web/wwwroot/app.css
@@ -128,7 +128,7 @@ EOF
 - Consumes: nothing.
 - Produces: nothing.
 
-- [ ] **Step 1: Add a dated addendum to §10 Theming**
+- [x] **Step 1: Add a dated addendum to §10 Theming**
 
 In `docs/design.md`, find the end of §10 (the "Theming (2026-09-11)" section — it ends with the paragraph about "A handful of tests pin the theme's key token values..." just before `## 11.` or the end of the file if there is no §11 yet). Add this new paragraph immediately after that last paragraph of §10, still inside §10:
 
@@ -149,7 +149,7 @@ In `docs/design.md`, find the end of §10 (the "Theming (2026-09-11)" section �
 
 Also update the file's top status/changelog line (currently starting "Status: approved 2026-09-09. Extended 2026-09-10 ... Extended 2026-09-13 ...") to add a new "Extended 2026-09-14 (Glass shell: §10 rewritten for the app-bar/drawer gradient-glass treatment)." clause, following the exact style of the existing entries in that line.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/design.md
