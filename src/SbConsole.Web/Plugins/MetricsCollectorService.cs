@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,7 +19,6 @@ public sealed class MetricsCollectorService(
     ILogger<MetricsCollectorService> logger) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -75,7 +73,8 @@ public sealed class MetricsCollectorService(
                     var metrics = await plugin.GetResourceMetricsAsync(secret, ct);
                     foreach (var metric in metrics)
                     {
-                        await AppendSnapshotAsync(store, connection.Id, metric, ct);
+                        var point = new MetricSnapshotPoint(clock.GetUtcNow(), metric.ActiveCount, metric.DeadLetterCount);
+                        await MetricHistoryStore.AppendAsync(store, connection.Id, metric.ResourceName, point, ct);
                     }
                 }
                 catch (Exception ex)
@@ -84,20 +83,5 @@ public sealed class MetricsCollectorService(
                 }
             }
         }
-    }
-
-    private async Task AppendSnapshotAsync(IPluginStore store, Guid connectionId, PluginResourceMetric metric, CancellationToken ct)
-    {
-        var key = MetricHistoryKey.For(connectionId, metric.ResourceName);
-        var existingJson = await store.GetAsync(key, ct);
-        var points = existingJson is null
-            ? []
-            : JsonSerializer.Deserialize<List<MetricSnapshotPoint>>(existingJson) ?? [];
-
-        points.Add(new MetricSnapshotPoint(clock.GetUtcNow(), metric.ActiveCount, metric.DeadLetterCount));
-        var cutoff = clock.GetUtcNow() - Retention;
-        points.RemoveAll(p => p.At < cutoff);
-
-        await store.SetAsync(key, JsonSerializer.Serialize(points), ct);
     }
 }

@@ -194,6 +194,15 @@ else
                 Snackbar.Add(result.Error!, Severity.Error);
             }
 
+            // Records the count this page just fetched live, so the trend line responds to
+            // whatever the user just did (send, consume, delete, create) immediately instead of
+            // waiting for MetricsCollectorService's next passive 60s tick.
+            foreach (var queue in _queues)
+            {
+                var point = new MetricSnapshotPoint(Clock.GetUtcNow(), queue.ActiveMessageCount, queue.DeadLetterMessageCount);
+                await MetricHistoryStore.AppendAsync(Store, _selectedConnectionId, queue.Name, point);
+            }
+
             await LoadHistoryAsync();
         }
         finally
