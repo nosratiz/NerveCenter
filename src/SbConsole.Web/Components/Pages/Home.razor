@@ -25,7 +25,7 @@
 <div class="d-flex flex-wrap gap-4 mb-4">
     @foreach (var tile in Tiles)
     {
-        <MudPaper Class="dashboard-tile pa-4" Style="min-width:160px" Elevation="1">
+        <MudPaper Class="dashboard-tile pa-4" Style="min-width:160px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
             <MudText Typo="Typo.caption" Class="mud-text-secondary">@tile.Label.ToUpperInvariant()</MudText>
             <MudText Typo="Typo.h4" Color="@(tile.Alert ? Color.Error : Color.Default)">@tile.Value</MudText>
         </MudPaper>

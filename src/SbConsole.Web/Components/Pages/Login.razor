@@ -6,13 +6,12 @@
 <PageTitle>Sign in — SbConsole</PageTitle>
 
 <div style="display:flex;justify-content:center;margin-top:15vh">
-    <MudPaper Class="pa-8" Style="width:360px">
+    <MudPaper Class="pa-8" Style="width:360px" Elevation="0">
         <MudText Typo="Typo.h5" Class="mb-4">SbConsole</MudText>
         <MudText Typo="Typo.body2" Class="mb-4">Self-hosted infrastructure console</MudText>
         <form method="post" action="/auth/login">
-            <input type="password" name="password" placeholder="Admin password"
-                   style="width:100%;padding:8px;margin-bottom:12px" autofocus />
-            <button type="submit" style="width:100%;padding:8px">Sign in</button>
+            <input type="password" name="password" placeholder="Admin password" class="login-password" autofocus />
+            <button type="submit" class="login-submit">Sign in</button>
         </form>
         <MudText Typo="Typo.caption" Class="mt-2">Single shared account · sessions are audited</MudText>
         @if (Failed)
