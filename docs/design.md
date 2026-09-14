@@ -7,6 +7,8 @@ now §6.1). Extended 2026-09-13 (Service Bus plugin, Topics & Subscriptions:
 §3 SDK v1.3, §5 NavMenu badges, §6.2 rewritten against the actual UI
 mockups (`~/Desktop/UI mockups for NerveCenter`) after the first pass was
 drafted without consulting them, §6.3 new Dead-letter overview, §8 updated).
+Extended 2026-09-14 (Glass shell: §10 rewritten for the app-bar/drawer
+gradient-glass treatment).
 SDK version: `SbConsole.Sdk` 1.3.0 — see §3 for the 2026-09-10 additions
 (`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
 `IConfirmationService`), the 2026-09-12 additions/removal
@@ -526,3 +528,15 @@ just recolored and retyped.
 - A handful of tests pin the theme's key token values (background/primary/
   etc. hex codes for both palettes) so an edit to `NocturneTheme.cs` can't
   silently drift from these decisions without a test catching it.
+- **Glass shell (2026-09-14):** the app-bar and drawer no longer stay flush with
+  `--mud-palette-background` — `wwwroot/app.css` now paints them as a translucent,
+  blurred gradient (`.mud-appbar`, `.mud-drawer`) over a new ambient glow added to
+  `body`'s background, with `.page-content` also made partially translucent so the
+  glow bleeds through the content area too. This supersedes this section's earlier
+  "flush shell, no separate nav treatment" line for the app-bar/drawer specifically —
+  the underlying palette tokens (`Background`, `Surface`, `Primary`, etc.) are
+  unchanged; only a new CSS layer sits on top of them. Every new color is built via
+  `color-mix()` over the existing tokens (the same alpha-mixing approach already used
+  for `Divider`/`TextSecondary`), so both Light and Dark theme render correctly
+  without any `prefers-color-scheme` branching. Full rationale and the approved
+  mockups' color/intensity choices: `docs/superpowers/specs/2026-09-14-glass-shell-design.md`.
