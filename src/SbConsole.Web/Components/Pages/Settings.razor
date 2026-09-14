@@ -8,17 +8,17 @@
 <MudText Typo="Typo.h4" Class="mb-4">Settings</MudText>
 
 <MudText Typo="Typo.h6" Class="mb-2">General</MudText>
-<MudTextField id="instance-name" @bind-Value="_instanceName" Label="Instance name" Immediate="true" />
-<MudSelect T="string" @bind-Value="_theme" Label="Theme">
+<MudTextField id="instance-name" @bind-Value="_instanceName" Label="Instance name" Immediate="true" Style="max-width:320px" />
+<MudSelect T="string" @bind-Value="_theme" Label="Theme" Style="max-width:320px">
     <MudSelectItem Value="@("light")">Light</MudSelectItem>
     <MudSelectItem Value="@("dark")">Dark</MudSelectItem>
     <MudSelectItem Value="@("system")">System</MudSelectItem>
 </MudSelect>
-<MudNumericField T="int" @bind-Value="_sessionTimeoutHours" Label="Session timeout (hours)" />
+<MudNumericField T="int" @bind-Value="_sessionTimeoutHours" Label="Session timeout (hours)" Style="max-width:320px" />
 
 <MudText Typo="Typo.h6" Class="mb-2 mt-6">Safety</MudText>
 <MudSwitch T="bool" @bind-Value="_requireTypedConfirmation" Label="Require typed confirmation on prod-tagged targets" />
-<MudNumericField T="int" @bind-Value="_auditRetentionDays" Label="Audit retention (days)" />
+<MudNumericField T="int" @bind-Value="_auditRetentionDays" Label="Audit retention (days)" Style="max-width:320px" />
 
 <div class="d-flex gap-2 mt-4">
     <MudButton Class="save-settings" Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync">Save changes</MudButton>

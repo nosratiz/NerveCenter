@@ -49,4 +49,12 @@ public class SettingsPageTests : BunitContext, IAsyncLifetime
         cut.WaitForAssertion(() =>
             settings.GetAsync("instance.name").GetAwaiter().GetResult().Should().Be("Platform Ops"));
     }
+
+    [Fact]
+    public void Form_fields_are_width_capped_for_visual_consistency()
+    {
+        var cut = Render<Settings>();
+
+        cut.Markup.Should().Contain("max-width:320px");
+    }
 }
