@@ -60,4 +60,19 @@ public interface IPlugin
     /// </summary>
     Task<IReadOnlyList<PluginResourceMetric>> GetResourceMetricsAsync(string connectionString, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PluginResourceMetric>>([]);
+
+    /// <summary>
+    /// Optional Dashboard "Needs attention" problems for one connection of this plugin's
+    /// ConnectionKind (e.g. a dead-letter backlog, a disabled subscription). The host calls this
+    /// once per connection and merges the results with its own host-level problems (e.g. an
+    /// unreachable connection) into one Needs-attention list. connectionId and store are needed
+    /// because a plugin may want to read its own per-connection metric history (see
+    /// MetricHistoryStore) to compute a problem like "growing" -- something GetDashboardMetricsAsync
+    /// has no way to express. Returning an empty list means "nothing to report" -- the default
+    /// implementation does exactly that, so a plugin written before this method existed needs no
+    /// change at all.
+    /// </summary>
+    Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
+        Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginDashboardProblem>>([]);
 }
