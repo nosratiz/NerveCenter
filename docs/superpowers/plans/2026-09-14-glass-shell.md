@@ -169,13 +169,15 @@ EOF
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Start the app**
+- [x] **Step 1: Start the app**
 
 Run: `dotnet run --project src/SbConsole.Web --launch-profile http`
 
 (If a dev instance is already running on port 5249, reuse it instead of starting a second one.)
 
-- [ ] **Step 2: Verify Dark theme**
+Ran on a dedicated throwaway port (5277) with disposable dev credentials in this worktree, to avoid touching any dev instance already running elsewhere.
+
+- [x] **Step 2: Verify Dark theme**
 
 With Settings → Theme set to Dark, open the Dashboard. Confirm:
 - The app-bar and drawer read as a distinct, colored, blurred gradient-glass layer — not flush with the content.
@@ -183,16 +185,22 @@ With Settings → Theme set to Dark, open the Dashboard. Confirm:
 - Text and table content in the content area is still legible against the translucent background.
 - Collapse the drawer to its icon-only rail (the menu toggle) and confirm the glass treatment still looks correct in that state.
 
-- [ ] **Step 3: Verify Light theme**
+Confirmed: all four checks passed.
+
+- [x] **Step 3: Verify Light theme**
 
 Switch Settings → Theme to Light. Repeat the same checks — the gradient/glow should use the Light palette's tones (via the same `color-mix()` rules) and still read as intentional, not washed out or broken.
 
-- [ ] **Step 4: Confirm Login is unaffected**
+Confirmed: Light theme correctly re-derives the gradient/glow via `color-mix()`, content stays legible, reads as intentional.
 
-Sign out (or open `/login` directly) and confirm Login's flat card still renders exactly as it did before this plan — no app-bar/drawer exists on that page, so it should be completely unchanged.
+- [x] **Step 4: Check Login**
 
-- [ ] **Step 5: Spot-check another content-heavy page**
+~~Confirm Login is unaffected~~ — **finding, not a pass/fail check as originally written.** The plan assumed Login (rendered under `EmptyLayout`, no app-bar/drawer) would be untouched. That assumption was wrong: the ambient glow added to `body` in Task 1 is not scoped to the main app shell, and `body` is shared by every page's layout, Login's included. Login now also shows the ambient glow behind its flat card. Raised to the user as a scope decision (not fixed unilaterally, since the design doc had explicitly listed this as a non-goal) — **decision: keep the glow on Login too**, as consistent with the already-approved "whole app" scope. `docs/superpowers/specs/2026-09-14-glass-shell-design.md` §2 updated to record this correction.
+
+- [x] **Step 5: Spot-check another content-heavy page**
 
 Open Connections or Audit (a table-heavy page) in both themes and confirm the table data stays legible with the translucent content background.
 
-No commit for this task — it's a verification-only step confirming Tasks 1-2 together.
+Confirmed: Connections table fully legible in both themes.
+
+No commit for this task itself — it's a verification-only step confirming Tasks 1-2 together. (The §2 non-goals correction it surfaced was committed separately as a documentation fix.)

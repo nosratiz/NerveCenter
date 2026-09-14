@@ -19,7 +19,7 @@ Approved through iterative visual mockups (browser-based brainstorming companion
 
 - No `NocturneTheme.cs` palette changes — `Background`, `Surface`, `Primary`, `Divider`, etc. are untouched.
 - No changes to component shapes, spacing, typography, or the Mini-drawer collapse behavior.
-- No changes to Login — it renders under `EmptyLayout`, which has no app-bar or drawer, so this design doesn't touch it. (Login's own flat-card treatment from the prior modernization phase is unaffected.)
+- No changes to Login's own card/form treatment (from the prior modernization phase) — its flat, no-shadow `MudPaper` and themed native form controls are untouched. **Correction from the original draft of this design:** the ambient body glow (§3) is a `body`-level CSS rule, and `body` is shared by every page regardless of layout — including Login's `EmptyLayout`, which has no app-bar/drawer to scope the glow away from. The original assumption that "Login renders under a layout with no app-bar/drawer, so this design doesn't touch it" turned out to be wrong: the glow does reach Login too. Manually verified and explicitly approved as acceptable (consistent with the "whole app" glow scope decided in §1) rather than fixed — Login intentionally also shows the ambient glow behind its card.
 - No new interactive behavior — this is a CSS-only visual change.
 
 ## 3. Technical approach
