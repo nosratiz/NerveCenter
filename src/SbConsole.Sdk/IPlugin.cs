@@ -30,4 +30,14 @@ public interface IPlugin
     /// secret — never the connection ID, so this has no dependency on the host's DbContext.
     /// </summary>
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
+
+    /// <summary>
+    /// Optional live badge for a specific nav item (matched by exact Href), for one connection.
+    /// The host calls this once per connection of the plugin's ConnectionKind and sums the non-null
+    /// results into one badge per nav item (see NavMenu.razor). Returning null means "nothing to
+    /// report for this href" -- the default implementation does exactly that, so a plugin written
+    /// before this method existed, or one with nothing to badge, needs no change at all.
+    /// </summary>
+    Task<int?> GetNavBadgeAsync(string navItemHref, string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<int?>(null);
 }

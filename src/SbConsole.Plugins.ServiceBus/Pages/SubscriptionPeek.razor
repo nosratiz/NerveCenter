@@ -1,17 +1,28 @@
-@* Message browser: peeks a queue's active messages, or its dead-letter sub-queue when DeadLetter
-   is set. Dead-letter mode adds multi-select resubmit and a queue-wide dead-letter purge. *@
-@page "/p/azure-servicebus/queues/{QueueName}/peek"
+@* Message browser for a subscription's messages/dead-letter sub-queue -- same shape as
+   Peek.razor, sharing DeadLetterMessageBrowser (Task 6), applying the same IConnectionProvider-
+   sourced IsProd/ConnectionName pattern that Peek.razor only gained after a Critical finding in
+   the Queues plan's final review. This page never trusts IsProd/ConnectionName off the URL. *@
+@page "/p/azure-servicebus/topics/{TopicName}/subscriptions/{SubscriptionName}/peek"
 @using SbConsole.Plugins.ServiceBus.Client
 @using SbConsole.Plugins.ServiceBus.Messages
 @using SbConsole.Sdk
-@inject PeekMessagesQueryHandler PeekHandler
-@inject ResubmitDeadLetterMessagesCommandHandler ResubmitHandler
-@inject PurgeDeadLetterMessagesCommandHandler PurgeHandler
+@inject PeekSubscriptionMessagesQueryHandler PeekHandler
+@inject ResubmitSubscriptionDeadLetterMessagesCommandHandler ResubmitHandler
+@inject PurgeSubscriptionDeadLetterMessagesCommandHandler PurgeHandler
+@inject IConnectionProvider Connections
 @inject IConfirmationService Confirmation
 @inject ISnackbar Snackbar
 
-<PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @QueueName</PageTitle>
-<h1>@(DeadLetter ? "Dead-letter" : "Peek"): @QueueName</h1>
+<PageTitle>@(DeadLetter ? "Dead-letter" : "Peek") — @SubscriptionName</PageTitle>
+<h1>@(DeadLetter ? "Dead-letter" : "Peek"): @TopicName / @SubscriptionName</h1>
+
+@if (DeadLetter)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-2">
+        Resubmitting republishes onto the topic <b>@TopicName</b>, not directly into this subscription — the message
+        is re-evaluated against every subscription's filters, so it may also reach other subscriptions.
+    </MudAlert>
+}
 
 <DeadLetterMessageBrowser
     Messages="_messages"
@@ -20,45 +31,34 @@
     Selected="_selected"
     Busy="_busy"
     CanPurge="_connection is not null"
-    PurgeLabel="Purge queue"
+    PurgeLabel="Purge subscription"
     OnSelect="@(m => _selected = m)"
     OnToggleSelection="@(t => ToggleSelection(t.SequenceNumber, t.Selected))"
     OnResubmitSelected="ResubmitSelectedAsync"
     OnPurge="PurgeAsync" />
 
 @code {
-    [Parameter] public string QueueName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public string SubscriptionName { get; set; } = "";
     [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
     [SupplyParameterFromQuery] public bool DeadLetter { get; set; }
     [SupplyParameterFromQuery] public long? DeadLetterCount { get; set; }
 
-    [Inject] private IConnectionProvider Connections { get; set; } = default!;
-
     private IReadOnlyList<PeekedMessage> _messages = [];
     private PeekedMessage? _selected;
     private readonly HashSet<long> _selectedSequenceNumbers = [];
-
-    // See the busy-state note on Queues.razor. One flag for the whole dead-letter toolbar here,
-    // because peek/resubmit/purge all target the same sub-queue and must not overlap.
     private bool _busy;
-    private (Guid ConnectionId, string QueueName, bool DeadLetter)? _lastLoaded;
+    private (Guid ConnectionId, string TopicName, string SubscriptionName, bool DeadLetter)? _lastLoaded;
 
-    // ConnectionName and IsProd used to be [SupplyParameterFromQuery], but that made the
-    // prod-purge typed-confirmation gate trivially bypassable: a client (or a hand-typed URL)
-    // could simply omit isProd and silently downgrade a prod dead-letter purge to a plain
-    // two-button confirm. IsProd/Name are security-relevant, so they're looked up from the
-    // real connection record instead of trusted off the URL -- ConnectionId/DeadLetter stay as
-    // query parameters since they're not security-relevant the same way.
+    // ConnectionName and IsProd are looked up from the real connection record instead of being
+    // trusted off the URL -- see Peek.razor's identical comment. This page is greenfield, so this
+    // is the pattern from the start rather than a retrofit: ConnectionId/DeadLetter stay as query
+    // parameters since they're not security-relevant the same way.
     private ConnectionInfo? _connection;
 
-    // Blazor reuses this component instance across same-route navigations (e.g. flipping
-    // DeadLetter or ConnectionId in the query string while QueueName stays the same), so
-    // OnInitializedAsync only runs once per instance and would leave the message list stale.
-    // OnParametersSetAsync runs on every such navigation, so the reload lives here instead --
-    // guarded against re-running on renders that don't actually change these parameters.
     protected override async Task OnParametersSetAsync()
     {
-        var current = (ConnectionId, QueueName, DeadLetter);
+        var current = (ConnectionId, TopicName, SubscriptionName, DeadLetter);
         if (_lastLoaded == current)
         {
             return;
@@ -75,7 +75,7 @@
         _busy = true;
         try
         {
-            var result = await PeekHandler.HandleAsync(ConnectionId, QueueName, DeadLetter);
+            var result = await PeekHandler.HandleAsync(ConnectionId, TopicName, SubscriptionName, DeadLetter);
             _selectedSequenceNumbers.Clear();
             if (result.IsSuccess)
             {
@@ -113,7 +113,8 @@
         _busy = true;
         try
         {
-            var result = await ResubmitHandler.HandleAsync(new ResubmitDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName, [.. _selectedSequenceNumbers]));
+            var result = await ResubmitHandler.HandleAsync(new ResubmitSubscriptionDeadLetterMessagesCommand(
+                ConnectionId, _connection?.Name ?? "", TopicName, SubscriptionName, [.. _selectedSequenceNumbers]));
             if (result.IsSuccess)
             {
                 Snackbar.Add($"{result.Value} of {requested} resubmitted", Severity.Success);
@@ -133,13 +134,8 @@
 
     private async Task PurgeAsync()
     {
-        // DeadLetterCount comes from the Queues page's per-row live count (Fix D): _messages.Count
-        // is capped at the peek page size (32), so it would badly understate the confirmation
-        // prompt's "this will purge N item(s)" warning on a large dead-letter queue. It's only a
-        // display number -- unlike IsProd below, which must come from the trusted connection
-        // record rather than the URL, this one being slightly stale by click time is fine.
         var count = DeadLetterCount.HasValue ? (int)DeadLetterCount.Value : _messages.Count;
-        var confirmed = await Confirmation.ConfirmAsync("Purge", QueueName, _connection?.IsProd ?? false, count: count);
+        var confirmed = await Confirmation.ConfirmAsync("Purge", SubscriptionName, _connection?.IsProd ?? false, count: count);
         if (!confirmed)
         {
             return;
@@ -148,7 +144,7 @@
         _busy = true;
         try
         {
-            var result = await PurgeHandler.HandleAsync(new PurgeDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", QueueName));
+            var result = await PurgeHandler.HandleAsync(new PurgeSubscriptionDeadLetterMessagesCommand(ConnectionId, _connection?.Name ?? "", TopicName, SubscriptionName));
             if (!result.IsSuccess)
             {
                 Snackbar.Add(result.Error!, Severity.Error);
