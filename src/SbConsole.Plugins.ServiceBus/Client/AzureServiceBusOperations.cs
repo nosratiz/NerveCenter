@@ -534,4 +534,33 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
         return entries;
     }
+
+    public async Task<IReadOnlyList<RuleSummary>> ListRulesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var rules = new List<RuleSummary>();
+        await foreach (var props in adminClient.GetRulesAsync(topicName, subscriptionName, ct).WithCancellation(ct))
+        {
+            // Every rule this plugin creates is a SqlRuleFilter (CreateRuleAsync below never
+            // creates any other kind), but a rule created by some other tool (portal, CLI,
+            // ARM template) could be a CorrelationRuleFilter or TrueRuleFilter -- ToString()
+            // keeps this list from throwing on a filter shape this plugin doesn't build itself.
+            var expression = props.Filter is SqlRuleFilter sqlFilter ? sqlFilter.SqlExpression : props.Filter.ToString() ?? "";
+            rules.Add(new RuleSummary(props.Name, expression));
+        }
+
+        return rules;
+    }
+
+    public async Task CreateRuleAsync(string connectionString, string topicName, string subscriptionName, CreateRuleRequest request, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.CreateRuleAsync(topicName, subscriptionName, new CreateRuleOptions(request.Name, new SqlRuleFilter(request.SqlExpression)), ct);
+    }
+
+    public async Task DeleteRuleAsync(string connectionString, string topicName, string subscriptionName, string ruleName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.DeleteRuleAsync(topicName, subscriptionName, ruleName, ct);
+    }
 }
