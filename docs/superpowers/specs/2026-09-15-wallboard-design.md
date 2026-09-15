@@ -1,6 +1,6 @@
 # Ops wallboard — Design
 
-Status: draft, 2026-09-15.
+Status: implemented, 2026-09-15.
 
 ## 1. Context
 

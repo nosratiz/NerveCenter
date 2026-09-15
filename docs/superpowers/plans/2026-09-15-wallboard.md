@@ -1,6 +1,6 @@
 # Ops Wallboard Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship a separate `/wallboard` kiosk-style page — live tiles, an Active/Dead-lettered trend chart, a dead-letter growth chart, and a per-namespace backlog breakdown — per `docs/superpowers/specs/2026-09-15-wallboard-design.md`.
 
@@ -29,7 +29,7 @@
 
 No dedicated test — same "no `SbConsole.Sdk` test project, verified by build + consumers" convention as every other SDK record/default-method addition in this codebase (`PluginDashboardProblem`, `PluginDashboardMetric`, etc.).
 
-- [ ] **Step 1: Add the `OldestDeadLetterEntry` record**
+- [x] **Step 1: Add the `OldestDeadLetterEntry` record**
 
 ```csharp
 // src/SbConsole.Sdk/OldestDeadLetterEntry.cs
@@ -43,7 +43,7 @@ namespace SbConsole.Sdk;
 public sealed record OldestDeadLetterEntry(string ResourceName, DateTimeOffset EnqueuedTime, long DeadLetterCount);
 ```
 
-- [ ] **Step 2: Add the default `GetOldestDeadLetterAsync` method to `IPlugin`**
+- [x] **Step 2: Add the default `GetOldestDeadLetterAsync` method to `IPlugin`**
 
 In `src/SbConsole.Sdk/IPlugin.cs`, add after the existing `GetDashboardProblemsAsync` default method (before the closing `}` of the interface):
 
@@ -61,12 +61,12 @@ In `src/SbConsole.Sdk/IPlugin.cs`, add after the existing `GetDashboardProblemsA
         Task.FromResult<OldestDeadLetterEntry?>(null);
 ```
 
-- [ ] **Step 3: Build the solution**
+- [x] **Step 3: Build the solution**
 
 Run: `dotnet build -warnaserror`
 Expected: Build succeeds (0 errors, 0 warnings).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/SbConsole.Sdk/OldestDeadLetterEntry.cs src/SbConsole.Sdk/IPlugin.cs
@@ -89,7 +89,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 Pure, synchronous, no I/O — the test leverage point for the wallboard's chart data, same role `DashboardProblems` played for Piece A.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 // tests/SbConsole.Web.Tests/WallboardAggregatorTests.cs
@@ -158,12 +158,12 @@ public class WallboardAggregatorTests
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardAggregatorTests`
 Expected: FAIL to compile — `WallboardAggregator` does not exist yet.
 
-- [ ] **Step 3: Implement `WallboardAggregator.BucketAndSum`**
+- [x] **Step 3: Implement `WallboardAggregator.BucketAndSum`**
 
 ```csharp
 // src/SbConsole.Web/Wallboard/WallboardAggregator.cs
@@ -217,12 +217,12 @@ public static class WallboardAggregator
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardAggregatorTests`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/SbConsole.Web/Wallboard/WallboardAggregator.cs tests/SbConsole.Web.Tests/WallboardAggregatorTests.cs
@@ -242,7 +242,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `WallboardAggregator.SummarizeGrowth(IReadOnlyDictionary<string, IReadOnlyList<MetricSnapshotPoint>> historyByResourceLabel, TimeSpan window, DateTimeOffset now) -> string`. Task 5 (`Wallboard.razor`) consumes this exact signature. The dictionary key is a caller-supplied display label (`Wallboard.razor` will pass `"{connectionName} / {resourceName}"` so two different connections' same-named queues don't collide) — this function treats it as an opaque display string, not a parsed identifier.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/SbConsole.Web.Tests/WallboardAggregatorTests.cs`:
 
@@ -300,12 +300,12 @@ Add to `tests/SbConsole.Web.Tests/WallboardAggregatorTests.cs`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardAggregatorTests`
 Expected: FAIL to compile — `SummarizeGrowth` does not exist yet.
 
-- [ ] **Step 3: Implement `SummarizeGrowth`**
+- [x] **Step 3: Implement `SummarizeGrowth`**
 
 Add to `src/SbConsole.Web/Wallboard/WallboardAggregator.cs`, inside the `WallboardAggregator` class:
 
@@ -346,17 +346,17 @@ Add to `src/SbConsole.Web/Wallboard/WallboardAggregator.cs`, inside the `Wallboa
     private static string FormatWindow(TimeSpan window) => $"{(int)window.TotalHours}h";
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardAggregatorTests`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Run the full suite and build**
+- [x] **Step 5: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Wallboard/WallboardAggregator.cs tests/SbConsole.Web.Tests/WallboardAggregatorTests.cs
@@ -378,7 +378,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 Like `GetDashboardProblemsAsync`/`GetDashboardMetricsAsync`, this talks to the real Azure SDK and has no dedicated unit test — verified by build plus the manual check in Task 8.
 
-- [ ] **Step 1: Implement `GetOldestDeadLetterAsync`**
+- [x] **Step 1: Implement `GetOldestDeadLetterAsync`**
 
 Add to `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, after `GetDashboardProblemsAsync`:
 
@@ -419,12 +419,12 @@ Add to `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, after `GetDashboa
     }
 ```
 
-- [ ] **Step 2: Build and run the full suite**
+- [x] **Step 2: Build and run the full suite**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green (no test count change — this method has no dedicated test).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs
@@ -447,7 +447,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 This task is data/merge logic only — rendered as plain-text markup for now (no chart/final layout yet; that's Task 6) so it's independently testable, same split Piece A used between its Task 6 and Task 7.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 // tests/SbConsole.Web.Tests/WallboardTests.cs
@@ -608,12 +608,12 @@ public class WallboardTests : BunitContext, IAsyncLifetime
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardTests`
 Expected: FAIL to compile — `Wallboard` component does not exist yet.
 
-- [ ] **Step 3: Implement `Wallboard.razor`'s data layer**
+- [x] **Step 3: Implement `Wallboard.razor`'s data layer**
 
 ```razor
 @page "/wallboard"
@@ -763,17 +763,17 @@ ago baseline), and the field's type changed from `long` to `long?` so "no 1h-old
 `EmptyLayout` is the existing minimal layout (`ThemedRoot` + `@Body`, already used
 by Login) — no new layout component.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardTests`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Run the full suite and build**
+- [x] **Step 5: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Wallboard.razor tests/SbConsole.Web.Tests/WallboardTests.cs
@@ -805,7 +805,7 @@ signature (IDE go-to-definition on `MudChart`/`ChartSeries`/`ChartOptions`) rath
 guessing further — and report back with what you found if it differs, rather than
 silently reshaping the data layer to fit a guess.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/SbConsole.Web.Tests/WallboardTests.cs`:
 
@@ -846,12 +846,12 @@ Add to `tests/SbConsole.Web.Tests/WallboardTests.cs`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardTests`
 Expected: FAIL — no `.range-toggle-1h`/`.range-toggle-24h`/`a.namespace-fix-link` elements exist yet.
 
-- [ ] **Step 3: Replace `Wallboard.razor`'s markup with the full layout**
+- [x] **Step 3: Replace `Wallboard.razor`'s markup with the full layout**
 
 Replace everything from `<PageTitle>` to the `@code` block with:
 
@@ -954,17 +954,17 @@ Add `@using MudBlazor.Charts` near the top of the file (alongside the existing `
 lines) if `ChartSeries<T>`/`ChartType` don't resolve without it — check by building
 first; MudBlazor's top-level namespace may already export these.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~WallboardTests`
 Expected: PASS (all `WallboardTests`, old and new).
 
-- [ ] **Step 5: Run the full suite and build**
+- [x] **Step 5: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Wallboard.razor tests/SbConsole.Web.Tests/WallboardTests.cs
@@ -983,7 +983,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Interfaces:** none new — pure markup addition.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/SbConsole.Web.Tests/HomeTests.cs`:
 
@@ -997,12 +997,12 @@ Add to `tests/SbConsole.Web.Tests/HomeTests.cs`:
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Header_links_to_the_wallboard`
 Expected: FAIL — no `a.open-wallboard` element exists yet.
 
-- [ ] **Step 3: Add the link**
+- [x] **Step 3: Add the link**
 
 In `src/SbConsole.Web/Components/Pages/Home.razor`, in the header `<div>` (the one containing the "Dashboard" title, `HeaderSummary`, and the Refresh button), add a link before the Refresh `MudButton`:
 
@@ -1012,17 +1012,17 @@ In `src/SbConsole.Web/Components/Pages/Home.razor`, in the header `<div>` (the o
 
 placed immediately after the `<MudSpacer />` line and before the "refreshed" caption `MudText`, so it reads left-to-right as: title, summary, spacer, wallboard link, refreshed-at caption, refresh button.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~Header_links_to_the_wallboard`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite and build**
+- [x] **Step 5: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Home.razor tests/SbConsole.Web.Tests/HomeTests.cs
@@ -1037,12 +1037,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Full build and test suite**
+- [x] **Step 1: Full build and test suite**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: 0 warnings, 0 errors, all tests green.
 
-- [ ] **Step 2: Run the app and check `/wallboard` in a browser**
+- [x] **Step 2: Run the app and check `/wallboard` in a browser**
 
 Run: `dotnet run --project src/SbConsole.Web` (with the required `SBC_*` bootstrap
 environment variables — see `BootstrapOptions.FromEnvironment`).
@@ -1062,7 +1062,7 @@ Confirm, per spec §9 and this plan's constraints:
   to `/connections`.
 - No literal "Incoming/min" or "Completed/min" label appears anywhere — only "Active".
 
-- [ ] **Step 3: Report results**
+- [x] **Step 3: Report results**
 
 If any check fails, fix the underlying code (not the check) and re-run from Step 1. Once
 everything passes, the feature is complete — no commit needed for this task (verification
