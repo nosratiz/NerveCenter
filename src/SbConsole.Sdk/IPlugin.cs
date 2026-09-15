@@ -75,4 +75,16 @@ public interface IPlugin
     Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PluginDashboardProblem>>([]);
+
+    /// <summary>
+    /// Optional single oldest dead-lettered message across all of this connection's resources, for
+    /// the wallboard's "Oldest message" tile. connectionId is accepted for signature symmetry with
+    /// GetDashboardProblemsAsync but unused by the reference implementation -- a peek needs no
+    /// per-connection state. Returning null means "nothing dead-lettered" -- the default
+    /// implementation does exactly that, so a plugin written before this method existed needs no
+    /// change at all.
+    /// </summary>
+    Task<OldestDeadLetterEntry?> GetOldestDeadLetterAsync(
+        Guid connectionId, string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<OldestDeadLetterEntry?>(null);
 }
