@@ -107,6 +107,56 @@ public sealed class ServiceBusPlugin : IPlugin
         return problems;
     }
 
+    public async Task<OldestDeadLetterEntry?> GetOldestDeadLetterAsync(
+        Guid connectionId, string connectionString, CancellationToken ct = default)
+    {
+        var ops = new AzureServiceBusOperations();
+        var queues = await ops.ListQueuesAsync(connectionString, ct);
+        var dlqQueues = queues.Where(q => q.DeadLetterMessageCount > 0).ToList();
+        if (dlqQueues.Count == 0)
+        {
+            return null;
+        }
+
+        // One peek per DLQ-bearing queue, in parallel -- the exact fan-out shape the Dashboard
+        // redesign's final review flagged for GetDashboardProblemsAsync's subscription fetch;
+        // built parallel here from the start rather than serial-then-fixed. Bounded by a semaphore
+        // so a namespace with many DLQ-bearing queues doesn't open that many simultaneous AMQP
+        // connections on every wallboard load -- each PeekMessagesAsync call opens its own
+        // ServiceBusClient (AzureServiceBusOperations), and this is the only caller unbounded here.
+        const int MaxConcurrentPeeks = 8;
+        using var throttle = new SemaphoreSlim(MaxConcurrentPeeks);
+        var peeks = await Task.WhenAll(dlqQueues.Select(async q =>
+        {
+            await throttle.WaitAsync(ct);
+            try
+            {
+                return await ops.PeekMessagesAsync(connectionString, q.Name, fromDeadLetter: true, maxMessages: 1, fromSequenceNumber: null, ct);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        }));
+
+        OldestDeadLetterEntry? oldest = null;
+        for (var i = 0; i < dlqQueues.Count; i++)
+        {
+            var message = peeks[i].FirstOrDefault();
+            if (message is null)
+            {
+                continue;
+            }
+
+            if (oldest is null || message.EnqueuedTime < oldest.EnqueuedTime)
+            {
+                oldest = new OldestDeadLetterEntry(dlqQueues[i].Name, message.EnqueuedTime, dlqQueues[i].DeadLetterMessageCount);
+            }
+        }
+
+        return oldest;
+    }
+
     public async Task<IReadOnlyList<PluginResourceMetric>> GetResourceMetricsAsync(string connectionString, CancellationToken ct = default)
     {
         var queues = await new AzureServiceBusOperations().ListQueuesAsync(connectionString, ct);
