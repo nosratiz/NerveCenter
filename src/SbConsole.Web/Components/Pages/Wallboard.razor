@@ -1,0 +1,134 @@
+@page "/wallboard"
+@layout EmptyLayout
+@using SbConsole.Core.Audit
+@using SbConsole.Core.Connections
+@using SbConsole.Sdk
+@using SbConsole.Web.Plugins
+@using SbConsole.Web.Wallboard
+@inject ListConnectionsQueryHandler ConnectionsHandler
+@inject ListAuditEntriesQueryHandler AuditHandler
+@inject PluginRegistry Registry
+@inject IConnectionProvider ConnectionProvider
+@inject IPluginStoreFactory PluginStoreFactory
+@inject ILogger<Wallboard> Logger
+@inject TimeProvider Clock
+
+<PageTitle>Wallboard</PageTitle>
+<div>
+    <p>Active: @_activeCount (@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute)</p>
+    <p>Dead-lettered: @_deadLetterTotal (@(_deadLetterDeltaLastHour >= 0 ? "+" : "")@_deadLetterDeltaLastHour / 1h)</p>
+    @if (_oldestDeadLetter is { } oldest)
+    {
+        <p>Oldest: @FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime) — @oldest.ResourceName · @oldest.DeadLetterCount msgs</p>
+    }
+    <p>@_growthSummary</p>
+    @foreach (var (connection, count) in _namespaceBacklog)
+    {
+        <p class="namespace-backlog-row">@connection.Name: @count</p>
+    }
+</div>
+
+@code {
+    private List<ConnectionInfo> _connections = [];
+    private List<ConnectionInfo> _unreachable = [];
+    private List<(ConnectionInfo Connection, int DeadLetterCount)> _namespaceBacklog = [];
+    private long _activeCount;
+    private long _activeDeltaLastMinute;
+    private long _deadLetterTotal;
+    private long _deadLetterDeltaLastHour;
+    private OldestDeadLetterEntry? _oldestDeadLetter;
+    private IReadOnlyList<WallboardAggregator.Bucket> _buckets1h = [];
+    private IReadOnlyList<WallboardAggregator.Bucket> _buckets24h = [];
+    private string _growthSummary = "";
+    private List<(DateTimeOffset At, string ConnectionName)> _events = [];
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connections = await ConnectionsHandler.HandleAsync();
+        _connections = [.. connections];
+        _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
+
+        var namespaceBacklog = new List<(ConnectionInfo, int)>();
+        var allHistories = new List<IReadOnlyList<MetricSnapshotPoint>>();
+        var historyByLabel = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
+        OldestDeadLetterEntry? oldest = null;
+
+        foreach (var plugin in Registry.Plugins)
+        {
+            var store = PluginStoreFactory.For(plugin.Id);
+            foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
+            {
+                try
+                {
+                    var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
+                    if (secret is null)
+                    {
+                        continue;
+                    }
+
+                    var deadLettered = 0;
+                    foreach (var metric in await plugin.GetDashboardMetricsAsync(secret))
+                    {
+                        if (metric.Label == "Dead-lettered")
+                        {
+                            deadLettered += metric.Count;
+                        }
+                    }
+
+                    if (deadLettered > 0)
+                    {
+                        namespaceBacklog.Add((connection, deadLettered));
+                    }
+
+                    var resources = await plugin.GetResourceMetricsAsync(secret);
+                    var histories = await Task.WhenAll(resources.Select(async r =>
+                        (Resource: r, History: await MetricHistoryStore.ReadAsync(store, connection.Id, r.ResourceName))));
+
+                    foreach (var (resource, history) in histories)
+                    {
+                        allHistories.Add(history);
+                        historyByLabel[$"{connection.Name} / {resource.ResourceName}"] = history;
+                    }
+
+                    var connectionOldest = await plugin.GetOldestDeadLetterAsync(connection.Id, secret);
+                    if (connectionOldest is not null && (oldest is null || connectionOldest.EnqueuedTime < oldest.EnqueuedTime))
+                    {
+                        oldest = connectionOldest;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Computing wallboard data for connection {ConnectionId} failed; it may be incomplete or missing.", connection.Id);
+                }
+            }
+        }
+
+        _namespaceBacklog = [.. namespaceBacklog.OrderByDescending(n => n.Item2)];
+        _oldestDeadLetter = oldest;
+
+        var now = Clock.GetUtcNow();
+        _buckets1h = WallboardAggregator.BucketAndSum(allHistories, TimeSpan.FromMinutes(1), now, TimeSpan.FromHours(1));
+        _buckets24h = WallboardAggregator.BucketAndSum(allHistories, TimeSpan.FromMinutes(5), now, TimeSpan.FromHours(24));
+        _growthSummary = WallboardAggregator.SummarizeGrowth(historyByLabel, TimeSpan.FromHours(12), now);
+
+        _activeCount = _buckets1h.Count > 0 ? _buckets1h[^1].TotalActive : 0;
+        _activeDeltaLastMinute = _buckets1h.Count >= 2 ? _buckets1h[^1].TotalActive - _buckets1h[^2].TotalActive : 0;
+        _deadLetterTotal = _namespaceBacklog.Sum(n => (long)n.DeadLetterCount);
+        var hourAgoBucket = _buckets24h.Count > 0 ? _buckets24h[0] : null;
+        _deadLetterDeltaLastHour = hourAgoBucket is not null ? _deadLetterTotal - hourAgoBucket.TotalDeadLetter : 0;
+
+        var windowStart = now - TimeSpan.FromHours(24);
+        var auditPage = await AuditHandler.HandleAsync(new AuditQuery(From: windowStart, To: now, PageSize: 200));
+        _events =
+        [
+            .. auditPage.Entries
+                .Where(e => e.Action == "connection.test" && !e.Succeeded)
+                .Select(e => (e.At, ConnectionName: e.Target)),
+        ];
+    }
+}
