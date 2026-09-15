@@ -357,4 +357,12 @@ public class HomeTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().Contain("sb-uk-prod / payments-dlq");
         cut.Find("a[href='/audit']").Should().NotBeNull();
     }
+
+    [Fact]
+    public void Header_links_to_the_wallboard()
+    {
+        var cut = Render<Home>();
+
+        cut.Find("a.open-wallboard").GetAttribute("href").Should().Be("/wallboard");
+    }
 }
