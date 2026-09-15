@@ -102,14 +102,23 @@
         new() { Name = "Dead-lettered", Data = SelectedBuckets.Select(b => (double)b.TotalDeadLetter).ToList() },
     ];
 
-    private string[] TrendLabels => [.. SelectedBuckets.Select(b => b.At.ToLocalTime().ToString("HH:mm"))];
+    private string[] TrendLabels => ThinnedLabels(SelectedBuckets);
 
     private List<ChartSeries<double>> GrowthSeries =>
     [
         new() { Name = "Dead-lettered", Data = _buckets24h.TakeLast(12).Select(b => (double)b.TotalDeadLetter).ToList() },
     ];
 
-    private string[] GrowthLabels => [.. _buckets24h.TakeLast(12).Select(b => b.At.ToLocalTime().ToString("HH:mm"))];
+    private string[] GrowthLabels => ThinnedLabels(_buckets24h.TakeLast(12).ToList());
+
+    // A bucket per minute (60 for the 1h tab) or per 5 minutes (288 for 24h) is far too dense to
+    // label every point on a chart this width -- only label roughly every Nth bucket, matching
+    // MudChart's own ChartLabels contract that a "" entry is a valid (blank) label for that point.
+    private static string[] ThinnedLabels(IReadOnlyList<WallboardAggregator.Bucket> buckets)
+    {
+        var stride = Math.Max(1, buckets.Count / 10);
+        return [.. buckets.Select((b, i) => i % stride == 0 ? b.At.ToLocalTime().ToString("HH:mm") : "")];
+    }
 
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
