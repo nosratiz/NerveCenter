@@ -14,18 +14,68 @@
 @inject TimeProvider Clock
 
 <PageTitle>Wallboard</PageTitle>
-<div>
-    <p>Active: @_activeCount (@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute)</p>
-    <p>Dead-lettered: @_deadLetterTotal (@(_deadLetterDeltaLastHour >= 0 ? "+" : "")@_deadLetterDeltaLastHour / 1h)</p>
-    @if (_oldestDeadLetter is { } oldest)
-    {
-        <p>Oldest: @FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime) — @oldest.ResourceName · @oldest.DeadLetterCount msgs</p>
-    }
-    <p>@_growthSummary</p>
-    @foreach (var (connection, count) in _namespaceBacklog)
-    {
-        <p class="namespace-backlog-row">@connection.Name: @count</p>
-    }
+<div class="pa-6">
+    <div class="d-flex align-center gap-4 mb-4">
+        <MudText Typo="Typo.h4">Wallboard</MudText>
+        <MudSpacer />
+        <MudButton Class="@($"range-toggle-1h{(_selectedRange == "1h" ? " range-toggle-active" : "")}")" OnClick='@(() => _selectedRange = "1h")'>1h</MudButton>
+        <MudButton Class="@($"range-toggle-24h{(_selectedRange == "24h" ? " range-toggle-active" : "")}")" OnClick='@(() => _selectedRange = "24h")'>24h</MudButton>
+    </div>
+
+    <div class="d-flex flex-wrap gap-4 mb-4">
+        <MudPaper Class="pa-4" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">ACTIVE</MudText>
+            <MudText Typo="Typo.h4">@_activeCount</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute / min</MudText>
+        </MudPaper>
+        <MudPaper Class="pa-4" Style="@($"min-width:180px;border:1px solid {(_deadLetterTotal > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-lines-default)")}")" Elevation="0">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">DEAD-LETTERED</MudText>
+            <MudText Typo="Typo.h4" Color="@(_deadLetterTotal > 0 ? Color.Error : Color.Default)">@_deadLetterTotal</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_deadLetterDeltaLastHour >= 0 ? "+" : "")@_deadLetterDeltaLastHour / 1h</MudText>
+        </MudPaper>
+        <MudPaper Class="pa-4" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">OLDEST MESSAGE</MudText>
+            @if (_oldestDeadLetter is { } oldest)
+            {
+                <MudText Typo="Typo.h4">@FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime)</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@oldest.ResourceName · @oldest.DeadLetterCount msgs</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.h4">—</MudText>
+            }
+        </MudPaper>
+    </div>
+
+    <MudPaper Class="pa-4 mb-4" Style="border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+        <MudText Typo="Typo.h6" Class="mb-2">Throughput</MudText>
+        <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@TrendSeries" ChartLabels="@TrendLabels" Width="100%" Height="260px" />
+    </MudPaper>
+
+    <div class="d-flex gap-4 flex-wrap">
+        <MudPaper Class="pa-4 flex-grow-1" Style="min-width:320px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+            <MudText Typo="Typo.h6" Class="mb-2">Dead-letter growth</MudText>
+            <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@GrowthSeries" ChartLabels="@GrowthLabels" Width="100%" Height="200px" />
+            <MudText Typo="Typo.body2" Class="mt-2">@_growthSummary</MudText>
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Style="flex-basis:320px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+            <MudText Typo="Typo.h6" Class="mb-2">Backlog by namespace</MudText>
+            @foreach (var (connection, count) in _namespaceBacklog)
+            {
+                <div class="d-flex align-center justify-space-between mb-1 namespace-backlog-row">
+                    <MudText Typo="Typo.body2">@connection.Name</MudText>
+                    <div class="d-flex align-center gap-2">
+                        <MudText Typo="Typo.body2">@count</MudText>
+                        @if (_unreachable.Any(u => u.Id == connection.Id))
+                        {
+                            <MudLink Href="/connections" Class="namespace-fix-link">Fix →</MudLink>
+                        }
+                    </div>
+                </div>
+            }
+        </MudPaper>
+    </div>
 </div>
 
 @code {
@@ -41,6 +91,25 @@
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets24h = [];
     private string _growthSummary = "";
     private List<(DateTimeOffset At, string ConnectionName)> _events = [];
+
+    private string _selectedRange = "1h";
+
+    private IReadOnlyList<WallboardAggregator.Bucket> SelectedBuckets => _selectedRange == "24h" ? _buckets24h : _buckets1h;
+
+    private List<ChartSeries<double>> TrendSeries =>
+    [
+        new() { Name = "Active", Data = SelectedBuckets.Select(b => (double)b.TotalActive).ToList() },
+        new() { Name = "Dead-lettered", Data = SelectedBuckets.Select(b => (double)b.TotalDeadLetter).ToList() },
+    ];
+
+    private string[] TrendLabels => [.. SelectedBuckets.Select(b => b.At.ToLocalTime().ToString("HH:mm"))];
+
+    private List<ChartSeries<double>> GrowthSeries =>
+    [
+        new() { Name = "Dead-lettered", Data = _buckets24h.TakeLast(12).Select(b => (double)b.TotalDeadLetter).ToList() },
+    ];
+
+    private string[] GrowthLabels => [.. _buckets24h.TakeLast(12).Select(b => b.At.ToLocalTime().ToString("HH:mm"))];
 
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
@@ -106,6 +175,11 @@
                     Logger.LogWarning(ex, "Computing wallboard data for connection {ConnectionId} failed; it may be incomplete or missing.", connection.Id);
                 }
             }
+        }
+
+        foreach (var connection in _unreachable.Where(u => namespaceBacklog.All(n => n.Item1.Id != u.Id)))
+        {
+            namespaceBacklog.Add((connection, 0));
         }
 
         _namespaceBacklog = [.. namespaceBacklog.OrderByDescending(n => n.Item2)];

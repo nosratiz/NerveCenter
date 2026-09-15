@@ -152,4 +152,39 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().Contain("payments-dlq");
         cut.Markup.Should().NotContain("test-queue");
     }
+
+    [Fact]
+    public async Task Range_toggle_switches_between_the_1h_and_24h_bucket_sets()
+    {
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.FindAll(".range-toggle-1h").Count > 0);
+
+        cut.Find(".range-toggle-24h").Click();
+        cut.WaitForAssertion(() => cut.Find(".range-toggle-24h").ClassList.Should().Contain("range-toggle-active"));
+
+        cut.Find(".range-toggle-1h").Click();
+        cut.WaitForAssertion(() => cut.Find(".range-toggle-1h").ClassList.Should().Contain("range-toggle-active"));
+    }
+
+    [Fact]
+    public async Task Unreachable_connection_shows_a_Fix_link_in_the_namespace_backlog()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection
+            {
+                Name = "sb-eu-prod", Kind = "azure-servicebus", SecretCiphertext = [1],
+                LastTestedAt = DateTimeOffset.UtcNow, LastTestSucceeded = false, LastTestError = "Unauthorized (401)",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((string?)null);
+        _plugins = [];
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.Markup.Contains("sb-eu-prod"));
+
+        cut.Find("a.namespace-fix-link").GetAttribute("href").Should().Be("/connections");
+    }
 }
