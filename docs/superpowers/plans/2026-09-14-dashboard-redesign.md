@@ -1,6 +1,6 @@
 # Dashboard Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Give the Dashboard (`Home.razor`) a triage-first "Needs attention" list that covers DLQ backlogs and disabled subscriptions (not just unreachable connections), plus a compact Activity panel, header summary, and per-connection namespace chips — per `docs/superpowers/specs/2026-09-14-dashboard-redesign-design.md`.
 
@@ -28,7 +28,7 @@
 
 There is no dedicated `SbConsole.Sdk` test project (the existing `PluginDashboardMetric`/`PluginResourceMetric` records have no direct tests either — they're exercised indirectly through consumers), so this task has no test step of its own; correctness is verified by the build and by the consuming tests in later tasks.
 
-- [ ] **Step 1: Add the `PluginDashboardProblem` record**
+- [x] **Step 1: Add the `PluginDashboardProblem` record**
 
 ```csharp
 // src/SbConsole.Sdk/PluginDashboardProblem.cs
@@ -48,7 +48,7 @@ public sealed record PluginDashboardProblem(
     string? LinkHref); // e.g. "/p/azure-servicebus/dead-letter" -- rendered as a link when present
 ```
 
-- [ ] **Step 2: Add the default `GetDashboardProblemsAsync` method to `IPlugin`**
+- [x] **Step 2: Add the default `GetDashboardProblemsAsync` method to `IPlugin`**
 
 In `src/SbConsole.Sdk/IPlugin.cs`, add after the existing `GetResourceMetricsAsync` default method (before the closing `}` of the interface):
 
@@ -69,12 +69,12 @@ In `src/SbConsole.Sdk/IPlugin.cs`, add after the existing `GetResourceMetricsAsy
         Task.FromResult<IReadOnlyList<PluginDashboardProblem>>([]);
 ```
 
-- [ ] **Step 3: Build the solution**
+- [x] **Step 3: Build the solution**
 
 Run: `dotnet build -warnaserror`
 Expected: Build succeeds (0 errors, 0 warnings). No project implements `IPlugin` without relying on defaults yet, so nothing else needs to change.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/SbConsole.Sdk/PluginDashboardProblem.cs src/SbConsole.Sdk/IPlugin.cs
@@ -96,7 +96,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `IPluginStore.GetAsync(string key, CancellationToken)` (existing), `MetricHistoryKey.For(Guid, string)` (existing), `MetricSnapshotPoint` (existing).
 - Produces: `MetricHistoryStore.ReadAsync(IPluginStore store, Guid connectionId, string resourceName, CancellationToken ct = default) -> Task<IReadOnlyList<MetricSnapshotPoint>>`. Task 5 (ServiceBusPlugin wiring) consumes this exact signature.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 // tests/SbConsole.Web.Tests/MetricHistoryStoreTests.cs
@@ -145,12 +145,12 @@ public class MetricHistoryStoreTests
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~MetricHistoryStoreTests`
 Expected: FAIL to compile — `MetricHistoryStore.ReadAsync` does not exist yet.
 
-- [ ] **Step 3: Add `ReadAsync` to `MetricHistoryStore`**
+- [x] **Step 3: Add `ReadAsync` to `MetricHistoryStore`**
 
 In `src/SbConsole.Sdk/MetricHistoryStore.cs`, add after `AppendAsync`:
 
@@ -169,12 +169,12 @@ In `src/SbConsole.Sdk/MetricHistoryStore.cs`, add after `AppendAsync`:
     }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~MetricHistoryStoreTests`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Point `Queues.razor` at the new helper instead of its own inline deserialize**
+- [x] **Step 5: Point `Queues.razor` at the new helper instead of its own inline deserialize**
 
 In `src/SbConsole.Plugins.ServiceBus/Pages/Queues.razor`, replace the `LoadHistoryAsync` method:
 
@@ -209,12 +209,12 @@ with:
 
 Then remove the now-unused `@using System.Text.Json` line near the top of the same file (line 2) — `JsonSerializer` was only used in the method just replaced.
 
-- [ ] **Step 6: Run the full test suite and build**
+- [x] **Step 6: Run the full test suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green, including the existing Queues sparkline tests (data source unchanged, just how it's read).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/SbConsole.Sdk/MetricHistoryStore.cs src/SbConsole.Plugins.ServiceBus/Pages/Queues.razor tests/SbConsole.Web.Tests/MetricHistoryStoreTests.cs
@@ -236,7 +236,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 This method talks to the real Azure SDK and, like `TestConnectionAsync`/`GetDashboardMetricsAsync` elsewhere in this same file, has no dedicated unit test — it "can't be meaningfully unit-tested without a real or emulated broker" (the file's own header comment). Verified by build plus the manual check in Task 8.
 
-- [ ] **Step 1: Add `Status` to `SubscriptionSummary`**
+- [x] **Step 1: Add `Status` to `SubscriptionSummary`**
 
 ```csharp
 // src/SbConsole.Plugins.ServiceBus/Client/SubscriptionSummary.cs
@@ -250,7 +250,7 @@ public sealed record SubscriptionSummary(
     string Status); // "Active" | "Disabled" | "SendDisabled" | "ReceiveDisabled"
 ```
 
-- [ ] **Step 2: Merge subscription config status into `ListSubscriptionsAsync`**
+- [x] **Step 2: Merge subscription config status into `ListSubscriptionsAsync`**
 
 In `src/SbConsole.Plugins.ServiceBus/Client/AzureServiceBusOperations.cs`, replace:
 
@@ -295,12 +295,12 @@ with:
     }
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `dotnet build -warnaserror`
 Expected: Succeeds. `grep -rn "new SubscriptionSummary(" src tests` confirms this is the only construction site, so no other file needs updating.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Client/SubscriptionSummary.cs src/SbConsole.Plugins.ServiceBus/Client/AzureServiceBusOperations.cs
@@ -323,7 +323,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 These are the actual test leverage for the Dashboard-problem logic (per spec §4/§5): pure, synchronous, fed with already-fetched data, no Azure SDK / live broker involved — unlike everything else in this plugin.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 // tests/SbConsole.Plugins.ServiceBus.Tests/DashboardProblemsTests.cs
@@ -424,12 +424,12 @@ public class DashboardProblemsTests
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Plugins.ServiceBus.Tests --filter FullyQualifiedName~DashboardProblemsTests`
 Expected: FAIL to compile — `DashboardProblems` does not exist yet.
 
-- [ ] **Step 3: Implement `DashboardProblems`**
+- [x] **Step 3: Implement `DashboardProblems`**
 
 ```csharp
 // src/SbConsole.Plugins.ServiceBus/DashboardProblems.cs
@@ -491,12 +491,12 @@ internal static class DashboardProblems
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Plugins.ServiceBus.Tests --filter FullyQualifiedName~DashboardProblemsTests`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/DashboardProblems.cs tests/SbConsole.Plugins.ServiceBus.Tests/DashboardProblemsTests.cs
@@ -518,7 +518,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 Like `TestConnectionAsync` and the existing body of `GetDashboardMetricsAsync`, this wiring talks to the real Azure SDK and has no dedicated unit test of its own — the logic it delegates to (`DashboardProblems`, `MetricHistoryStore.ReadAsync`) is already covered in Tasks 2 and 4. Verified by build plus the manual check in Task 8.
 
-- [ ] **Step 1: Add the `"Dead-lettered"` metric to `GetDashboardMetricsAsync`**
+- [x] **Step 1: Add the `"Dead-lettered"` metric to `GetDashboardMetricsAsync`**
 
 In `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, replace:
 
@@ -557,7 +557,7 @@ with:
     }
 ```
 
-- [ ] **Step 2: Implement `GetDashboardProblemsAsync`**
+- [x] **Step 2: Implement `GetDashboardProblemsAsync`**
 
 Add after `GetDashboardMetricsAsync` in the same file:
 
@@ -588,14 +588,14 @@ Add after `GetDashboardMetricsAsync` in the same file:
     }
 ```
 
-- [ ] **Step 3: Update the existing identity test's Contribution assertion if needed, and build**
+- [x] **Step 3: Update the existing identity test's Contribution assertion if needed, and build**
 
 `GetDashboardProblemsAsync` is a Dashboard read, not a page or a CRUD action, so `ServiceBusPluginTests.Declares_the_expected_identity_and_connection_kind`'s `PluginContribution(PageCount: 4, ActionCount: 13)` assertion is unaffected — no change needed there.
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green, including `DashboardProblemsTests` (Task 4) and `ServiceBusPluginTests`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs
@@ -618,7 +618,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 This task is data/merge logic only — rendered as plain-text markup for now (no two-column layout yet; that's Task 7) so it's independently testable.
 
-- [ ] **Step 1: Make the fake plugin list in `HomeTests` configurable per test**
+- [x] **Step 1: Make the fake plugin list in `HomeTests` configurable per test**
 
 In `tests/SbConsole.Web.Tests/HomeTests.cs`, replace the field/constructor line:
 
@@ -671,7 +671,7 @@ with:
 
 (`_plugins` is set by individual test methods **before** calling `Render<Home>()`; every existing test leaves it at its `[]` default, so their behavior is unchanged.)
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add to `tests/SbConsole.Web.Tests/HomeTests.cs`:
 
@@ -759,12 +759,12 @@ Add to `tests/SbConsole.Web.Tests/HomeTests.cs`:
     }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~HomeTests`
 Expected: FAIL — `Plugin_reported_problems_render_in_Needs_attention` and `Header_summary_reflects_connection_count_and_plugin_metrics` fail (markup doesn't contain the expected text yet); `All_clear_requires_both_zero_unreachable_connections_and_zero_plugin_problems` passes already (no behavior change needed for it, but it must still compile — it exercises the new `_plugins`/`GetDashboardProblemsAsync` stub wiring).
 
-- [ ] **Step 4: Extend `Home.razor`'s code-behind**
+- [x] **Step 4: Extend `Home.razor`'s code-behind**
 
 In `src/SbConsole.Web/Components/Pages/Home.razor`, add the injection:
 
@@ -932,17 +932,17 @@ else
 
 (This is not the final two-column layout yet — Task 7 restructures the surrounding markup. This step only needs the data to render *somewhere* so this task's tests pass.)
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~HomeTests`
 Expected: PASS (all `HomeTests`, old and new).
 
-- [ ] **Step 6: Run the full suite and build**
+- [x] **Step 6: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Home.razor tests/SbConsole.Web.Tests/HomeTests.cs
@@ -964,7 +964,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 This task is presentation only — no new fields, no new `LoadAsync` behavior.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/SbConsole.Web.Tests/HomeTests.cs` (add `using MudBlazor;` to the top of the file for the `Color` enum):
 
@@ -1027,12 +1027,12 @@ Add to `tests/SbConsole.Web.Tests/HomeTests.cs` (add `using MudBlazor;` to the t
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~HomeTests`
 Expected: FAIL — `Namespace_chip_turns_red_when_its_connection_has_an_open_problem` fails (no `MudChip<string>` rendered yet). `Activity_panel_still_shows_real_audit_entries_and_links_to_the_audit_log` currently passes against the old `MudTable`-based markup — that's fine, it pins behavior this task must preserve through the rewrite.
 
-- [ ] **Step 3: Rewrite `Home.razor`'s markup into the two-column layout**
+- [x] **Step 3: Rewrite `Home.razor`'s markup into the two-column layout**
 
 Replace the entire markup portion of `src/SbConsole.Web/Components/Pages/Home.razor` (everything from `<PageTitle>` down to the `@code` block) with:
 
@@ -1142,17 +1142,17 @@ Add `ActivityDotColor` to the `@code` block (after `MetricValue`):
 
 (`ActionRisk` is already in scope via the existing `@using SbConsole.Core.Data.Entities`.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Web.Tests --filter FullyQualifiedName~HomeTests`
 Expected: PASS (all `HomeTests`).
 
-- [ ] **Step 5: Run the full suite and build**
+- [x] **Step 5: Run the full suite and build**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: All green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Web/Components/Pages/Home.razor tests/SbConsole.Web.Tests/HomeTests.cs
@@ -1167,12 +1167,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Full build and test suite**
+- [x] **Step 1: Full build and test suite**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: 0 warnings, 0 errors, all tests green.
 
-- [ ] **Step 2: Run the app and check the Dashboard in a browser**
+- [x] **Step 2: Run the app and check the Dashboard in a browser**
 
 Run: `dotnet run --project src/SbConsole.Web`
 
@@ -1186,7 +1186,7 @@ Open the Dashboard (`/`) and confirm, per spec §9:
 - Two-column layout stacks to one column at narrow widths (resize the browser) without overlapping content.
 - Zero problems anywhere ⇒ "All clear" alert and every namespace chip green.
 
-- [ ] **Step 3: Report results**
+- [x] **Step 3: Report results**
 
 If any check fails, fix the underlying code (not the check) and re-run from Step 1. Once everything passes, the feature is complete — no commit needed for this task (verification only).
 

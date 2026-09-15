@@ -40,6 +40,15 @@ public interface IServiceBusOperations
 
     Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string connectionString, string topicName, CancellationToken ct = default);
 
+    /// <summary>
+    /// Same as <see cref="ListSubscriptionsAsync"/> but with a real <c>Status</c> merged in from a
+    /// second admin-client call (config properties, not runtime properties) -- an extra Azure
+    /// round trip only the caller that actually needs the config status (currently the Dashboard's
+    /// disabled-subscription check) should pay for. Every other caller should keep using
+    /// <see cref="ListSubscriptionsAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsWithStatusAsync(string connectionString, string topicName, CancellationToken ct = default);
+
     Task CreateSubscriptionAsync(string connectionString, string topicName, CreateSubscriptionRequest request, CancellationToken ct = default);
 
     /// <summary>Destructive.</summary>

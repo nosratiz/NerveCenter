@@ -267,6 +267,77 @@ public class HomeTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_plugin_that_throws_marks_its_connection_unchecked_and_shows_a_warning_instead_of_All_clear()
+    {
+        Guid connectionId;
+        await using (var db = _testDb.CreateDbContext())
+        {
+            var connection = new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            db.Connections.Add(connection);
+            await db.SaveChangesAsync();
+            connectionId = connection.Id;
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<PluginDashboardProblem>>(new InvalidOperationException("boom")));
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("Couldn't check"));
+
+        cut.Markup.Should().NotContain("All clear");
+        cut.Markup.Should().Contain("Couldn't check 1 connection(s)");
+
+        var chips = cut.FindComponents<MudChip<string>>();
+        var chip = chips.Single(c => c.Markup.Contains("sb-uk-prod"));
+        chip.Instance.Color.Should().Be(Color.Warning);
+    }
+
+    [Fact]
+    public async Task Needs_attention_sorts_unreachable_connections_before_plugin_errors_before_plugin_warnings()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection
+            {
+                Name = "sb-eu-prod", Kind = "azure-servicebus", SecretCiphertext = [1],
+                LastTestedAt = DateTimeOffset.UtcNow, LastTestSucceeded = false, LastTestError = "Unauthorized (401)",
+            });
+            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>
+            {
+                new("Error", "namespace-outage", "connectivity lost", null),
+                new("Warning", "payments-dlq", "5 dead-lettered", null),
+            });
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
+
+        var unreachableIndex = cut.Markup.IndexOf("sb-eu-prod", StringComparison.Ordinal);
+        var pluginErrorIndex = cut.Markup.IndexOf("namespace-outage", StringComparison.Ordinal);
+        var pluginWarningIndex = cut.Markup.IndexOf("payments-dlq", StringComparison.Ordinal);
+
+        unreachableIndex.Should().BeGreaterThan(-1);
+        pluginErrorIndex.Should().BeGreaterThan(unreachableIndex);
+        pluginWarningIndex.Should().BeGreaterThan(pluginErrorIndex);
+    }
+
+    [Fact]
     public async Task Activity_panel_still_shows_real_audit_entries_and_links_to_the_audit_log()
     {
         await using (var db = _testDb.CreateDbContext())

@@ -96,10 +96,12 @@ public sealed class ServiceBusPlugin : IPlugin
             DashboardProblems.ForDeadLetterBacklogs(queues, historyByQueue, DateTimeOffset.UtcNow));
 
         var topics = await ops.ListTopicsAsync(connectionString, ct);
-        foreach (var topic in topics)
+        var subscriptionsByTopic = await Task.WhenAll(
+            topics.Select(t => ops.ListSubscriptionsWithStatusAsync(connectionString, t.Name, ct)));
+
+        for (var i = 0; i < topics.Count; i++)
         {
-            var subscriptions = await ops.ListSubscriptionsAsync(connectionString, topic.Name, ct);
-            problems.AddRange(DashboardProblems.ForDisabledSubscriptions(topic.Name, subscriptions));
+            problems.AddRange(DashboardProblems.ForDisabledSubscriptions(topics[i].Name, subscriptionsByTopic[i]));
         }
 
         return problems;

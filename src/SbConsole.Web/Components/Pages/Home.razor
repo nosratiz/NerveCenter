@@ -23,6 +23,10 @@
     <MudText Typo="Typo.caption" Class="mud-text-secondary">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</MudText>
     <MudButton Class="refresh-dashboard" OnClick="RefreshAsync">Refresh</MudButton>
 </div>
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Class="mb-4" />
+}
 
 <div class="d-flex flex-wrap gap-4 mb-4">
     @foreach (var tile in Tiles)
@@ -37,7 +41,7 @@
 <div class="d-flex gap-4 flex-wrap">
     <div class="flex-grow-1" style="flex-basis:60%;min-width:320px">
         <MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
-        @if (_unreachable.Count == 0 && _pluginProblems.Count == 0)
+        @if (_unreachable.Count == 0 && _pluginProblems.Count == 0 && _uncheckedConnections.Count == 0)
         {
             <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
         }
@@ -75,13 +79,19 @@
                     }
                 </MudAlert>
             }
+            @if (_uncheckedConnections.Count > 0)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-2 unchecked-connections">
+                    Couldn't check @_uncheckedConnections.Count connection(s) — see logs for details.
+                </MudAlert>
+            }
         }
 
         <MudText Typo="Typo.overline" Class="mud-text-secondary mt-4 mb-2 d-block">Namespaces</MudText>
         <div class="d-flex flex-wrap gap-2">
             @foreach (var connection in _connections)
             {
-                <MudChip T="string" Class="namespace-chip" Color="@(_connectionsWithProblems.Contains(connection.Id) ? Color.Error : Color.Success)">@connection.Name</MudChip>
+                <MudChip T="string" Class="namespace-chip" Color="@(NamespaceChipColor(connection.Id))">@connection.Name</MudChip>
             }
         </div>
     </div>
@@ -113,10 +123,12 @@
     private List<ConnectionInfo> _unreachable = [];
     private List<(PluginDashboardProblem Problem, ConnectionInfo Connection)> _pluginProblems = [];
     private HashSet<Guid> _connectionsWithProblems = [];
+    private HashSet<Guid> _uncheckedConnections = [];
     private List<KeyValuePair<string, int>> _pluginMetrics = [];
     private IReadOnlyList<AuditEntry> _recentActivity = [];
     private DateTimeOffset _refreshedAt = DateTimeOffset.UtcNow;
     private Guid? _retryingConnectionId;
+    private bool _loading;
 
     private IEnumerable<(string Label, string Value, bool Alert)> Tiles =>
     [
@@ -129,6 +141,11 @@
         $"{_connectionCount} conn · {MetricValue("Queues")} q · {MetricValue("Topics")} t / {MetricValue("Subscriptions")} sub · {MetricValue("Dead-lettered")} dlq";
 
     private int MetricValue(string label) => _pluginMetrics.FirstOrDefault(m => m.Key == label).Value;
+
+    private Color NamespaceChipColor(Guid connectionId) =>
+        _connectionsWithProblems.Contains(connectionId) ? Color.Error :
+        _uncheckedConnections.Contains(connectionId) ? Color.Warning :
+        Color.Success;
 
     private static string ActivityDotColor(AuditEntry entry) => (entry.Succeeded, entry.Risk) switch
     {
@@ -144,53 +161,65 @@
 
     private async Task LoadAsync()
     {
-        var connections = await ConnectionsHandler.HandleAsync();
-        _connections = [.. connections];
-        _connectionCount = connections.Count;
-        _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
-
-        var metrics = new Dictionary<string, int>();
-        var pluginProblems = new List<(PluginDashboardProblem, ConnectionInfo)>();
-        foreach (var plugin in Registry.Plugins)
+        _loading = true;
+        try
         {
-            var store = PluginStoreFactory.For(plugin.Id);
-            foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
+            var connections = await ConnectionsHandler.HandleAsync();
+            _connections = [.. connections];
+            _connectionCount = connections.Count;
+            _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
+
+            var metrics = new Dictionary<string, int>();
+            var pluginProblems = new List<(PluginDashboardProblem, ConnectionInfo)>();
+            var uncheckedConnections = new HashSet<Guid>();
+            foreach (var plugin in Registry.Plugins)
             {
-                try
+                var store = PluginStoreFactory.For(plugin.Id);
+                foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
                 {
-                    // GetSecretAsync inside the try, not before it -- see NavMenu.RefreshBadgesAsync's
-                    // identical comment: a throw here must not stop the rest of the connections/plugins
-                    // in this pass.
-                    var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
-                    if (secret is null)
+                    try
                     {
-                        continue;
-                    }
+                        // GetSecretAsync inside the try, not before it -- see NavMenu.RefreshBadgesAsync's
+                        // identical comment: a throw here must not stop the rest of the connections/plugins
+                        // in this pass.
+                        var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
+                        if (secret is null)
+                        {
+                            uncheckedConnections.Add(connection.Id);
+                            continue;
+                        }
 
-                    foreach (var metric in await plugin.GetDashboardMetricsAsync(secret))
-                    {
-                        metrics[metric.Label] = metrics.GetValueOrDefault(metric.Label) + metric.Count;
-                    }
+                        foreach (var metric in await plugin.GetDashboardMetricsAsync(secret))
+                        {
+                            metrics[metric.Label] = metrics.GetValueOrDefault(metric.Label) + metric.Count;
+                        }
 
-                    foreach (var problem in await plugin.GetDashboardProblemsAsync(connection.Id, secret, store))
-                    {
-                        pluginProblems.Add((problem, connection));
+                        foreach (var problem in await plugin.GetDashboardProblemsAsync(connection.Id, secret, store))
+                        {
+                            pluginProblems.Add((problem, connection));
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogDebug(ex, "Computing dashboard metrics for connection {ConnectionId} failed; skipping it.", connection.Id);
+                    catch (Exception ex)
+                    {
+                        uncheckedConnections.Add(connection.Id);
+                        Logger.LogWarning(ex, "Computing dashboard metrics/problems for connection {ConnectionId} failed; Needs-attention data for it may be incomplete.", connection.Id);
+                    }
                 }
             }
+
+            _pluginMetrics = [.. metrics];
+            _pluginProblems = pluginProblems;
+            _connectionsWithProblems = [.. _unreachable.Select(c => c.Id), .. pluginProblems.Select(p => p.Item2.Id)];
+            _uncheckedConnections = uncheckedConnections;
+
+            var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
+            _recentActivity = page.Entries;
+            _refreshedAt = DateTimeOffset.UtcNow;
         }
-
-        _pluginMetrics = [.. metrics];
-        _pluginProblems = pluginProblems;
-        _connectionsWithProblems = [.. _unreachable.Select(c => c.Id), .. pluginProblems.Select(p => p.Item2.Id)];
-
-        var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
-        _recentActivity = page.Entries;
-        _refreshedAt = DateTimeOffset.UtcNow;
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async Task RetryAsync(ConnectionInfo connection)

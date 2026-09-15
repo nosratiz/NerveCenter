@@ -48,8 +48,12 @@ internal static class DashboardProblems
     public static IReadOnlyList<PluginDashboardProblem> ForDisabledSubscriptions(
         string topicName, IReadOnlyList<SubscriptionSummary> subscriptions) =>
         [
+            // Explicit allowlist, not "!= Active": Azure's real EntityStatus enum also includes
+            // transient provisioning states (Creating, Deleting, Renaming, Restoring, Unknown) that
+            // are not problems -- a subscription mid-provision would otherwise render a false-
+            // positive "subscription creating" Warning card.
             .. subscriptions
-                .Where(s => s.Status != "Active")
+                .Where(s => s.Status is "Disabled" or "ReceiveDisabled" or "SendDisabled")
                 .Select(s => new PluginDashboardProblem(
                     "Warning", $"{topicName} / {s.Name}", $"subscription {s.Status.ToLowerInvariant()}", TopicsNavHref))
         ];

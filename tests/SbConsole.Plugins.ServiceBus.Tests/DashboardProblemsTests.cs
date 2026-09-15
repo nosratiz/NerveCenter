@@ -75,6 +75,16 @@ public class DashboardProblemsTests
     }
 
     [Fact]
+    public void ForDisabledSubscriptions_ignores_transient_provisioning_states()
+    {
+        var subscriptions = new[] { new SubscriptionSummary("sms", 0, 0, 0, "Creating") };
+
+        var problems = DashboardProblems.ForDisabledSubscriptions("notify-fanout", subscriptions);
+
+        problems.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ForDisabledSubscriptions_reports_every_non_active_subscription()
     {
         var subscriptions = new[]
