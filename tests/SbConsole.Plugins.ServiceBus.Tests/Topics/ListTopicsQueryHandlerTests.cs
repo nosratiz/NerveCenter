@@ -19,7 +19,7 @@ public class ListTopicsQueryHandlerTests
         operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 2, 4096, 3) });
         operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6), new("eu-team", 2, 0, 2) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active"), new("eu-team", 2, 0, 2, "Active") });
 
         var result = await new ListTopicsQueryHandler(operations, connections, NullLogger<ListTopicsQueryHandler>.Instance).HandleAsync(connectionId);
 

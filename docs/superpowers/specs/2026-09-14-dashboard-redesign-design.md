@@ -1,6 +1,6 @@
 # Dashboard redesign — Design
 
-Status: draft, 2026-09-14.
+Status: implemented, 2026-09-15.
 
 ## 1. Context
 
@@ -81,7 +81,7 @@ fetched today in `GetDashboardMetricsAsync`; same call, separate invocation
 since these are two different `IPlugin` methods). For every queue with
 `DeadLetterMessageCount > 0`:
 
-- Emit `PluginDashboardProblem("Warning", queue.Name, "{connectionName} · {count} dead-lettered", DeadLetterNavHref)`.
+- Emit `PluginDashboardProblem("Warning", queue.Name, "{count} dead-lettered", DeadLetterNavHref)`.
 - If `MetricHistoryStore.ReadAsync` has a point at or before (now − 1h), append
   `", +{delta} in the last hour"` to `Detail` when `delta > 0` (current
   `DeadLetterMessageCount` minus that point's `DeadLetterCount`). No point

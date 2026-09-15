@@ -214,7 +214,35 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var subscriptions = new List<SubscriptionSummary>();
         await foreach (var props in adminClient.GetSubscriptionsRuntimePropertiesAsync(topicName, ct).WithCancellation(ct))
         {
-            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount));
+            // "Active" here is a placeholder, not a real status read from Azure -- this method
+            // makes only the one runtime-properties call it always has, so it never knows the
+            // subscription's actual config status. Callers that need the real value (currently the
+            // Dashboard's disabled-subscription check) should call ListSubscriptionsWithStatusAsync
+            // instead, which pays for the extra admin-client round trip to get it.
+            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount, "Active"));
+        }
+
+        return subscriptions;
+    }
+
+    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsWithStatusAsync(string connectionString, string topicName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+
+        // Status lives on the config properties (GetSubscriptionsAsync), not the runtime
+        // properties (GetSubscriptionsRuntimePropertiesAsync) fetched below -- two separate calls,
+        // merged here by name.
+        var statusByName = new Dictionary<string, string>();
+        await foreach (var props in adminClient.GetSubscriptionsAsync(topicName, ct).WithCancellation(ct))
+        {
+            statusByName[props.SubscriptionName] = props.Status.ToString();
+        }
+
+        var subscriptions = new List<SubscriptionSummary>();
+        await foreach (var props in adminClient.GetSubscriptionsRuntimePropertiesAsync(topicName, ct).WithCancellation(ct))
+        {
+            var status = statusByName.GetValueOrDefault(props.SubscriptionName, "Active");
+            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount, status));
         }
 
         return subscriptions;
