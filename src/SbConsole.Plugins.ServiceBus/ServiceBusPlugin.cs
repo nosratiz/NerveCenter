@@ -76,7 +76,33 @@ public sealed class ServiceBusPlugin : IPlugin
             new PluginDashboardMetric("Queues", queues.Count),
             new PluginDashboardMetric("Topics", topics.Count),
             new PluginDashboardMetric("Subscriptions", subscriptions),
+            new PluginDashboardMetric("Dead-lettered", (int)queues.Sum(q => q.DeadLetterMessageCount)),
         ];
+    }
+
+    public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
+        Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default)
+    {
+        var ops = new AzureServiceBusOperations();
+        var queues = await ops.ListQueuesAsync(connectionString, ct);
+
+        var historyByQueue = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
+        foreach (var queue in queues.Where(q => q.DeadLetterMessageCount > 0))
+        {
+            historyByQueue[queue.Name] = await MetricHistoryStore.ReadAsync(store, connectionId, queue.Name, ct);
+        }
+
+        var problems = new List<PluginDashboardProblem>(
+            DashboardProblems.ForDeadLetterBacklogs(queues, historyByQueue, DateTimeOffset.UtcNow));
+
+        var topics = await ops.ListTopicsAsync(connectionString, ct);
+        foreach (var topic in topics)
+        {
+            var subscriptions = await ops.ListSubscriptionsAsync(connectionString, topic.Name, ct);
+            problems.AddRange(DashboardProblems.ForDisabledSubscriptions(topic.Name, subscriptions));
+        }
+
+        return problems;
     }
 
     public async Task<IReadOnlyList<PluginResourceMetric>> GetResourceMetricsAsync(string connectionString, CancellationToken ct = default)
