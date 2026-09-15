@@ -60,4 +60,56 @@ public class WallboardAggregatorTests
         buckets.Should().HaveCount(5);
         buckets.Should().OnlyContain(b => b.TotalActive == 0 && b.TotalDeadLetter == 0);
     }
+
+    [Fact]
+    public void SummarizeGrowth_reports_the_total_delta_and_top_contributor_when_backlog_grew()
+    {
+        var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>
+        {
+            ["sb-uk-prod / payments-dlq"] =
+            [
+                new(Now.AddHours(-12), 0, 10),
+                new(Now, 0, 48), // +38
+            ],
+            ["sb-uk-prod / orders-inbound"] =
+            [
+                new(Now.AddHours(-12), 0, 5),
+                new(Now, 0, 7), // +2
+            ],
+        };
+
+        var summary = WallboardAggregator.SummarizeGrowth(history, TimeSpan.FromHours(12), Now);
+
+        summary.Should().Be("+40 in the last 12h — sb-uk-prod / payments-dlq accounts for 95% of the rise.");
+    }
+
+    [Fact]
+    public void SummarizeGrowth_reports_no_change_when_the_backlog_did_not_grow()
+    {
+        var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>
+        {
+            ["sb-uk-prod / payments-dlq"] =
+            [
+                new(Now.AddHours(-12), 0, 20),
+                new(Now, 0, 15), // shrank
+            ],
+        };
+
+        var summary = WallboardAggregator.SummarizeGrowth(history, TimeSpan.FromHours(12), Now);
+
+        summary.Should().Be("No change in the last 12h.");
+    }
+
+    [Fact]
+    public void SummarizeGrowth_treats_a_resource_with_no_baseline_point_as_starting_at_zero()
+    {
+        var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>
+        {
+            ["sb-dev / new-queue"] = [new(Now.AddMinutes(-5), 0, 3)], // only exists near "now"
+        };
+
+        var summary = WallboardAggregator.SummarizeGrowth(history, TimeSpan.FromHours(12), Now);
+
+        summary.Should().Be("+3 in the last 12h — sb-dev / new-queue accounts for 100% of the rise.");
+    }
 }

@@ -45,4 +45,39 @@ public static class WallboardAggregator
 
         return buckets;
     }
+
+    /// <summary>
+    /// A one-line summary of dead-letter backlog growth over the window: the total delta across
+    /// every resource plus whichever single resource contributed the most of it, or an honest
+    /// "no change" when the total did not grow. Deliberately does not attempt to detect *when*
+    /// growth accelerated (see spec's "no fabricated numbers" constraint) -- just the delta.
+    /// </summary>
+    public static string SummarizeGrowth(
+        IReadOnlyDictionary<string, IReadOnlyList<MetricSnapshotPoint>> historyByResourceLabel,
+        TimeSpan window, DateTimeOffset now)
+    {
+        var windowStart = now - window;
+        var deltas = new Dictionary<string, long>();
+
+        foreach (var (label, history) in historyByResourceLabel)
+        {
+            var baseline = history.Where(p => p.At <= windowStart).OrderByDescending(p => p.At).FirstOrDefault();
+            var latest = history.Where(p => p.At <= now).OrderByDescending(p => p.At).FirstOrDefault();
+            var startCount = baseline?.DeadLetterCount ?? 0;
+            var endCount = latest?.DeadLetterCount ?? 0;
+            deltas[label] = endCount - startCount;
+        }
+
+        var totalDelta = deltas.Values.Sum();
+        if (totalDelta <= 0)
+        {
+            return $"No change in the last {FormatWindow(window)}.";
+        }
+
+        var top = deltas.OrderByDescending(kv => kv.Value).First();
+        var pct = (int)Math.Round(top.Value * 100.0 / totalDelta);
+        return $"+{totalDelta} in the last {FormatWindow(window)} — {top.Key} accounts for {pct}% of the rise.";
+    }
+
+    private static string FormatWindow(TimeSpan window) => $"{(int)window.TotalHours}h";
 }
