@@ -120,9 +120,24 @@ public sealed class ServiceBusPlugin : IPlugin
 
         // One peek per DLQ-bearing queue, in parallel -- the exact fan-out shape the Dashboard
         // redesign's final review flagged for GetDashboardProblemsAsync's subscription fetch;
-        // built parallel here from the start rather than serial-then-fixed.
-        var peeks = await Task.WhenAll(dlqQueues.Select(q =>
-            ops.PeekMessagesAsync(connectionString, q.Name, fromDeadLetter: true, maxMessages: 1, fromSequenceNumber: null, ct)));
+        // built parallel here from the start rather than serial-then-fixed. Bounded by a semaphore
+        // so a namespace with many DLQ-bearing queues doesn't open that many simultaneous AMQP
+        // connections on every wallboard load -- each PeekMessagesAsync call opens its own
+        // ServiceBusClient (AzureServiceBusOperations), and this is the only caller unbounded here.
+        const int MaxConcurrentPeeks = 8;
+        using var throttle = new SemaphoreSlim(MaxConcurrentPeeks);
+        var peeks = await Task.WhenAll(dlqQueues.Select(async q =>
+        {
+            await throttle.WaitAsync(ct);
+            try
+            {
+                return await ops.PeekMessagesAsync(connectionString, q.Name, fromDeadLetter: true, maxMessages: 1, fromSequenceNumber: null, ct);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        }));
 
         OldestDeadLetterEntry? oldest = null;
         for (var i = 0; i < dlqQueues.Count; i++)

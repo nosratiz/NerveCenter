@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Bunit;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Core.Audit;
@@ -39,7 +41,6 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton<IDbContextFactory<SbcDbContext>>(_testDb);
         Services.AddSingleton<ListConnectionsQueryHandler>();
-        Services.AddSingleton<ListAuditEntriesQueryHandler>();
         Services.AddSingleton<IEnumerable<IPlugin>>(_ => _plugins);
         Services.AddSingleton<PluginRegistry>();
         Services.AddSingleton(_connectionProvider);
@@ -76,9 +77,9 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         _plugins = [plugin];
 
         var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
-        cut.WaitForState(() => cut.Markup.Contains("200")); // 100 + 100 across two connections
+        cut.WaitForState(() => cut.Find(".tile-dead-lettered").TextContent.Contains("200")); // 100 + 100 across two connections
 
-        cut.Markup.Should().Contain("200");
+        cut.Find(".tile-dead-lettered").TextContent.Should().Contain("200");
     }
 
     [Fact]
@@ -111,8 +112,9 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
         cut.WaitForState(() => cut.Markup.Contains("sb-uk-prod"));
 
-        cut.Markup.Should().Contain("sb-uk-prod");
-        cut.Markup.Should().Contain("214");
+        var rows = cut.FindAll(".namespace-backlog-row");
+        var ukRow = rows.Single(r => r.TextContent.Contains("sb-uk-prod"));
+        ukRow.TextContent.Should().Contain("214");
         cut.Markup.Should().Contain("sb-staging");
     }
 
@@ -159,12 +161,28 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
         cut.WaitForState(() => cut.FindAll(".range-toggle-1h").Count > 0);
 
+        var pointCount1h = TrendPointCount(cut);
+
         cut.Find(".range-toggle-24h").Click();
         cut.WaitForAssertion(() => cut.Find(".range-toggle-24h").ClassList.Should().Contain("range-toggle-active"));
 
+        // Not just the CSS class: the 24h tab's trend series must actually carry a different
+        // number of data points (288 five-minute buckets) than the 1h tab (60 one-minute
+        // buckets) -- proving the toggle really drives the chart, not only a class name.
+        var pointCount24h = TrendPointCount(cut);
+        pointCount24h.Should().NotBe(pointCount1h);
+
         cut.Find(".range-toggle-1h").Click();
         cut.WaitForAssertion(() => cut.Find(".range-toggle-1h").ClassList.Should().Contain("range-toggle-active"));
+
+        TrendPointCount(cut).Should().Be(pointCount1h);
     }
+
+    private static int TrendPointCount(IRenderedComponent<global::SbConsole.Web.Components.Pages.Wallboard> cut) =>
+        cut.FindComponents<MudChart<double>>()
+            .Select(c => c.Instance.ChartSeries.FirstOrDefault(s => s.Name == "Active"))
+            .First(s => s is not null)!
+            .Data.Count;
 
     [Fact]
     public async Task Unreachable_connection_shows_a_Fix_link_in_the_namespace_backlog()
@@ -186,5 +204,108 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         cut.WaitForState(() => cut.Markup.Contains("sb-eu-prod"));
 
         cut.Find("a.namespace-fix-link").GetAttribute("href").Should().Be("/connections");
+    }
+
+    [Fact]
+    public async Task Dead_lettered_delta_tile_shows_the_real_1h_delta_not_a_stale_24h_one()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-15T12:00:00Z"));
+        Services.AddSingleton(clock);
+        Services.AddSingleton<TimeProvider>(clock);
+
+        Guid connectionId;
+        await using (var db = _testDb.CreateDbContext())
+        {
+            var connection = new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            db.Connections.Add(connection);
+            await db.SaveChangesAsync();
+            connectionId = connection.Id;
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        // A real 1h-old baseline of 5 and a current total of 20 -- the honest 1h delta is +15.
+        // The pre-fix implementation read _buckets24h[0] (~24h old, before any history exists here,
+        // so a baseline of 0) and would have shown a wrongly-labeled "+20 / 1h" instead.
+        var history = new List<MetricSnapshotPoint>
+        {
+            new(clock.GetUtcNow().AddMinutes(-60), 0, 5),
+            new(clock.GetUtcNow().AddSeconds(-10), 0, 20),
+        };
+        var store = Substitute.For<IPluginStore>();
+        store.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((string?)null);
+        store.GetAsync(MetricHistoryKey.For(connectionId, "orders-dlq"), Arg.Any<CancellationToken>())
+            .Returns(JsonSerializer.Serialize(history));
+        _pluginStoreFactory.For(Arg.Any<string>()).Returns(store);
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric> { new("Dead-lettered", 20) });
+        plugin.GetResourceMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginResourceMetric> { new("orders-dlq", 0, 20) });
+        plugin.GetOldestDeadLetterAsync(Arg.Any<Guid>(), "secret", Arg.Any<CancellationToken>())
+            .Returns((OldestDeadLetterEntry?)null);
+        _plugins = [plugin];
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.Find(".tile-dead-lettered").TextContent.Contains("+15"));
+
+        cut.Find(".tile-dead-lettered").TextContent.Should().Contain("+15 / 1h");
+        cut.Find(".tile-dead-lettered").TextContent.Should().NotContain("+20 / 1h");
+    }
+
+    [Fact]
+    public async Task Dead_lettered_delta_tile_shows_a_placeholder_before_the_first_load_completes()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        // Gate GetDashboardMetricsAsync so LoadAsync is still mid-flight when we inspect the first
+        // render -- _deadLetterDeltaLastHour is still at its default (null), so the tile must show
+        // the honest "no baseline yet" placeholder rather than a fabricated number like "0".
+        var gate = new TaskCompletionSource<IReadOnlyList<PluginDashboardMetric>>();
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>()).Returns(gate.Task);
+        _plugins = [plugin];
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+
+        cut.Find(".tile-dead-lettered").TextContent.Should().Contain("— / 1h");
+
+        gate.SetResult(new List<PluginDashboardMetric>());
+        cut.WaitForState(() => !cut.Find(".tile-dead-lettered").TextContent.Contains("— / 1h"));
+    }
+
+    [Fact]
+    public async Task A_plugin_that_throws_marks_its_connection_unchecked_and_shows_a_warning()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<PluginDashboardMetric>>(new InvalidOperationException("boom")));
+        _plugins = [plugin];
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.Markup.Contains("Couldn't check"));
+
+        cut.Markup.Should().Contain("Couldn't check 1 connection(s)");
     }
 }

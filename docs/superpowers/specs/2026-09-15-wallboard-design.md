@@ -87,15 +87,6 @@ Built entirely from existing infrastructure — no new SDK method:
    installed MudBlazor package — no new dependency) — "Active" and
    "Dead-lettered" — sharing one time axis.
 
-**Event markers**: vertical annotations on the chart, from real audit-log
-data — `ListAuditEntriesQueryHandler` with `From`/`To` set to the chart's
-visible window and a generous `PageSize` (e.g. 200; this is a narrow
-diagnostic read, not the paginated Audit page, so no new filter parameter is
-added to `AuditQuery`), filtered client-side to `Action == "connection.test"
-&& Succeeded == false`. Each becomes a marker labeled with the connection name
-and time, matching the mockup's "09:14 sb-eu-prod 401" annotation with real
-data instead of a placeholder.
-
 ## 4. Dead-letter growth bar chart
 
 Per-hour **backlog total** (not a delta) across all resources/connections,
@@ -198,3 +189,10 @@ would be the same kind of dishonesty this whole design has been avoiding.
 - Subscription-level (as opposed to queue-level) dead-letter data in the
   oldest-message tile and the growth chart — consistent with Piece A's own
   DLQ-backlog problems being queue-only.
+- Event markers on the throughput chart (vertical annotations from real
+  `connection.test` audit-log failures, as originally described in §3): cut
+  during a post-merge fix pass. `MudBlazor.Charts`' `MudChart` has no
+  annotation/marker primitive to plot them onto — actually implementing this
+  would need a custom SVG overlay on top of the chart, a separate scope of
+  work not attempted here. The `_events` data-gathering that was wired up but
+  never rendered has been removed rather than left as dead code.

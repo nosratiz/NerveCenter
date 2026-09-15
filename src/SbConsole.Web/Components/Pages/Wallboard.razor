@@ -1,12 +1,10 @@
 @page "/wallboard"
 @layout EmptyLayout
-@using SbConsole.Core.Audit
 @using SbConsole.Core.Connections
 @using SbConsole.Sdk
 @using SbConsole.Web.Plugins
 @using SbConsole.Web.Wallboard
 @inject ListConnectionsQueryHandler ConnectionsHandler
-@inject ListAuditEntriesQueryHandler AuditHandler
 @inject PluginRegistry Registry
 @inject IConnectionProvider ConnectionProvider
 @inject IPluginStoreFactory PluginStoreFactory
@@ -23,17 +21,17 @@
     </div>
 
     <div class="d-flex flex-wrap gap-4 mb-4">
-        <MudPaper Class="pa-4" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+        <MudPaper Class="pa-4 tile-active" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
             <MudText Typo="Typo.caption" Class="mud-text-secondary">ACTIVE</MudText>
             <MudText Typo="Typo.h4">@_activeCount</MudText>
             <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute / min</MudText>
         </MudPaper>
-        <MudPaper Class="pa-4" Style="@($"min-width:180px;border:1px solid {(_deadLetterTotal > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-lines-default)")}")" Elevation="0">
+        <MudPaper Class="pa-4 tile-dead-lettered" Style="@($"min-width:180px;border:1px solid {(_deadLetterTotal > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-lines-default)")}")" Elevation="0">
             <MudText Typo="Typo.caption" Class="mud-text-secondary">DEAD-LETTERED</MudText>
             <MudText Typo="Typo.h4" Color="@(_deadLetterTotal > 0 ? Color.Error : Color.Default)">@_deadLetterTotal</MudText>
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_deadLetterDeltaLastHour >= 0 ? "+" : "")@_deadLetterDeltaLastHour / 1h</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@DeadLetterDeltaLabel</MudText>
         </MudPaper>
-        <MudPaper Class="pa-4" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+        <MudPaper Class="pa-4 tile-oldest" Style="min-width:180px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
             <MudText Typo="Typo.caption" Class="mud-text-secondary">OLDEST MESSAGE</MudText>
             @if (_oldestDeadLetter is { } oldest)
             {
@@ -61,6 +59,12 @@
 
         <MudPaper Class="pa-4" Style="flex-basis:320px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
             <MudText Typo="Typo.h6" Class="mb-2">Backlog by namespace</MudText>
+            @if (_uncheckedConnections.Count > 0)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+                    Couldn't check @_uncheckedConnections.Count connection(s) — see logs for details.
+                </MudText>
+            }
             @foreach (var (connection, count) in _namespaceBacklog)
             {
                 <div class="d-flex align-center justify-space-between mb-1 namespace-backlog-row">
@@ -79,20 +83,23 @@
 </div>
 
 @code {
-    private List<ConnectionInfo> _connections = [];
     private List<ConnectionInfo> _unreachable = [];
+    private HashSet<Guid> _uncheckedConnections = [];
     private List<(ConnectionInfo Connection, int DeadLetterCount)> _namespaceBacklog = [];
     private long _activeCount;
     private long _activeDeltaLastMinute;
     private long _deadLetterTotal;
-    private long _deadLetterDeltaLastHour;
+    private long? _deadLetterDeltaLastHour;
     private OldestDeadLetterEntry? _oldestDeadLetter;
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets1h = [];
+    private IReadOnlyList<WallboardAggregator.Bucket> _buckets12h = [];
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets24h = [];
     private string _growthSummary = "";
-    private List<(DateTimeOffset At, string ConnectionName)> _events = [];
 
     private string _selectedRange = "1h";
+
+    private string DeadLetterDeltaLabel =>
+        _deadLetterDeltaLastHour is { } delta ? $"{(delta >= 0 ? "+" : "")}{delta} / 1h" : "— / 1h";
 
     private IReadOnlyList<WallboardAggregator.Bucket> SelectedBuckets => _selectedRange == "24h" ? _buckets24h : _buckets1h;
 
@@ -106,10 +113,10 @@
 
     private List<ChartSeries<double>> GrowthSeries =>
     [
-        new() { Name = "Dead-lettered", Data = _buckets24h.TakeLast(12).Select(b => (double)b.TotalDeadLetter).ToList() },
+        new() { Name = "Dead-lettered", Data = _buckets12h.Select(b => (double)b.TotalDeadLetter).ToList() },
     ];
 
-    private string[] GrowthLabels => ThinnedLabels(_buckets24h.TakeLast(12).ToList());
+    private string[] GrowthLabels => ThinnedLabels(_buckets12h);
 
     // A bucket per minute (60 for the 1h tab) or per 5 minutes (288 for 24h) is far too dense to
     // label every point on a chart this width -- only label roughly every Nth bucket, matching
@@ -128,12 +135,12 @@
     private async Task LoadAsync()
     {
         var connections = await ConnectionsHandler.HandleAsync();
-        _connections = [.. connections];
         _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
 
         var namespaceBacklog = new List<(ConnectionInfo, int)>();
         var allHistories = new List<IReadOnlyList<MetricSnapshotPoint>>();
         var historyByLabel = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
+        var uncheckedConnections = new HashSet<Guid>();
         OldestDeadLetterEntry? oldest = null;
 
         foreach (var plugin in Registry.Plugins)
@@ -146,6 +153,7 @@
                     var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
                     if (secret is null)
                     {
+                        uncheckedConnections.Add(connection.Id);
                         continue;
                     }
 
@@ -181,6 +189,7 @@
                 }
                 catch (Exception ex)
                 {
+                    uncheckedConnections.Add(connection.Id);
                     Logger.LogWarning(ex, "Computing wallboard data for connection {ConnectionId} failed; it may be incomplete or missing.", connection.Id);
                 }
             }
@@ -193,25 +202,17 @@
 
         _namespaceBacklog = [.. namespaceBacklog.OrderByDescending(n => n.Item2)];
         _oldestDeadLetter = oldest;
+        _uncheckedConnections = uncheckedConnections;
 
         var now = Clock.GetUtcNow();
         _buckets1h = WallboardAggregator.BucketAndSum(allHistories, TimeSpan.FromMinutes(1), now, TimeSpan.FromHours(1));
+        _buckets12h = WallboardAggregator.BucketAndSum(allHistories, TimeSpan.FromHours(1), now, TimeSpan.FromHours(12));
         _buckets24h = WallboardAggregator.BucketAndSum(allHistories, TimeSpan.FromMinutes(5), now, TimeSpan.FromHours(24));
         _growthSummary = WallboardAggregator.SummarizeGrowth(historyByLabel, TimeSpan.FromHours(12), now);
 
         _activeCount = _buckets1h.Count > 0 ? _buckets1h[^1].TotalActive : 0;
         _activeDeltaLastMinute = _buckets1h.Count >= 2 ? _buckets1h[^1].TotalActive - _buckets1h[^2].TotalActive : 0;
         _deadLetterTotal = _namespaceBacklog.Sum(n => (long)n.DeadLetterCount);
-        var hourAgoBucket = _buckets24h.Count > 0 ? _buckets24h[0] : null;
-        _deadLetterDeltaLastHour = hourAgoBucket is not null ? _deadLetterTotal - hourAgoBucket.TotalDeadLetter : 0;
-
-        var windowStart = now - TimeSpan.FromHours(24);
-        var auditPage = await AuditHandler.HandleAsync(new AuditQuery(From: windowStart, To: now, PageSize: 200));
-        _events =
-        [
-            .. auditPage.Entries
-                .Where(e => e.Action == "connection.test" && !e.Succeeded)
-                .Select(e => (e.At, ConnectionName: e.Target)),
-        ];
+        _deadLetterDeltaLastHour = _buckets1h.Count > 0 ? _deadLetterTotal - _buckets1h[0].TotalDeadLetter : null;
     }
 }

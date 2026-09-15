@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a separate `/wallboard` kiosk-style page — live tiles, an Active/Dead-lettered trend chart with real event markers, a dead-letter growth chart, and a per-namespace backlog breakdown — per `docs/superpowers/specs/2026-09-15-wallboard-design.md`.
+**Goal:** Ship a separate `/wallboard` kiosk-style page — live tiles, an Active/Dead-lettered trend chart, a dead-letter growth chart, and a per-namespace backlog breakdown — per `docs/superpowers/specs/2026-09-15-wallboard-design.md`.
 
 **Architecture:** Everything reuses Piece A's existing plugin SDK surface (`GetDashboardMetricsAsync`, `GetResourceMetricsAsync`, `MetricHistoryStore.ReadAsync`) except one new SDK method (`GetOldestDeadLetterAsync`) for the one tile that genuinely needs a live peek. Two new pure, directly-unit-tested host-side helpers (`WallboardAggregator.BucketAndSum`/`SummarizeGrowth`) turn already-retained metric history into chart-ready series — no new background service, no new storage.
 
@@ -752,9 +752,15 @@ Expected: FAIL to compile — `Wallboard` component does not exist yet.
 }
 ```
 
-**Note:** `_buckets24h[0]` as the "1 hour ago" baseline is an approximation at 5-minute
-bucket width (off by up to 5 minutes) — acceptable for a tile annotation, not claimed as
-exact. `EmptyLayout` is the existing minimal layout (`ThemedRoot` + `@Body`, already used
+**Note (corrected in the post-merge fix pass):** the original version of this task computed
+`_deadLetterDeltaLastHour` from `_buckets24h[0]`, describing it as "an approximation at
+5-minute bucket width (off by up to 5 minutes)." That claim was wrong: `_buckets24h[0]` is
+the oldest bucket in a 24h/5-minute-bucket series, i.e. ~24h old, not ~1h old — the tile was
+off by roughly 23 hours while labeled `/1h`. The fix uses `_buckets1h[0]` instead (the
+oldest bucket of the 1h/1-minute-bucket series, ~59 minutes before `now` — genuinely a ~1h-
+ago baseline), and the field's type changed from `long` to `long?` so "no 1h-old history yet"
+(e.g. a freshly-added connection) renders as `— / 1h` instead of a fabricated `0`.
+`EmptyLayout` is the existing minimal layout (`ThemedRoot` + `@Body`, already used
 by Login) — no new layout component.
 
 - [ ] **Step 4: Run the tests to verify they pass**

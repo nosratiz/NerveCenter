@@ -24,16 +24,29 @@ public static class WallboardAggregator
         var bucketCount = (int)(window / bucketSize);
         var buckets = new List<Bucket>(bucketCount);
 
+        // MetricHistoryStore guarantees each history is stored oldest-first, and this loop visits
+        // buckets in ascending chronological order (bucketEnd increases as i decreases) -- so each
+        // resource's history can be walked once with a forward cursor instead of being re-filtered
+        // and re-sorted from scratch for every bucket.
+        var cursors = new int[perResourceHistories.Count];
+        var latestPerResource = new MetricSnapshotPoint?[perResourceHistories.Count];
+
         for (var i = bucketCount - 1; i >= 0; i--)
         {
             var bucketEnd = now - (bucketSize * i);
             long totalActive = 0;
             long totalDeadLetter = 0;
 
-            foreach (var history in perResourceHistories)
+            for (var r = 0; r < perResourceHistories.Count; r++)
             {
-                var latest = history.Where(p => p.At <= bucketEnd).OrderByDescending(p => p.At).FirstOrDefault();
-                if (latest is not null)
+                var history = perResourceHistories[r];
+                while (cursors[r] < history.Count && history[cursors[r]].At <= bucketEnd)
+                {
+                    latestPerResource[r] = history[cursors[r]];
+                    cursors[r]++;
+                }
+
+                if (latestPerResource[r] is { } latest)
                 {
                     totalActive += latest.ActiveCount;
                     totalDeadLetter += latest.DeadLetterCount;
@@ -75,7 +88,8 @@ public static class WallboardAggregator
         }
 
         var top = deltas.OrderByDescending(kv => kv.Value).First();
-        var pct = (int)Math.Round(top.Value * 100.0 / totalDelta);
+        var totalGrowth = deltas.Values.Where(d => d > 0).Sum();
+        var pct = totalGrowth > 0 ? (int)Math.Round(top.Value * 100.0 / totalGrowth) : 0;
         return $"+{totalDelta} in the last {FormatWindow(window)} — {top.Key} accounts for {pct}% of the rise.";
     }
 

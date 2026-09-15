@@ -112,4 +112,29 @@ public class WallboardAggregatorTests
 
         summary.Should().Be("+3 in the last 12h — sb-dev / new-queue accounts for 100% of the rise.");
     }
+
+    [Fact]
+    public void SummarizeGrowth_clamps_the_percentage_at_100_when_a_mixed_sign_delta_would_otherwise_exceed_it()
+    {
+        // DLQ purge means a resource's dead-letter count can legitimately shrink while another
+        // grows. A naive percentage-of-net-delta (100 * 100 / 50) would print "200% of the rise" --
+        // the fix divides by the sum of only the positive deltas instead, clamping at 100%.
+        var history = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>
+        {
+            ["sb-uk-prod / payments-dlq"] =
+            [
+                new(Now.AddHours(-12), 0, 10),
+                new(Now, 0, 110), // +100
+            ],
+            ["sb-uk-prod / orders-inbound"] =
+            [
+                new(Now.AddHours(-12), 0, 80),
+                new(Now, 0, 30), // -50 (purged)
+            ],
+        };
+
+        var summary = WallboardAggregator.SummarizeGrowth(history, TimeSpan.FromHours(12), Now);
+
+        summary.Should().Be("+50 in the last 12h — sb-uk-prod / payments-dlq accounts for 100% of the rise.");
+    }
 }
