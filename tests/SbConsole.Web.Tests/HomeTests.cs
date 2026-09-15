@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Core.Audit;
@@ -227,5 +228,62 @@ public class HomeTests : BunitContext, IAsyncLifetime
         cut.WaitForState(() => cut.Markup.Contains("148 q"));
 
         cut.Markup.Should().Contain("1 conn · 148 q · 23 t / 91 sub · 312 dlq");
+    }
+
+    [Fact]
+    public async Task Namespace_chip_turns_red_when_its_connection_has_an_open_problem()
+    {
+        Guid problemConnectionId;
+        Guid cleanConnectionId;
+        await using (var db = _testDb.CreateDbContext())
+        {
+            var problematic = new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            var clean = new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            db.Connections.AddRange(problematic, clean);
+            await db.SaveChangesAsync();
+            problemConnectionId = problematic.Id;
+            cleanConnectionId = clean.Id;
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardProblemsAsync(problemConnectionId, "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem> { new("Warning", "payments-dlq", "5 dead-lettered", null) });
+        plugin.GetDashboardProblemsAsync(cleanConnectionId, "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>());
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
+
+        var chips = cut.FindComponents<MudChip<string>>();
+        var problemChip = chips.Single(c => c.Markup.Contains("sb-uk-prod"));
+        var cleanChip = chips.Single(c => c.Markup.Contains("sb-dev"));
+        problemChip.Instance.Color.Should().Be(Color.Error);
+        cleanChip.Instance.Color.Should().Be(Color.Success);
+    }
+
+    [Fact]
+    public async Task Activity_panel_still_shows_real_audit_entries_and_links_to_the_audit_log()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.AuditEntries.Add(new AuditEntry
+            {
+                At = DateTimeOffset.UtcNow, Actor = "admin", Action = "queue.purge",
+                Target = "sb-uk-prod / payments-dlq", Risk = ActionRisk.Destructive, Succeeded = true,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("queue.purge"));
+
+        cut.Markup.Should().Contain("queue.purge");
+        cut.Markup.Should().Contain("sb-uk-prod / payments-dlq");
+        cut.Find("a[href='/audit']").Should().NotBeNull();
     }
 }

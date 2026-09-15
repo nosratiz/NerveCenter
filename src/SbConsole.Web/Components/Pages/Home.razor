@@ -16,9 +16,9 @@
 @inject ISnackbar Snackbar
 
 <PageTitle>Dashboard</PageTitle>
-<div class="d-flex align-center gap-4 mb-4">
+<div class="d-flex align-center gap-4 mb-4 flex-wrap">
     <MudText Typo="Typo.h4">Dashboard</MudText>
-    <MudText Typo="Typo.caption" Class="mud-text-secondary">@HeaderSummary</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">@HeaderSummary</MudText>
     <MudSpacer />
     <MudText Typo="Typo.caption" Class="mud-text-secondary">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</MudText>
     <MudButton Class="refresh-dashboard" OnClick="RefreshAsync">Refresh</MudButton>
@@ -34,68 +34,76 @@
     }
 </div>
 
-<MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
-@if (_unreachable.Count == 0 && _pluginProblems.Count == 0)
-{
-    <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
-}
-else
-{
-    @foreach (var connection in _unreachable)
-    {
-        <MudAlert Severity="Severity.Error" Class="mb-2">
-            <b>@connection.Name</b> unreachable since @connection.LastTestedAt?.ToLocalTime() — @connection.LastTestError
-            <MudButton Class="retry-connection" Style="margin-left:16px" Disabled="@(_retryingConnectionId == connection.Id)" OnClick="@(() => RetryAsync(connection))">Retry</MudButton>
-            @if (_retryingConnectionId == connection.Id)
+<div class="d-flex gap-4 flex-wrap">
+    <div class="flex-grow-1" style="flex-basis:60%;min-width:320px">
+        <MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
+        @if (_unreachable.Count == 0 && _pluginProblems.Count == 0)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
+        }
+        else
+        {
+            @foreach (var connection in _unreachable)
             {
-                <MudProgressCircular Class="retry-connection-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                <MudAlert Severity="Severity.Error" Class="mb-2">
+                    <b>@connection.Name</b> unreachable since @connection.LastTestedAt?.ToLocalTime() — @connection.LastTestError
+                    <MudButton Class="retry-connection" Style="margin-left:16px" Disabled="@(_retryingConnectionId == connection.Id)" OnClick="@(() => RetryAsync(connection))">Retry</MudButton>
+                    @if (_retryingConnectionId == connection.Id)
+                    {
+                        <MudProgressCircular Class="retry-connection-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                    }
+                    <MudLink Href="/connections" Class="ml-4">Edit connection</MudLink>
+                </MudAlert>
             }
-            <MudLink Href="/connections" Class="ml-4">Edit connection</MudLink>
-        </MudAlert>
-    }
-    @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity == "Error"))
-    {
-        <MudAlert Severity="Severity.Error" Class="mb-2 plugin-problem">
-            <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
-            @if (item.Problem.LinkHref is { } href)
+            @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity == "Error"))
             {
-                <MudLink Href="@href" Class="ml-4">Open →</MudLink>
+                <MudAlert Severity="Severity.Error" Class="mb-2 plugin-problem">
+                    <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
+                    @if (item.Problem.LinkHref is { } href)
+                    {
+                        <MudLink Href="@href" Class="ml-4">Open →</MudLink>
+                    }
+                </MudAlert>
             }
-        </MudAlert>
-    }
-    @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity != "Error"))
-    {
-        <MudAlert Severity="Severity.Warning" Class="mb-2 plugin-problem">
-            <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
-            @if (item.Problem.LinkHref is { } href)
+            @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity != "Error"))
             {
-                <MudLink Href="@href" Class="ml-4">Peek →</MudLink>
+                <MudAlert Severity="Severity.Warning" Class="mb-2 plugin-problem">
+                    <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
+                    @if (item.Problem.LinkHref is { } href)
+                    {
+                        <MudLink Href="@href" Class="ml-4">Peek →</MudLink>
+                    }
+                </MudAlert>
             }
-        </MudAlert>
-    }
-}
+        }
 
-<MudText Typo="Typo.h6" Class="mb-2">Recent activity</MudText>
-<MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">last 10 actions</MudText>
-<MudTable Items="_recentActivity">
-    <HeaderContent>
-        <MudTh>Time</MudTh>
-        <MudTh>Actor</MudTh>
-        <MudTh>Action</MudTh>
-        <MudTh>Target</MudTh>
-        <MudTh>Risk</MudTh>
-        <MudTh>Result</MudTh>
-    </HeaderContent>
-    <RowTemplate>
-        <MudTd>@context.At.ToLocalTime()</MudTd>
-        <MudTd>@context.Actor</MudTd>
-        <MudTd>@context.Action</MudTd>
-        <MudTd>@context.Target</MudTd>
-        <MudTd>@context.Risk</MudTd>
-        <MudTd>@(context.Succeeded ? "✓" : "✕")</MudTd>
-    </RowTemplate>
-</MudTable>
-<MudLink Href="/audit">Open audit log →</MudLink>
+        <MudText Typo="Typo.overline" Class="mud-text-secondary mt-4 mb-2 d-block">Namespaces</MudText>
+        <div class="d-flex flex-wrap gap-2">
+            @foreach (var connection in _connections)
+            {
+                <MudChip T="string" Class="namespace-chip" Color="@(_connectionsWithProblems.Contains(connection.Id) ? Color.Error : Color.Success)">@connection.Name</MudChip>
+            }
+        </div>
+    </div>
+
+    <div style="flex-basis:35%;min-width:280px">
+        <div class="d-flex align-center mb-2">
+            <MudText Typo="Typo.h6">Activity</MudText>
+            <MudSpacer />
+            <MudLink Href="/audit">All →</MudLink>
+        </div>
+        @foreach (var entry in _recentActivity)
+        {
+            <div class="d-flex align-start gap-2 mb-2 activity-row">
+                <span style="@($"display:inline-block;width:8px;height:8px;margin-top:6px;border-radius:50%;background:{ActivityDotColor(entry)}")"></span>
+                <div>
+                    <MudText Typo="Typo.body2"><b>@entry.Actor</b> @entry.Action</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@entry.Target · @entry.At.ToLocalTime().ToString("HH:mm")</MudText>
+                </div>
+            </div>
+        }
+    </div>
+</div>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
@@ -121,6 +129,14 @@ else
         $"{_connectionCount} conn · {MetricValue("Queues")} q · {MetricValue("Topics")} t / {MetricValue("Subscriptions")} sub · {MetricValue("Dead-lettered")} dlq";
 
     private int MetricValue(string label) => _pluginMetrics.FirstOrDefault(m => m.Key == label).Value;
+
+    private static string ActivityDotColor(AuditEntry entry) => (entry.Succeeded, entry.Risk) switch
+    {
+        (false, _) => "var(--mud-palette-error)",
+        (true, ActionRisk.Destructive) => "var(--mud-palette-error)",
+        (true, ActionRisk.Mutating) => "var(--mud-palette-warning)",
+        _ => "var(--mud-palette-text-disabled)",
+    };
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
