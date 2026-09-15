@@ -36,6 +36,9 @@ public class HomeTests : BunitContext, IAsyncLifetime
     private readonly IConnectionProvider _connectionProvider = Substitute.For<IConnectionProvider>();
     private static readonly byte[] Key = new byte[32];
 
+    private IPlugin[] _plugins = [];
+    private readonly IPluginStoreFactory _pluginStoreFactory = Substitute.For<IPluginStoreFactory>();
+
     public HomeTests()
     {
         Services.AddMudServices();
@@ -43,7 +46,7 @@ public class HomeTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<IDbContextFactory<SbcDbContext>>(_testDb);
         Services.AddSingleton<ListConnectionsQueryHandler>();
         Services.AddSingleton<ListAuditEntriesQueryHandler>();
-        Services.AddSingleton<IEnumerable<IPlugin>>(Array.Empty<IPlugin>());
+        Services.AddSingleton<IEnumerable<IPlugin>>(_ => _plugins);
         Services.AddSingleton<PluginRegistry>();
         Services.AddSingleton(_connectionProvider);
         Services.AddSingleton(_audit);
@@ -52,6 +55,8 @@ public class HomeTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<FakeTimeProvider>());
         Services.AddLogging();
         Services.AddSingleton<TestConnectionCommandHandler>();
+        _pluginStoreFactory.For(Arg.Any<string>()).Returns(Substitute.For<IPluginStore>());
+        Services.AddSingleton(_pluginStoreFactory);
     }
 
     [Fact]
@@ -140,5 +145,87 @@ public class HomeTests : BunitContext, IAsyncLifetime
         // unhandled exception, the connection still listed) is the observable proof it's wired up.
         cut.Find("button.retry-connection").Click();
         cut.WaitForAssertion(() => cut.Markup.Should().Contain("sb-eu-prod"));
+    }
+
+    [Fact]
+    public async Task Plugin_reported_problems_render_in_Needs_attention()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>
+            {
+                new("Warning", "payments-dlq", "214 dead-lettered", "/p/azure-servicebus/dead-letter"),
+            });
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
+
+        cut.Markup.Should().Contain("payments-dlq");
+        cut.Markup.Should().Contain("214 dead-lettered");
+        cut.Markup.Should().Contain("sb-uk-prod");
+    }
+
+    [Fact]
+    public async Task All_clear_requires_both_zero_unreachable_connections_and_zero_plugin_problems()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>());
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.FindAll(".dashboard-tile").Count > 0);
+
+        cut.Markup.Should().Contain("All clear");
+    }
+
+    [Fact]
+    public async Task Header_summary_reflects_connection_count_and_plugin_metrics()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric>
+            {
+                new("Queues", 148), new("Topics", 23), new("Subscriptions", 91), new("Dead-lettered", 312),
+            });
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>());
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("148 q"));
+
+        cut.Markup.Should().Contain("1 conn · 148 q · 23 t / 91 sub · 312 dlq");
     }
 }

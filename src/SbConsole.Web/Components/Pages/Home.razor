@@ -11,12 +11,14 @@
 @inject TestConnectionCommandHandler TestHandler
 @inject PluginRegistry Registry
 @inject IConnectionProvider ConnectionProvider
+@inject IPluginStoreFactory PluginStoreFactory
 @inject ILogger<Home> Logger
 @inject ISnackbar Snackbar
 
 <PageTitle>Dashboard</PageTitle>
 <div class="d-flex align-center gap-4 mb-4">
     <MudText Typo="Typo.h4">Dashboard</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">@HeaderSummary</MudText>
     <MudSpacer />
     <MudText Typo="Typo.caption" Class="mud-text-secondary">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</MudText>
     <MudButton Class="refresh-dashboard" OnClick="RefreshAsync">Refresh</MudButton>
@@ -33,7 +35,7 @@
 </div>
 
 <MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
-@if (_unreachable.Count == 0)
+@if (_unreachable.Count == 0 && _pluginProblems.Count == 0)
 {
     <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
 }
@@ -49,6 +51,26 @@ else
                 <MudProgressCircular Class="retry-connection-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
             }
             <MudLink Href="/connections" Class="ml-4">Edit connection</MudLink>
+        </MudAlert>
+    }
+    @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity == "Error"))
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-2 plugin-problem">
+            <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
+            @if (item.Problem.LinkHref is { } href)
+            {
+                <MudLink Href="@href" Class="ml-4">Open →</MudLink>
+            }
+        </MudAlert>
+    }
+    @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity != "Error"))
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-2 plugin-problem">
+            <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
+            @if (item.Problem.LinkHref is { } href)
+            {
+                <MudLink Href="@href" Class="ml-4">Peek →</MudLink>
+            }
         </MudAlert>
     }
 }
@@ -79,7 +101,10 @@ else
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
     private int _connectionCount;
+    private List<ConnectionInfo> _connections = [];
     private List<ConnectionInfo> _unreachable = [];
+    private List<(PluginDashboardProblem Problem, ConnectionInfo Connection)> _pluginProblems = [];
+    private HashSet<Guid> _connectionsWithProblems = [];
     private List<KeyValuePair<string, int>> _pluginMetrics = [];
     private IReadOnlyList<AuditEntry> _recentActivity = [];
     private DateTimeOffset _refreshedAt = DateTimeOffset.UtcNow;
@@ -92,6 +117,11 @@ else
         ("Unreachable", _unreachable.Count.ToString(), _unreachable.Count > 0),
     ];
 
+    private string HeaderSummary =>
+        $"{_connectionCount} conn · {MetricValue("Queues")} q · {MetricValue("Topics")} t / {MetricValue("Subscriptions")} sub · {MetricValue("Dead-lettered")} dlq";
+
+    private int MetricValue(string label) => _pluginMetrics.FirstOrDefault(m => m.Key == label).Value;
+
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task RefreshAsync() => await LoadAsync();
@@ -99,12 +129,15 @@ else
     private async Task LoadAsync()
     {
         var connections = await ConnectionsHandler.HandleAsync();
+        _connections = [.. connections];
         _connectionCount = connections.Count;
         _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
 
         var metrics = new Dictionary<string, int>();
+        var pluginProblems = new List<(PluginDashboardProblem, ConnectionInfo)>();
         foreach (var plugin in Registry.Plugins)
         {
+            var store = PluginStoreFactory.For(plugin.Id);
             foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
             {
                 try
@@ -122,6 +155,11 @@ else
                     {
                         metrics[metric.Label] = metrics.GetValueOrDefault(metric.Label) + metric.Count;
                     }
+
+                    foreach (var problem in await plugin.GetDashboardProblemsAsync(connection.Id, secret, store))
+                    {
+                        pluginProblems.Add((problem, connection));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -131,6 +169,8 @@ else
         }
 
         _pluginMetrics = [.. metrics];
+        _pluginProblems = pluginProblems;
+        _connectionsWithProblems = [.. _unreachable.Select(c => c.Id), .. pluginProblems.Select(p => p.Item2.Id)];
 
         var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
         _recentActivity = page.Entries;
