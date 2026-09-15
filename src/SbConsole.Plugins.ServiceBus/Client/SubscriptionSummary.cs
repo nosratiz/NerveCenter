@@ -4,4 +4,5 @@ public sealed record SubscriptionSummary(
     string Name,
     long ActiveMessageCount,
     long DeadLetterMessageCount,
-    long TotalMessageCount);
+    long TotalMessageCount,
+    string Status); // "Active" | "Disabled" | "SendDisabled" | "ReceiveDisabled"

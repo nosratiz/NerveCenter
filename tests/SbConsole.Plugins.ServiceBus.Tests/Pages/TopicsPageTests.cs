@@ -51,7 +51,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 2, 4096, 3) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6), new("eu-team", 2, 0, 2) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active"), new("eu-team", 2, 0, 2, "Active") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -69,7 +69,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -99,7 +99,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -118,7 +118,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 2, 4096, 0) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0), new("eu-team", 0, 0, 0) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0, "Active"), new("eu-team", 0, 0, 0, "Active") });
         _confirmation.ConfirmAsync("Delete", "orders", _connectionInfo.IsProd, 2, Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
@@ -137,7 +137,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0) });
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0, "Active") });
         _confirmation.ConfirmAsync("Delete", "uk-team", false, null, Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();

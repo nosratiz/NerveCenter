@@ -211,10 +211,21 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string connectionString, string topicName, CancellationToken ct = default)
     {
         var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+
+        // Status lives on the config properties (GetSubscriptionsAsync), not the runtime
+        // properties (GetSubscriptionsRuntimePropertiesAsync) fetched below -- two separate calls,
+        // merged here by name so ListSubscriptionsAsync stays the one place callers need to know.
+        var statusByName = new Dictionary<string, string>();
+        await foreach (var props in adminClient.GetSubscriptionsAsync(topicName, ct).WithCancellation(ct))
+        {
+            statusByName[props.SubscriptionName] = props.Status.ToString();
+        }
+
         var subscriptions = new List<SubscriptionSummary>();
         await foreach (var props in adminClient.GetSubscriptionsRuntimePropertiesAsync(topicName, ct).WithCancellation(ct))
         {
-            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount));
+            var status = statusByName.GetValueOrDefault(props.SubscriptionName, "Active");
+            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount, status));
         }
 
         return subscriptions;
