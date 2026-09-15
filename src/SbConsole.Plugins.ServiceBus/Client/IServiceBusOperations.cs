@@ -74,4 +74,11 @@ public interface IServiceBusOperations
 
     /// <summary>Destructive. Drains and discards every message currently in the subscription's dead-letter sub-queue. Returns how many were purged.</summary>
     Task<int> PurgeSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default);
+
+    Task<IReadOnlyList<RuleSummary>> ListRulesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default);
+
+    Task CreateRuleAsync(string connectionString, string topicName, string subscriptionName, CreateRuleRequest request, CancellationToken ct = default);
+
+    /// <summary>Destructive.</summary>
+    Task DeleteRuleAsync(string connectionString, string topicName, string subscriptionName, string ruleName, CancellationToken ct = default);
 }

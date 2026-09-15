@@ -7,6 +7,7 @@ using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
 using SbConsole.Plugins.ServiceBus.Messages;
 using SbConsole.Plugins.ServiceBus.Pages;
+using SbConsole.Plugins.ServiceBus.Rules;
 using SbConsole.Plugins.ServiceBus.Subscriptions;
 using SbConsole.Plugins.ServiceBus.Topics;
 using SbConsole.Sdk;
@@ -43,6 +44,8 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<CreateSubscriptionCommandHandler>();
         Services.AddSingleton<DeleteSubscriptionCommandHandler>();
         Services.AddSingleton<SendMessageCommandHandler>();
+        Services.AddSingleton<ListSubscriptionRulesQueryHandler>();
+        Services.AddSingleton<DeleteRuleCommandHandler>();
     }
 
     [Fact]
@@ -149,5 +152,96 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
 
         await _operations.Received(1).DeleteSubscriptionAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Rules_chip_shows_the_live_count_after_the_topic_expands()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'"), new("LowPriority", "Priority = 'Low'") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find(".rule-count-chip").TextContent.Should().Contain("2");
+    }
+
+    [Fact]
+    public async Task Expanding_a_subscriptions_rules_panel_reveals_its_rules_without_a_second_fetch()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Markup.Should().Contain("HighPriority");
+        cut.Markup.Should().Contain("Priority = 'High'");
+        await _operations.Received(1).ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_subscription_with_no_rules_shows_an_honest_empty_state_in_its_panel()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary>());
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Markup.Should().Contain("No rules.");
+    }
+
+    [Fact]
+    public async Task Delete_rule_goes_through_confirmation_before_calling_the_handler()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'") });
+        _confirmation.ConfirmAsync("Delete", "HighPriority", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>()).Returns(true);
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+        cut.Find("button.delete-rule").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).DeleteRuleAsync("Endpoint=sb://real", "orders", "uk-team", "HighPriority", Arg.Any<CancellationToken>());
     }
 }
