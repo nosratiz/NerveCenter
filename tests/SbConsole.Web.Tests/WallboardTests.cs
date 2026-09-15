@@ -16,6 +16,7 @@ using SbConsole.Core.Tests;
 using SbConsole.Sdk;
 using SbConsole.Web.Components.Pages;
 using SbConsole.Web.Plugins;
+using SbConsole.Web.Wallboard;
 
 namespace SbConsole.Web.Tests;
 
@@ -51,6 +52,7 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         Services.AddLogging();
         _pluginStoreFactory.For(Arg.Any<string>()).Returns(Substitute.For<IPluginStore>());
         Services.AddSingleton(_pluginStoreFactory);
+        Services.AddSingleton<WallboardSnapshotLoader>();
     }
 
     [Fact]

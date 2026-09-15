@@ -62,6 +62,7 @@ builder.Services.AddScoped<TestConnectionCommandHandler>();
 builder.Services.AddScoped<ListAuditEntriesQueryHandler>();
 builder.Services.AddScoped<ListPluginsQueryHandler>();
 builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
+builder.Services.AddScoped<SbConsole.Web.Wallboard.WallboardSnapshotLoader>();
 
 // Plugins (compile-time registration; see docs/design.md §2)
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));

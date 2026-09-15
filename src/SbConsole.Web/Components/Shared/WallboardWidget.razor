@@ -1,0 +1,91 @@
+@* src/SbConsole.Web/Components/Shared/WallboardWidget.razor *@
+@using SbConsole.Web.Wallboard
+@inject WallboardSnapshotLoader SnapshotLoader
+@inject TimeProvider Clock
+
+<MudPaper Class="pa-4 mb-4 wallboard-widget" Style="border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+    <div class="d-flex align-center mb-2">
+        <MudText Typo="Typo.h6">Wallboard</MudText>
+        <MudSpacer />
+        <MudLink Href="/wallboard" Class="open-full-wallboard">Open full wallboard →</MudLink>
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Class="mb-2" />
+    }
+    else
+    {
+        <div class="d-flex flex-wrap gap-4 mb-4">
+            <MudPaper Class="pa-3 tile-active" Style="min-width:140px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">ACTIVE</MudText>
+                <MudText Typo="Typo.h5">@_activeCount</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute / min</MudText>
+            </MudPaper>
+            <MudPaper Class="pa-3 tile-dead-lettered" Style="@($"min-width:140px;border:1px solid {(_deadLetterTotal > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-lines-default)")}")" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">DEAD-LETTERED</MudText>
+                <MudText Typo="Typo.h5" Color="@(_deadLetterTotal > 0 ? Color.Error : Color.Default)">@_deadLetterTotal</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@DeadLetterDeltaLabel</MudText>
+            </MudPaper>
+            <MudPaper Class="pa-3 tile-oldest" Style="min-width:140px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">OLDEST MESSAGE</MudText>
+                @if (_oldestDeadLetter is { } oldest)
+                {
+                    <MudText Typo="Typo.h5">@FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime)</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@oldest.ResourceName · @oldest.DeadLetterCount msgs</MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.h5">—</MudText>
+                }
+            </MudPaper>
+        </div>
+
+        <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@TrendSeries" ChartLabels="@TrendLabels" Width="100%" Height="140px" />
+    }
+</MudPaper>
+
+@code {
+    private bool _loading = true;
+    private long _activeCount;
+    private long _activeDeltaLastMinute;
+    private long _deadLetterTotal;
+    private long? _deadLetterDeltaLastHour;
+    private OldestDeadLetterEntry? _oldestDeadLetter;
+    private IReadOnlyList<WallboardAggregator.Bucket> _buckets1h = [];
+
+    private string DeadLetterDeltaLabel =>
+        _deadLetterDeltaLastHour is { } delta ? $"{(delta >= 0 ? "+" : "")}{delta} / 1h" : "— / 1h";
+
+    private List<ChartSeries<double>> TrendSeries =>
+    [
+        new() { Name = "Active", Data = _buckets1h.Select(b => (double)b.TotalActive).ToList() },
+        new() { Name = "Dead-lettered", Data = _buckets1h.Select(b => (double)b.TotalDeadLetter).ToList() },
+    ];
+
+    // Same thinning approach as the full Wallboard page's chart -- a 60-point 1h series is too
+    // dense to label every point, so only every Nth bucket gets a label (blank "" for the rest).
+    private string[] TrendLabels
+    {
+        get
+        {
+            var stride = Math.Max(1, _buckets1h.Count / 6);
+            return [.. _buckets1h.Select((b, i) => i % stride == 0 ? b.At.ToLocalTime().ToString("HH:mm") : "")];
+        }
+    }
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var snapshot = await SnapshotLoader.LoadAsync();
+        _activeCount = snapshot.ActiveCount;
+        _activeDeltaLastMinute = snapshot.ActiveDeltaLastMinute;
+        _deadLetterTotal = snapshot.DeadLetterTotal;
+        _deadLetterDeltaLastHour = snapshot.DeadLetterDeltaLastHour;
+        _oldestDeadLetter = snapshot.OldestDeadLetter;
+        _buckets1h = snapshot.Buckets1h;
+        _loading = false;
+    }
+}

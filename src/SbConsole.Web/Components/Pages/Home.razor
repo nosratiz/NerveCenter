@@ -6,6 +6,7 @@
 @using SbConsole.Sdk
 @using SbConsole.Web.Auth
 @using SbConsole.Web.Plugins
+@using SbConsole.Web.Components.Shared
 @inject ListConnectionsQueryHandler ConnectionsHandler
 @inject ListAuditEntriesQueryHandler AuditHandler
 @inject TestConnectionCommandHandler TestHandler
@@ -28,6 +29,8 @@
 {
     <MudProgressLinear Indeterminate="true" Class="mb-4" />
 }
+
+<WallboardWidget />
 
 <div class="d-flex flex-wrap gap-4 mb-4">
     @foreach (var tile in Tiles)

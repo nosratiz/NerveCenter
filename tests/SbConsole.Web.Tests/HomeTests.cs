@@ -15,6 +15,7 @@ using SbConsole.Core.Tests;
 using SbConsole.Sdk;
 using SbConsole.Web.Components.Pages;
 using SbConsole.Web.Plugins;
+using SbConsole.Web.Wallboard;
 
 namespace SbConsole.Web.Tests;
 
@@ -58,6 +59,7 @@ public class HomeTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<TestConnectionCommandHandler>();
         _pluginStoreFactory.For(Arg.Any<string>()).Returns(Substitute.For<IPluginStore>());
         Services.AddSingleton(_pluginStoreFactory);
+        Services.AddSingleton<WallboardSnapshotLoader>();
     }
 
     [Fact]
@@ -364,5 +366,34 @@ public class HomeTests : BunitContext, IAsyncLifetime
         var cut = Render<Home>();
 
         cut.Find("a.open-wallboard").GetAttribute("href").Should().Be("/wallboard");
+    }
+
+    [Fact]
+    public async Task Dashboard_embeds_a_wallboard_widget_with_a_link_to_the_full_page()
+    {
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
+            await db.SaveChangesAsync();
+        }
+
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric> { new("Dead-lettered", 42) });
+        plugin.GetResourceMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginResourceMetric>());
+        plugin.GetOldestDeadLetterAsync(Arg.Any<Guid>(), "secret", Arg.Any<CancellationToken>())
+            .Returns((OldestDeadLetterEntry?)null);
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.FindAll(".wallboard-widget .tile-dead-lettered").Count > 0);
+
+        cut.Find(".wallboard-widget .tile-dead-lettered").TextContent.Should().Contain("42");
+        cut.Find("a.open-full-wallboard").GetAttribute("href").Should().Be("/wallboard");
     }
 }
