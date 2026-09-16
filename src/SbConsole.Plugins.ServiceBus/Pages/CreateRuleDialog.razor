@@ -1,0 +1,54 @@
+@using SbConsole.Plugins.ServiceBus.Rules
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="rule-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudTextField id="rule-sql-expression" @bind-Value="_sqlExpression" Label="SQL expression" Placeholder="Priority = 'High'" Required="true" Immediate="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-rule-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || string.IsNullOrWhiteSpace(_sqlExpression) || _busy)" OnClick="Save">Add</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public string SubscriptionName { get; set; } = "";
+
+    [Inject] private CreateRuleCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private string _sqlExpression = "";
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, _name, _sqlExpression));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

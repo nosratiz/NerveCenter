@@ -118,6 +118,7 @@ else
                                 </div>
                             }
                         }
+                        <MudButton Class="add-rule-action" Size="Size.Small" OnClick="@(() => OpenCreateRule(panelRow.TopicName, panelRow.SubscriptionName))">+ Add rule</MudButton>
                     </div>
                 </MudTd>
             }
@@ -303,6 +304,24 @@ else
         {
             _expandedTopics.Add(topicName);
             await LoadTopicsAsync();
+        }
+    }
+
+    private async Task OpenCreateRule(string topicName, string subscriptionName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateRuleDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicName, topicName },
+            { x => x.SubscriptionName, subscriptionName },
+        };
+        var dialog = await DialogService.ShowAsync<CreateRuleDialog>("Add rule", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await RefreshRulesAsync(topicName, subscriptionName);
         }
     }
 
