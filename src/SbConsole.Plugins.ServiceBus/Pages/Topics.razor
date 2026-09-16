@@ -221,7 +221,11 @@ else
         }
 
         _expandedTopics.Add(topicName);
+        await EnsureRulesLoadedAsync(topicName);
+    }
 
+    private async Task EnsureRulesLoadedAsync(string topicName)
+    {
         var topic = _topics.FirstOrDefault(t => t.Topic.Name == topicName);
         if (topic is null)
         {
@@ -241,7 +245,14 @@ else
             for (var i = 0; i < toFetch.Count; i++)
             {
                 var key = $"{topicName}/{toFetch[i].Name}";
-                _rulesByKey[key] = results[i].IsSuccess ? results[i].Value! : [];
+                if (results[i].IsSuccess)
+                {
+                    _rulesByKey[key] = results[i].Value!;
+                }
+                else
+                {
+                    Snackbar.Add(results[i].Error!, Severity.Error);
+                }
             }
         }
         finally
@@ -304,6 +315,7 @@ else
         {
             _expandedTopics.Add(topicName);
             await LoadTopicsAsync();
+            await EnsureRulesLoadedAsync(topicName);
         }
     }
 

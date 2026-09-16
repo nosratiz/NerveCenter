@@ -2,6 +2,7 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.ServiceBus.Client;
@@ -24,6 +25,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     private readonly Guid _connectionId = Guid.NewGuid();
     private readonly ConnectionInfo _connectionInfo;
     private readonly IConfirmationService _confirmation = Substitute.For<IConfirmationService>();
+    private readonly IDialogService _dialogService = Substitute.For<IDialogService>();
 
     public TopicsPageTests()
     {
@@ -37,6 +39,9 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_operations);
         Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddSingleton(_confirmation);
+        // Overrides MudServices' real IDialogService so tests that drive a dialog flow (e.g.
+        // create-subscription) can stub the dialog's result without rendering a MudDialogProvider.
+        Services.AddSingleton(_dialogService);
         Services.AddLogging();
         Services.AddSingleton<ListTopicsQueryHandler>();
         Services.AddSingleton<CreateTopicCommandHandler>();
@@ -243,5 +248,54 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
 
         await _operations.Received(1).DeleteRuleAsync("Endpoint=sb://real", "orders", "uk-team", "HighPriority", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Creating_a_subscription_fetches_its_rules_even_when_the_topic_starts_collapsed()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 0, 0, 0, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary>());
+
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(true)));
+        _dialogService.ShowAsync<CreateSubscriptionDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        // Topic is still collapsed here - the row and its "+ Subscription" action are always visible.
+        cut.FindAll(".subscription-row").Should().BeEmpty("collapsed by default");
+        cut.Find("button.add-subscription-action").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        await _operations.Received(1).ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_failed_rules_fetch_shows_the_error_instead_of_caching_it_as_empty()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<RuleSummary>>(new InvalidOperationException("rules listing throttled")));
+        var snackbar = Services.GetRequiredService<ISnackbar>();
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        snackbar.ShownSnackbars.Should().Contain(s => s.Message != null && s.Message.Contains("rules listing throttled"));
     }
 }
