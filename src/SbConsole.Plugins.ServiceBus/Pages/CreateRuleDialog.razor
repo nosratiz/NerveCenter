@@ -5,7 +5,29 @@
 <MudDialog>
     <DialogContent>
         <MudTextField id="rule-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
-        <MudTextField id="rule-sql-expression" @bind-Value="_sqlExpression" Label="SQL expression" Placeholder="Priority = 'High'" Required="true" Immediate="true" />
+        <MudToggleGroup T="string" @bind-Value="_mode" Class="mt-2 mb-2">
+            <MudToggleItem Value="@("sql")" Class="rule-mode-sql" Text="SQL expression" />
+            <MudToggleItem Value="@("correlation")" Class="rule-mode-correlation" Text="Correlation match" />
+        </MudToggleGroup>
+        @if (_mode == "sql")
+        {
+            <MudTextField id="rule-sql-expression" @bind-Value="_sqlExpression" Label="SQL expression" Placeholder="Priority = 'High'" Required="true" Immediate="true" />
+        }
+        else
+        {
+            <MudTextField id="rule-correlation-id" @bind-Value="_correlationId" Label="Correlation ID" Immediate="true" />
+            <MudTextField id="rule-label" @bind-Value="_label" Label="Label" Immediate="true" />
+            <MudText Typo="Typo.subtitle2" Class="mt-2">Custom properties</MudText>
+            @foreach (var row in _properties)
+            {
+                <div class="d-flex align-center gap-2 property-row">
+                    <MudTextField @bind-Value="row.Key" Label="Key" Immediate="true" Class="property-key" />
+                    <MudTextField @bind-Value="row.Value" Label="Value" Immediate="true" Class="property-value" />
+                    <MudIconButton Class="remove-property-row" Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _properties.Remove(row))" />
+                </div>
+            }
+            <MudButton Class="add-property-row" Size="Size.Small" OnClick="@(() => _properties.Add(new PropertyRow()))">+ Add property</MudButton>
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
@@ -13,7 +35,7 @@
         {
             <MudProgressCircular Class="save-rule-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }
-        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || string.IsNullOrWhiteSpace(_sqlExpression) || _busy)" OnClick="Save">Add</MudButton>
+        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSave)" OnClick="Save">Add</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -26,16 +48,45 @@
 
     [Inject] private CreateRuleCommandHandler CreateHandler { get; set; } = default!;
 
+    private sealed class PropertyRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private string _mode = "sql";
     private string _name = "";
     private string _sqlExpression = "";
+    private string _correlationId = "";
+    private string _label = "";
+    private readonly List<PropertyRow> _properties = [];
     private bool _busy;
+
+    private bool CanSave =>
+        !string.IsNullOrWhiteSpace(_name)
+        && !_busy
+        && (_mode == "sql"
+            ? !string.IsNullOrWhiteSpace(_sqlExpression)
+            : !string.IsNullOrWhiteSpace(_correlationId)
+              || !string.IsNullOrWhiteSpace(_label)
+              || _properties.Any(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)));
 
     private async Task Save()
     {
         _busy = true;
         try
         {
-            var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, new CreateSqlRuleRequest(_name, _sqlExpression)));
+            CreateRuleRequest request = _mode == "sql"
+                ? new CreateSqlRuleRequest(_name, _sqlExpression)
+                : new CreateCorrelationRuleRequest(
+                    _name,
+                    string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
+                    string.IsNullOrWhiteSpace(_label) ? null : _label,
+                    _properties
+                        .Where(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value))
+                        .ToDictionary(p => p.Key, p => p.Value));
+
+            var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
             if (result.IsSuccess)
             {
                 MudDialog.Close(DialogResult.Ok(true));
