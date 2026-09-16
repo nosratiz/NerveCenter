@@ -35,7 +35,7 @@
 - Consumes: the existing `AzureServiceBusOperations.CreateAdministrationClientOptions()`.
 - Produces: `RuleSummary(string Name, string SqlExpression)`, `CreateRuleRequest(string Name, string SqlExpression)`, and three new `IServiceBusOperations` methods (`ListRulesAsync`, `CreateRuleAsync`, `DeleteRuleAsync`) that Task 2's handlers call.
 
-- [ ] **Step 1: Create the two new model files**
+- [x] **Step 1: Create the two new model files**
 
 `src/SbConsole.Plugins.ServiceBus/Client/RuleSummary.cs`:
 
@@ -53,7 +53,7 @@ namespace SbConsole.Plugins.ServiceBus.Client;
 public sealed record CreateRuleRequest(string Name, string SqlExpression);
 ```
 
-- [ ] **Step 2: Add the three new methods to `IServiceBusOperations`**
+- [x] **Step 2: Add the three new methods to `IServiceBusOperations`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Client/IServiceBusOperations.cs`. Insert the following block immediately after `PurgeSubscriptionDeadLetterMessagesAsync` (the last member), before the closing `}` of the interface:
 
@@ -67,7 +67,7 @@ Open `src/SbConsole.Plugins.ServiceBus/Client/IServiceBusOperations.cs`. Insert 
     Task DeleteRuleAsync(string connectionString, string topicName, string subscriptionName, string ruleName, CancellationToken ct = default);
 ```
 
-- [ ] **Step 3: Implement the three methods in `AzureServiceBusOperations`**
+- [x] **Step 3: Implement the three methods in `AzureServiceBusOperations`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Client/AzureServiceBusOperations.cs`. Insert the following block at the very end of the class, just before its closing `}`:
 
@@ -103,7 +103,7 @@ Open `src/SbConsole.Plugins.ServiceBus/Client/AzureServiceBusOperations.cs`. Ins
     }
 ```
 
-- [ ] **Step 4: Build and confirm no regressions**
+- [x] **Step 4: Build and confirm no regressions**
 
 Run: `dotnet build -warnaserror`
 Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
@@ -111,7 +111,7 @@ Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
 Run: `dotnet test`
 Expected: same pass count as before this task (no new tests yet — these three methods can't be meaningfully unit-tested without a broker, same precedent as every other admin CRUD method in this class).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Client/
@@ -140,7 +140,7 @@ EOF
 - Consumes: `IServiceBusOperations.ListRulesAsync`/`CreateRuleAsync`/`DeleteRuleAsync` and `RuleSummary`/`CreateRuleRequest` from Task 1.
 - Produces: `ListSubscriptionRulesQueryHandler.HandleAsync(Guid connectionId, string topicName, string subscriptionName, CancellationToken ct = default) : Task<PluginResult<IReadOnlyList<RuleSummary>>>`; `CreateRuleCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, string RuleName, string SqlExpression)` and `CreateRuleCommandHandler.HandleAsync(CreateRuleCommand, CancellationToken) : Task<PluginResult>`; `DeleteRuleCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string TopicName, string SubscriptionName, string RuleName)` and `DeleteRuleCommandHandler.HandleAsync(DeleteRuleCommand, CancellationToken) : Task<PluginResult>` — all three are what Task 3/4's `Topics.razor` and `CreateRuleDialog.razor` inject and call.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/SbConsole.Plugins.ServiceBus.Tests/Rules/ListSubscriptionRulesQueryHandlerTests.cs`:
 
@@ -314,12 +314,12 @@ public class DeleteRuleCommandHandlerTests
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~SbConsole.Plugins.ServiceBus.Tests.Rules"`
 Expected: FAIL to compile — `ListSubscriptionRulesQueryHandler`, `CreateRuleCommandHandler`, `CreateRuleCommand`, `DeleteRuleCommandHandler`, `DeleteRuleCommand` don't exist yet.
 
-- [ ] **Step 3: Implement the three handlers**
+- [x] **Step 3: Implement the three handlers**
 
 `src/SbConsole.Plugins.ServiceBus/Rules/ListSubscriptionRulesQueryHandler.cs`:
 
@@ -438,7 +438,7 @@ public sealed class DeleteRuleCommandHandler(IServiceBusOperations operations, I
 }
 ```
 
-- [ ] **Step 4: Register the three handlers in `ServiceBusPlugin.ConfigureServices`**
+- [x] **Step 4: Register the three handlers in `ServiceBusPlugin.ConfigureServices`**
 
 In `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, add after the `services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();` line:
 
@@ -448,7 +448,7 @@ In `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, add after the `servic
         services.AddScoped<Rules.DeleteRuleCommandHandler>();
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~SbConsole.Plugins.ServiceBus.Tests.Rules"`
 Expected: PASS (7 tests: 3 for List, 2 for Create, 2 for Delete).
@@ -456,7 +456,7 @@ Expected: PASS (7 tests: 3 for List, 2 for Create, 2 for Delete).
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: full suite green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Rules/ src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs tests/SbConsole.Plugins.ServiceBus.Tests/Rules/
@@ -482,7 +482,7 @@ EOF
 
 This task does **not** add the "+ Add rule" button yet — that arrives in Task 4 once `CreateRuleDialog` exists. A subscription with rules already present (as returned by the test double) is fully viewable and deletable after this task; there is just no in-page way yet to create the first one (matching the existing precedent that a subscription's rules come pre-seeded by whatever created it — that's fine, since this task's own tests seed rules directly through the substitute `IServiceBusOperations`, exactly like `TopicsPageTests.cs` already does for subscriptions themselves).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. Add `using SbConsole.Plugins.ServiceBus.Rules;` to the usings block, then register the new handler and the confirmation double already present:
 
@@ -593,12 +593,12 @@ Then add these four tests at the end of the class, before the closing `}`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~TopicsPageTests"`
 Expected: FAIL — `.rule-count-chip`/`button.expand-subscription-rules`/`button.delete-rule` don't exist yet, and `IServiceBusOperations.ListRulesAsync`/`DeleteRuleAsync` are unused by the page.
 
-- [ ] **Step 3: Implement the Rules column and panel in `Topics.razor`**
+- [x] **Step 3: Implement the Rules column and panel in `Topics.razor`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor`.
 
@@ -837,7 +837,7 @@ Add the delete-rule and refresh methods at the end of the class, before the clos
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~TopicsPageTests"`
 Expected: PASS (10 tests: the 6 existing plus these 4 new ones).
@@ -845,7 +845,7 @@ Expected: PASS (10 tests: the 6 existing plus these 4 new ones).
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: full suite green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs
@@ -870,7 +870,7 @@ EOF
 - Consumes: `Rules.CreateRuleCommandHandler`/`CreateRuleCommand` from Task 2; `Topics.razor`'s `RefreshRulesAsync(string, string)` from Task 3.
 - Produces: `CreateRuleDialog` with `[Parameter]` properties `ConnectionId : Guid`, `ConnectionName : string`, `TopicName : string`, `SubscriptionName : string` — a self-contained dialog, nothing else depends on its internals.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs` (mirrors `CreateSubscriptionDialogTests.cs` exactly):
 
@@ -979,12 +979,12 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
 
 No `TopicsPageTests.cs` addition is needed for the "+ Add rule" button itself: `Topics.razor`'s test host never renders a `MudDialogProvider` (that only exists in the real app's `MainLayout.razor`), so `DialogService.ShowAsync` never produces findable markup inside a `Topics` component test — exactly why the existing `OpenCreateTopic`/`OpenCreateSubscription` methods have no "click button, fill in the dialog, submit" test in that file either, only their button-click-to-dialog-open wiring goes untested there while the dialog's own behavior (`CreateSubscriptionDialogTests.cs`) is tested in isolation. `CreateRuleDialogTests.cs` above is this feature's equivalent: it proves `CreateRuleDialog` calls the handler correctly and closes/stays open appropriately, which is everything that can be meaningfully unit-tested about the "Add rule" flow.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: FAIL to compile — `CreateRuleDialog` doesn't exist yet.
 
-- [ ] **Step 3: Implement `CreateRuleDialog.razor`**
+- [x] **Step 3: Implement `CreateRuleDialog.razor`**
 
 `src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor`:
 
@@ -1045,7 +1045,7 @@ Expected: FAIL to compile — `CreateRuleDialog` doesn't exist yet.
 }
 ```
 
-- [ ] **Step 4: Wire the "+ Add rule" button into `Topics.razor`**
+- [x] **Step 4: Wire the "+ Add rule" button into `Topics.razor`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor`. In the `SubscriptionRulesPanelRowEntry` branch added in Task 3, add the button right after the `@if (panelRow.Rules.Count == 0) { ... } else { ... }` block, still inside the `<div style="padding-left:80px">`:
 
@@ -1075,7 +1075,7 @@ Add `OpenCreateRule` to `@code`, next to `OpenCreateSubscription`:
     }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: PASS (2 tests).
@@ -1083,7 +1083,7 @@ Expected: PASS (2 tests).
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: full suite green — this also exercises `Topics.razor`'s new `OpenCreateRule` wiring through compilation, even though no test drives it end-to-end (§Step 2 above).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs
@@ -1105,7 +1105,7 @@ EOF
 
 **Interfaces:** None new — this task only updates the static summary shown on the host's Plugins page now that the two new actions (Add rule, Delete rule) exist. No new page/route was added in this plan, so `PageCount` is unchanged.
 
-- [ ] **Step 1: Update `Contribution`**
+- [x] **Step 1: Update `Contribution`**
 
 In `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`, change:
 
@@ -1128,7 +1128,7 @@ to:
     public PluginContribution Contribution => new(PageCount: 4, ActionCount: 15);
 ```
 
-- [ ] **Step 2: Update the test**
+- [x] **Step 2: Update the test**
 
 In `tests/SbConsole.Plugins.ServiceBus.Tests/ServiceBusPluginTests.cs`, find the assertion on `plugin.Contribution` (in `Declares_the_expected_identity_and_connection_kind`, or wherever it lives) and update it to:
 
@@ -1136,7 +1136,7 @@ In `tests/SbConsole.Plugins.ServiceBus.Tests/ServiceBusPluginTests.cs`, find the
         plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 15));
 ```
 
-- [ ] **Step 3: Run the full suite one final time**
+- [x] **Step 3: Run the full suite one final time**
 
 Run: `dotnet build -warnaserror`
 Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
@@ -1144,7 +1144,7 @@ Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
 Run: `dotnet test`
 Expected: every test across the solution passes. Report the total count.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs tests/SbConsole.Plugins.ServiceBus.Tests/ServiceBusPluginTests.cs
