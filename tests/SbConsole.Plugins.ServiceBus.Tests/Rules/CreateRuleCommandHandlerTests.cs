@@ -22,7 +22,7 @@ public class CreateRuleCommandHandlerTests
             .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", "HighPriority", "Priority = 'High'"));
 
         result.IsSuccess.Should().BeTrue();
-        await operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Is<CreateRuleRequest>(r => r.Name == "HighPriority" && r.SqlExpression == "Priority = 'High'"), Arg.Any<CancellationToken>());
+        await operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Is<CreateRuleRequest>(r => r is CreateSqlRuleRequest && ((CreateSqlRuleRequest)r).Name == "HighPriority" && ((CreateSqlRuleRequest)r).SqlExpression == "Priority = 'High'"), Arg.Any<CancellationToken>());
         await audit.Received(1).RecordAsync("rule.create", "sb-dev/orders/uk-team/HighPriority", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 

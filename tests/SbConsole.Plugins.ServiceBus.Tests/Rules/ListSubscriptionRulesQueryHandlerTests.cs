@@ -17,15 +17,40 @@ public class ListSubscriptionRulesQueryHandlerTests
         connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
         var operations = Substitute.For<IServiceBusOperations>();
         operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
-            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'") });
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
 
         var result = await new ListSubscriptionRulesQueryHandler(operations, connections, NullLogger<ListSubscriptionRulesQueryHandler>.Instance)
             .HandleAsync(connectionId, "orders", "uk-team");
 
         result.IsSuccess.Should().BeTrue();
-        var rule = result.Value.Should().ContainSingle().Subject;
+        var rule = result.Value.Should().ContainSingle().Subject.Should().BeOfType<SqlRuleSummary>().Subject;
         rule.Name.Should().Be("HighPriority");
         rule.SqlExpression.Should().Be("Priority = 'High'");
+    }
+
+    [Fact]
+    public async Task Returns_a_mix_of_sql_correlation_and_other_rules()
+    {
+        var connectionId = Guid.NewGuid();
+        var connections = Substitute.For<IConnectionProvider>();
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        var operations = Substitute.For<IServiceBusOperations>();
+        operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary>
+            {
+                new SqlRuleSummary("HighPriority", "Priority = 'High'"),
+                new CorrelationRuleSummary("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" }),
+                new OtherRuleSummary("$Default", "TrueFilter"),
+            });
+
+        var result = await new ListSubscriptionRulesQueryHandler(operations, connections, NullLogger<ListSubscriptionRulesQueryHandler>.Instance)
+            .HandleAsync(connectionId, "orders", "uk-team");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().HaveCount(3);
+        result.Value.Should().Contain(r => r is SqlRuleSummary && ((SqlRuleSummary)r).Name == "HighPriority" && ((SqlRuleSummary)r).SqlExpression == "Priority = 'High'");
+        result.Value.Should().Contain(r => r is CorrelationRuleSummary && ((CorrelationRuleSummary)r).Name == "VipCustomers" && ((CorrelationRuleSummary)r).CorrelationId == "vip-123" && ((CorrelationRuleSummary)r).Label == "Orders" && ((CorrelationRuleSummary)r).Properties["tier"] == "gold");
+        result.Value.Should().Contain(r => r is OtherRuleSummary && ((OtherRuleSummary)r).Name == "$Default" && ((OtherRuleSummary)r).RawFilterText == "TrueFilter");
     }
 
     [Fact]

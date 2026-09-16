@@ -113,7 +113,7 @@ else
                             @foreach (var rule in panelRow.Rules)
                             {
                                 <div class="rule-row d-flex align-center gap-2">
-                                    <span style="font-family:monospace">@rule.Name — @rule.SqlExpression</span>
+                                    <span style="font-family:monospace">@rule.Name — @FormatRule(rule)</span>
                                     <MudButton Class="delete-rule" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteRuleAsync(panelRow.TopicName, panelRow.SubscriptionName, rule.Name))">Delete</MudButton>
                                 </div>
                             }
@@ -267,6 +267,33 @@ else
         {
             _expandedSubscriptionRules.Add(rowKey);
         }
+    }
+
+    private static string FormatRule(RuleSummary rule) => rule switch
+    {
+        SqlRuleSummary sql => sql.SqlExpression,
+        CorrelationRuleSummary correlation => FormatCorrelationRule(correlation),
+        OtherRuleSummary other => other.RawFilterText,
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "Unknown rule kind."),
+    };
+
+    private static string FormatCorrelationRule(CorrelationRuleSummary rule)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(rule.CorrelationId))
+        {
+            parts.Add($"CorrelationId: {rule.CorrelationId}");
+        }
+        if (!string.IsNullOrEmpty(rule.Label))
+        {
+            parts.Add($"Label: {rule.Label}");
+        }
+        foreach (var (key, value) in rule.Properties)
+        {
+            parts.Add($"{key}: {value}");
+        }
+
+        return parts.Count == 0 ? "(matches all messages)" : string.Join(" · ", parts);
     }
 
     private string PeekUrl(string topicName, string subscriptionName, bool deadLetter = false, long? deadLetterCount = null)

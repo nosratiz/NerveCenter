@@ -21,7 +21,7 @@ public sealed class CreateRuleCommandHandler(IServiceBusOperations operations, I
                 return PluginResult.Fail("Connection not found.");
             }
 
-            await operations.CreateRuleAsync(secret, cmd.TopicName, cmd.SubscriptionName, new CreateRuleRequest(cmd.RuleName, cmd.SqlExpression), ct);
+            await operations.CreateRuleAsync(secret, cmd.TopicName, cmd.SubscriptionName, new CreateSqlRuleRequest(cmd.RuleName, cmd.SqlExpression), ct);
         }
         catch (Exception ex)
         {

@@ -77,7 +77,7 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
 
         _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
-        await _operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Is<CreateRuleRequest>(r => r.Name == "HighPriority" && r.SqlExpression == "Priority = 'High'"), Arg.Any<CancellationToken>());
+        await _operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Is<CreateRuleRequest>(r => r is CreateSqlRuleRequest && ((CreateSqlRuleRequest)r).Name == "HighPriority" && ((CreateSqlRuleRequest)r).SqlExpression == "Priority = 'High'"), Arg.Any<CancellationToken>());
     }
 
     [Fact]
