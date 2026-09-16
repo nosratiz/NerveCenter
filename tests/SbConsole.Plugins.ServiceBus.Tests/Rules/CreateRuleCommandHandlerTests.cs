@@ -19,7 +19,7 @@ public class CreateRuleCommandHandlerTests
         var audit = Substitute.For<IAuditScope>();
 
         var result = await new CreateRuleCommandHandler(operations, connections, audit, NullLogger<CreateRuleCommandHandler>.Instance)
-            .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", "HighPriority", "Priority = 'High'"));
+            .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", new CreateSqlRuleRequest("HighPriority", "Priority = 'High'")));
 
         result.IsSuccess.Should().BeTrue();
         await operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Is<CreateRuleRequest>(r => r is CreateSqlRuleRequest && ((CreateSqlRuleRequest)r).Name == "HighPriority" && ((CreateSqlRuleRequest)r).SqlExpression == "Priority = 'High'"), Arg.Any<CancellationToken>());
@@ -38,10 +38,28 @@ public class CreateRuleCommandHandlerTests
         var audit = Substitute.For<IAuditScope>();
 
         var result = await new CreateRuleCommandHandler(operations, connections, audit, NullLogger<CreateRuleCommandHandler>.Instance)
-            .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", "HighPriority", "Priority = 'High'"));
+            .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", new CreateSqlRuleRequest("HighPriority", "Priority = 'High'")));
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("rule already exists");
         await audit.Received(1).RecordAsync("rule.create", "sb-dev/orders/uk-team/HighPriority", ActionRisk.Mutating, false, "rule already exists", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Creates_a_correlation_rule_and_audits_as_mutating()
+    {
+        var connectionId = Guid.NewGuid();
+        var connections = Substitute.For<IConnectionProvider>();
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
+        var operations = Substitute.For<IServiceBusOperations>();
+        var audit = Substitute.For<IAuditScope>();
+        var request = new CreateCorrelationRuleRequest("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" });
+
+        var result = await new CreateRuleCommandHandler(operations, connections, audit, NullLogger<CreateRuleCommandHandler>.Instance)
+            .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", request));
+
+        result.IsSuccess.Should().BeTrue();
+        await operations.Received(1).CreateRuleAsync("Endpoint=sb://real", "orders", "uk-team", request, Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("rule.create", "sb-dev/orders/uk-team/VipCustomers", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 }
