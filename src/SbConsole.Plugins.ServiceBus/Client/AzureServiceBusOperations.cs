@@ -541,8 +541,12 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var rules = new List<RuleSummary>();
         await foreach (var props in adminClient.GetRulesAsync(topicName, subscriptionName, ct).WithCancellation(ct))
         {
+            // TrueRuleFilter/FalseRuleFilter derive from SqlRuleFilter, so they must be matched
+            // before the SqlRuleFilter arm or they'd render as a confusing "1=1"/"1=0" SQL rule.
             rules.Add(props.Filter switch
             {
+                TrueRuleFilter => new OtherRuleSummary(props.Name, "matches all messages"),
+                FalseRuleFilter => new OtherRuleSummary(props.Name, "matches no messages"),
                 SqlRuleFilter sqlFilter => new SqlRuleSummary(props.Name, sqlFilter.SqlExpression),
                 CorrelationRuleFilter correlationFilter => new CorrelationRuleSummary(
                     props.Name,

@@ -154,4 +154,72 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
                 && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "gold"),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Saving_a_correlation_rule_with_two_distinct_property_rows_sends_both()
+    {
+        var cut = RenderDialog();
+        cut.Find("input#rule-name").Input("VipCustomers");
+        cut.Find("button.rule-mode-correlation").Click();
+        cut.Render();
+        cut.Find("input#rule-correlation-id").Input("vip-123");
+
+        cut.Find("button.add-property-row").Click();
+        cut.Render();
+        cut.Find("button.add-property-row").Click();
+        cut.Render();
+
+        var rows = cut.FindAll(".property-row");
+        rows.Should().HaveCount(2);
+        rows[0].QuerySelector(".property-key input")!.Input("tier");
+        rows[0].QuerySelector(".property-value input")!.Input("gold");
+        rows[1].QuerySelector(".property-key input")!.Input("region");
+        rows[1].QuerySelector(".property-value input")!.Input("uk");
+
+        cut.Find("button.save-rule").Click();
+        await Task.Delay(30);
+
+        _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
+        await _operations.Received(1).CreateRuleAsync(
+            "Endpoint=sb://real", "orders", "uk-team",
+            Arg.Is<CreateRuleRequest>(r => r is CreateCorrelationRuleRequest
+                && ((CreateCorrelationRuleRequest)r).Properties.Count == 2
+                && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "gold"
+                && ((CreateCorrelationRuleRequest)r).Properties["region"] == "uk"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Saving_a_correlation_rule_with_duplicate_property_keys_keeps_the_last_value_and_does_not_crash()
+    {
+        var cut = RenderDialog();
+        cut.Find("input#rule-name").Input("VipCustomers");
+        cut.Find("button.rule-mode-correlation").Click();
+        cut.Render();
+        cut.Find("input#rule-correlation-id").Input("vip-123");
+
+        cut.Find("button.add-property-row").Click();
+        cut.Render();
+        cut.Find("button.add-property-row").Click();
+        cut.Render();
+
+        var rows = cut.FindAll(".property-row");
+        rows.Should().HaveCount(2);
+        rows[0].QuerySelector(".property-key input")!.Input("tier");
+        rows[0].QuerySelector(".property-value input")!.Input("gold");
+        rows[1].QuerySelector(".property-key input")!.Input("tier");
+        rows[1].QuerySelector(".property-value input")!.Input("platinum");
+
+        var act = () => cut.Find("button.save-rule").Click();
+        act.Should().NotThrow();
+        await Task.Delay(30);
+
+        _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
+        await _operations.Received(1).CreateRuleAsync(
+            "Endpoint=sb://real", "orders", "uk-team",
+            Arg.Is<CreateRuleRequest>(r => r is CreateCorrelationRuleRequest
+                && ((CreateCorrelationRuleRequest)r).Properties.Count == 1
+                && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "platinum"),
+            Arg.Any<CancellationToken>());
+    }
 }

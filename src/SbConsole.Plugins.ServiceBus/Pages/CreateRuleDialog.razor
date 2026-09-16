@@ -1,5 +1,6 @@
 @using SbConsole.Plugins.ServiceBus.Rules
 @using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Sdk
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -76,15 +77,19 @@
         _busy = true;
         try
         {
+            var properties = new Dictionary<string, string>();
+            foreach (var row in _properties.Where(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)))
+            {
+                properties[row.Key] = row.Value;
+            }
+
             CreateRuleRequest request = _mode == "sql"
                 ? new CreateSqlRuleRequest(_name, _sqlExpression)
                 : new CreateCorrelationRuleRequest(
                     _name,
                     string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
                     string.IsNullOrWhiteSpace(_label) ? null : _label,
-                    _properties
-                        .Where(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value))
-                        .ToDictionary(p => p.Key, p => p.Value));
+                    properties);
 
             var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
             if (result.IsSuccess)
@@ -95,6 +100,10 @@
             {
                 Snackbar.Add(result.Error!, Severity.Error);
             }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(FriendlyError.From(ex), Severity.Error);
         }
         finally
         {
