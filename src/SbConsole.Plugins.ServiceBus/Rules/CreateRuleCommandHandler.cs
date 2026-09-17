@@ -4,13 +4,13 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Rules;
 
-public sealed record CreateRuleCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, string RuleName, string SqlExpression);
+public sealed record CreateRuleCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, CreateRuleRequest Rule);
 
 public sealed class CreateRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateRuleCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(CreateRuleCommand cmd, CancellationToken ct = default)
     {
-        var target = $"{cmd.ConnectionName}/{cmd.TopicName}/{cmd.SubscriptionName}/{cmd.RuleName}";
+        var target = $"{cmd.ConnectionName}/{cmd.TopicName}/{cmd.SubscriptionName}/{cmd.Rule.Name}";
         try
         {
             // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
@@ -21,7 +21,7 @@ public sealed class CreateRuleCommandHandler(IServiceBusOperations operations, I
                 return PluginResult.Fail("Connection not found.");
             }
 
-            await operations.CreateRuleAsync(secret, cmd.TopicName, cmd.SubscriptionName, new CreateRuleRequest(cmd.RuleName, cmd.SqlExpression), ct);
+            await operations.CreateRuleAsync(secret, cmd.TopicName, cmd.SubscriptionName, cmd.Rule, ct);
         }
         catch (Exception ex)
         {

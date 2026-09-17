@@ -167,7 +167,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
         _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
-            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'"), new("LowPriority", "Priority = 'Low'") });
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'"), new SqlRuleSummary("LowPriority", "Priority = 'Low'") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -187,7 +187,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
         _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
-            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'") });
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -201,6 +201,54 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().Contain("HighPriority");
         cut.Markup.Should().Contain("Priority = 'High'");
         await _operations.Received(1).ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_correlation_rules_panel_row_renders_its_id_label_and_properties()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new CorrelationRuleSummary("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" }) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Markup.Should().Contain("VipCustomers");
+        cut.Markup.Should().Contain("CorrelationId: vip-123");
+        cut.Markup.Should().Contain("Label: Orders");
+        cut.Markup.Should().Contain("tier: gold");
+    }
+
+    [Fact]
+    public async Task An_other_kind_rules_panel_row_renders_its_raw_filter_text()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new OtherRuleSummary("$Default", "TrueFilter") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Markup.Should().Contain("$Default");
+        cut.Markup.Should().Contain("TrueFilter");
     }
 
     [Fact]
@@ -233,7 +281,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
         _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
-            .Returns(new List<RuleSummary> { new("HighPriority", "Priority = 'High'") });
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
         _confirmation.ConfirmAsync("Delete", "HighPriority", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();

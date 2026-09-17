@@ -541,12 +541,20 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var rules = new List<RuleSummary>();
         await foreach (var props in adminClient.GetRulesAsync(topicName, subscriptionName, ct).WithCancellation(ct))
         {
-            // Every rule this plugin creates is a SqlRuleFilter (CreateRuleAsync below never
-            // creates any other kind), but a rule created by some other tool (portal, CLI,
-            // ARM template) could be a CorrelationRuleFilter or TrueRuleFilter -- ToString()
-            // keeps this list from throwing on a filter shape this plugin doesn't build itself.
-            var expression = props.Filter is SqlRuleFilter sqlFilter ? sqlFilter.SqlExpression : props.Filter.ToString() ?? "";
-            rules.Add(new RuleSummary(props.Name, expression));
+            // TrueRuleFilter/FalseRuleFilter derive from SqlRuleFilter, so they must be matched
+            // before the SqlRuleFilter arm or they'd render as a confusing "1=1"/"1=0" SQL rule.
+            rules.Add(props.Filter switch
+            {
+                TrueRuleFilter => new OtherRuleSummary(props.Name, "matches all messages"),
+                FalseRuleFilter => new OtherRuleSummary(props.Name, "matches no messages"),
+                SqlRuleFilter sqlFilter => new SqlRuleSummary(props.Name, sqlFilter.SqlExpression),
+                CorrelationRuleFilter correlationFilter => new CorrelationRuleSummary(
+                    props.Name,
+                    correlationFilter.CorrelationId,
+                    correlationFilter.Subject,
+                    correlationFilter.ApplicationProperties.ToDictionary(p => p.Key, p => p.Value?.ToString() ?? "")),
+                _ => new OtherRuleSummary(props.Name, props.Filter.ToString() ?? ""),
+            });
         }
 
         return rules;
@@ -555,7 +563,28 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     public async Task CreateRuleAsync(string connectionString, string topicName, string subscriptionName, CreateRuleRequest request, CancellationToken ct = default)
     {
         var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
-        await adminClient.CreateRuleAsync(topicName, subscriptionName, new CreateRuleOptions(request.Name, new SqlRuleFilter(request.SqlExpression)), ct);
+        RuleFilter filter = request switch
+        {
+            CreateSqlRuleRequest sql => new SqlRuleFilter(sql.SqlExpression),
+            CreateCorrelationRuleRequest correlation => BuildCorrelationFilter(correlation),
+            _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown rule request kind."),
+        };
+        await adminClient.CreateRuleAsync(topicName, subscriptionName, new CreateRuleOptions(request.Name, filter), ct);
+    }
+
+    private static CorrelationRuleFilter BuildCorrelationFilter(CreateCorrelationRuleRequest request)
+    {
+        var filter = new CorrelationRuleFilter
+        {
+            CorrelationId = request.CorrelationId,
+            Subject = request.Label,
+        };
+        foreach (var (key, value) in request.Properties)
+        {
+            filter.ApplicationProperties[key] = value;
+        }
+
+        return filter;
     }
 
     public async Task DeleteRuleAsync(string connectionString, string topicName, string subscriptionName, string ruleName, CancellationToken ct = default)
