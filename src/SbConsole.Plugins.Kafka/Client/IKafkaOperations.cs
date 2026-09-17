@@ -35,4 +35,19 @@ public interface IKafkaOperations
 
     /// <summary>partition null lets Kafka's default partitioner choose (by key hash, or round-robin when key is null).</summary>
     Task ProduceMessageAsync(string config, string topicName, string? key, string value, int? partition, CancellationToken ct = default);
+
+    Task<IReadOnlyList<ConsumerGroupSummary>> ListConsumerGroupsAsync(string config, CancellationToken ct = default);
+
+    Task<ConsumerGroupDetail> GetConsumerGroupDetailAsync(string config, string groupId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Destructive. offset is required (and only read) when mode is OffsetResetMode.Offset;
+    /// timestamp is required (and only read) when mode is OffsetResetMode.Timestamp. The broker
+    /// rejects this call while the group has an active member holding the partition -- callers are
+    /// expected to check ConsumerGroupDetail.State == "Empty" first (see design spec §4-§5), but
+    /// this method itself does not re-check state; a rejection surfaces as a normal exception.
+    /// </summary>
+    Task ResetConsumerGroupOffsetAsync(
+        string config, string groupId, string topicName, int partition, OffsetResetMode mode,
+        long? offset, DateTimeOffset? timestamp, CancellationToken ct = default);
 }
