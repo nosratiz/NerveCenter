@@ -1,0 +1,290 @@
+@page "/p/azure-servicebus/topics"
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Plugins.ServiceBus.Subscriptions
+@using SbConsole.Plugins.ServiceBus.Topics
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject ListTopicsQueryHandler ListHandler
+@inject CreateTopicCommandHandler CreateTopicHandler
+@inject DeleteTopicCommandHandler DeleteTopicHandler
+@inject DeleteSubscriptionCommandHandler DeleteSubscriptionHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Topics &amp; Subscriptions</PageTitle>
+<h1>Topics &amp; Subscriptions</h1>
+
+@if (_connections.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No connections yet. Add an Azure Service Bus connection to get started.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <MudSelect T="Guid" Label="Namespace" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged" Style="max-width:260px">
+            @foreach (var connection in _connections)
+            {
+                <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string" Class="topic-filter" Placeholder="Filter topics..." @bind-Value="_filterText" Immediate="true" Style="max-width:260px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+        <MudText Class="topics-summary mud-text-secondary" Typo="Typo.body2">@TopicCount @(TopicCount == 1 ? "topic" : "topics") &middot; @SubscriptionCount @(SubscriptionCount == 1 ? "subscription" : "subscriptions")</MudText>
+        <MudSpacer />
+        <MudButton Class="create-topic-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenCreateTopic">+ Create topic</MudButton>
+        @if (_loading)
+        {
+            <MudProgressCircular Class="topics-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+
+    <MudTable Items="_rows" RowClassFunc="@((row, _) => row is SubscriptionRowEntry ? "subscription-row" : "topic-row")">
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>Active</MudTh>
+            <MudTh>Dead-letter</MudTh>
+            <MudTh>Scheduled</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            @if (context is TopicRowEntry topicRow)
+            {
+                <MudTd>
+                    <MudButton Class="expand-topic" OnClick="@(() => ToggleExpanded(topicRow.Topic.Name))">@(topicRow.IsExpanded ? "▾" : "▸")</MudButton>
+                    <span style="font-family:monospace">@topicRow.Topic.Name</span>
+                    <span class="mud-text-secondary" style="font-size:11px"> @topicRow.Topic.SubscriptionCount subs</span>
+                </MudTd>
+                <MudTd>@topicRow.ActiveMessageCount</MudTd>
+                <MudTd>@topicRow.DeadLetterMessageCount</MudTd>
+                <MudTd>@topicRow.Topic.ScheduledMessageCount</MudTd>
+                <MudTd>
+                    <MudButton Class="send-message-action" OnClick="@(() => OpenSend(topicRow.Topic.Name))">Send</MudButton>
+                    <MudButton Class="add-subscription-action" OnClick="@(() => OpenCreateSubscription(topicRow.Topic.Name))">+ Subscription</MudButton>
+                    <MudButton Class="delete-topic" Color="Color.Error" Disabled="@(_deletingEntity == topicRow.Topic.Name)" OnClick="@(() => DeleteTopicAsync(topicRow.Topic.Name, topicRow.Topic.SubscriptionCount))">Delete</MudButton>
+                    @if (_deletingEntity == topicRow.Topic.Name)
+                    {
+                        <MudProgressCircular Class="delete-topic-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                    }
+                </MudTd>
+            }
+            else if (context is SubscriptionRowEntry subRow)
+            {
+                var rowKey = $"{subRow.TopicName}/{subRow.Subscription.Name}";
+                <MudTd Style="padding-left:56px">— @subRow.Subscription.Name</MudTd>
+                <MudTd>@subRow.Subscription.ActiveMessageCount</MudTd>
+                <MudTd>@subRow.Subscription.DeadLetterMessageCount</MudTd>
+                <MudTd>—</MudTd>
+                <MudTd>
+                    <MudButton Href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name)">Peek</MudButton>
+                    <MudButton Class="dead-letter-action" Href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name, deadLetter: true, deadLetterCount: subRow.Subscription.DeadLetterMessageCount)">Dead-letter</MudButton>
+                    <MudButton Class="delete-subscription" Color="Color.Error" Disabled="@(_deletingEntity == rowKey)" OnClick="@(() => DeleteSubscriptionAsync(subRow.TopicName, subRow.Subscription.Name))">Delete</MudButton>
+                    @if (_deletingEntity == rowKey)
+                    {
+                        <MudProgressCircular Class="delete-subscription-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                    }
+                </MudTd>
+            }
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private abstract record TopicsTableRow;
+    private sealed record TopicRowEntry(TopicSummary Topic, long ActiveMessageCount, long DeadLetterMessageCount, bool IsExpanded) : TopicsTableRow;
+    private sealed record SubscriptionRowEntry(string TopicName, SubscriptionSummary Subscription) : TopicsTableRow;
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<TopicRow> _topics = [];
+    private readonly HashSet<string> _expandedTopics = [];
+    private Guid _selectedConnectionId;
+    private bool _loading;
+    private string? _deletingEntity;
+    private string _filterText = "";
+
+    private int TopicCount => _topics.Count;
+    private int SubscriptionCount => _topics.Sum(t => t.Topic.SubscriptionCount);
+
+    private IEnumerable<TopicRow> FilteredTopics => string.IsNullOrWhiteSpace(_filterText)
+        ? _topics
+        : _topics.Where(t => t.Topic.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<TopicsTableRow> _rows => FilteredTopics.SelectMany(FlattenRows).ToList();
+
+    private IEnumerable<TopicsTableRow> FlattenRows(TopicRow topic)
+    {
+        var expanded = _expandedTopics.Contains(topic.Topic.Name);
+        yield return new TopicRowEntry(topic.Topic, topic.ActiveMessageCount, topic.DeadLetterMessageCount, expanded);
+        if (expanded)
+        {
+            foreach (var subscription in topic.Subscriptions)
+            {
+                yield return new SubscriptionRowEntry(topic.Topic.Name, subscription);
+            }
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("azure-servicebus");
+        if (_connections.Count > 0)
+        {
+            _selectedConnectionId = _connections[0].Id;
+            await LoadTopicsAsync();
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid connectionId)
+    {
+        _selectedConnectionId = connectionId;
+        _expandedTopics.Clear();
+        await LoadTopicsAsync();
+    }
+
+    private async Task LoadTopicsAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            if (result.IsSuccess)
+            {
+                _topics = result.Value!;
+            }
+            else
+            {
+                _topics = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ToggleExpanded(string topicName)
+    {
+        if (!_expandedTopics.Remove(topicName))
+        {
+            _expandedTopics.Add(topicName);
+        }
+    }
+
+    private string PeekUrl(string topicName, string subscriptionName, bool deadLetter = false, long? deadLetterCount = null)
+    {
+        var url = $"/p/azure-servicebus/topics/{Uri.EscapeDataString(topicName)}/subscriptions/{Uri.EscapeDataString(subscriptionName)}/peek?connectionId={_selectedConnectionId}";
+        if (deadLetter)
+        {
+            url += "&deadLetter=true";
+            if (deadLetterCount is not null)
+            {
+                url += $"&deadLetterCount={deadLetterCount}";
+            }
+        }
+
+        return url;
+    }
+
+    private async Task OpenCreateTopic()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateTopicDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateTopicDialog>("Create topic", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadTopicsAsync();
+        }
+    }
+
+    private async Task OpenCreateSubscription(string topicName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateSubscriptionDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicName, topicName },
+        };
+        var dialog = await DialogService.ShowAsync<CreateSubscriptionDialog>("Create subscription", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            _expandedTopics.Add(topicName);
+            await LoadTopicsAsync();
+        }
+    }
+
+    // SendMessageDialog is reused unmodified from the Queues plan (docs/design.md §6.2): a topic
+    // name is just another entity path to IServiceBusOperations.SendMessageAsync, identical under
+    // the hood to a queue name, so its QueueName parameter carries the topic name here.
+    private async Task OpenSend(string topicName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<SendMessageDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.QueueName, topicName },
+        };
+        var dialog = await DialogService.ShowAsync<SendMessageDialog>("Send message", parameters);
+        await dialog.Result;
+    }
+
+    private async Task DeleteTopicAsync(string topicName, int subscriptionCount)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", topicName, connection.IsProd, count: subscriptionCount > 0 ? subscriptionCount : null);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _deletingEntity = topicName;
+        try
+        {
+            var result = await DeleteTopicHandler.HandleAsync(new DeleteTopicCommand(connection.Id, connection.Name, connection.IsProd, topicName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingEntity = null;
+        }
+
+        await LoadTopicsAsync();
+    }
+
+    private async Task DeleteSubscriptionAsync(string topicName, string subscriptionName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", subscriptionName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var rowKey = $"{topicName}/{subscriptionName}";
+        _deletingEntity = rowKey;
+        try
+        {
+            var result = await DeleteSubscriptionHandler.HandleAsync(new DeleteSubscriptionCommand(connection.Id, connection.Name, connection.IsProd, topicName, subscriptionName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingEntity = null;
+        }
+
+        await LoadTopicsAsync();
+    }
+}

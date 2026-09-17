@@ -2,12 +2,19 @@
 
 Status: approved 2026-09-09. Extended 2026-09-10 (Core UI: §3 SDK v1.1, §4
 new handlers, §5 screen inventory). Extended 2026-09-12 (Service Bus plugin,
-Queues: §3 SDK v1.2, §4 new handler + schema, §5 routing fix, §6 rewritten).
-SDK version: `SbConsole.Sdk` 1.2.0 — see §3 for the 2026-09-10 additions
+Queues: §3 SDK v1.2, §4 new handler + schema, §5 routing fix, §6 rewritten,
+now §6.1). Extended 2026-09-13 (Service Bus plugin, Topics & Subscriptions:
+§3 SDK v1.3, §5 NavMenu badges, §6.2 rewritten against the actual UI
+mockups (`~/Desktop/UI mockups for NerveCenter`) after the first pass was
+drafted without consulting them, §6.3 new Dead-letter overview, §8 updated).
+SDK version: `SbConsole.Sdk` 1.3.0 — see §3 for the 2026-09-10 additions
 (`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
-`IConfirmationService`) and the 2026-09-12 additions/removal
+`IConfirmationService`), the 2026-09-12 additions/removal
 (`IPlugin.TestConnectionAsync`, `ConnectionTestResult`; `RootComponent`
-removed — see §3).
+removed), and the 2026-09-13 addition (`IPlugin.GetNavBadgeAsync`, default-
+implemented so no other plugin is forced to implement it) — see §3.
+`IServiceBusOperations`'s Topics & Subscriptions / Dead-letter additions
+live entirely inside the plugin project and do not touch the SDK.
 
 ## 1. What it is
 
@@ -101,6 +108,16 @@ Connection reachability testing was deferred past v1.1 pending "the plan
 that gives a plugin something real to test against" — that plan is the
 Service Bus Queues plan (§6), so `TestConnectionAsync` above closes that gap.
 
+**(v1.3)** adds `Task<int?> GetNavBadgeAsync(string navItemHref, string
+connectionString, CancellationToken ct = default)` to `IPlugin`, with a
+default interface implementation (`=> Task.FromResult<int?>(null)`) so every
+plugin written before this addition — and any future plugin with nothing to
+badge — needs no change at all. A plugin overrides it to answer for the
+`Href`s it cares about (matched by exact string) and returns `null` for
+everything else; the host (§5) calls it once per connection of the plugin's
+kind and sums non-null results into one badge per nav item. `PluginNavItem`
+itself is unchanged — the badge is computed, not stored.
+
 ## 4. Host core (`SbConsole.Core`)
 
 - **Handlers**: plain `XxxQueryHandler` / `XxxCommandHandler` classes,
@@ -161,6 +178,18 @@ Service Bus Queues plan (§6), so `TestConnectionAsync` above closes that gap.
   couldn't express more than one page per plugin and was never wired up.
 - Destructive actions (`ActionRisk.Destructive`) on prod-tagged connections
   require the typed-confirmation dialog (`IConfirmationService`, §3).
+- **(v1.3)** `NavMenu.razor` overlays a live badge next to any plugin nav
+  item `GetNavBadgeAsync` (§3) answers for. Computed in a fire-and-forget
+  background loop started from `OnInitialized` (never awaited there, so the
+  very first render of any page is never blocked on a Service Bus call) that
+  refreshes every 60 seconds for as long as the circuit lives — `NavMenu` is
+  part of the persistent layout, not re-created per page, so the loop and
+  its cached badge values live exactly as long as the browser session does.
+  Each tick: for every plugin, list its connections
+  (`IConnectionProvider.ListAsync`), decrypt each secret, call
+  `GetNavBadgeAsync` per connection per nav item, sum the non-null results,
+  and `StateHasChanged()` once. A connection whose secret fails or whose
+  plugin call throws is skipped for that tick, not fatal to the others.
 - Minimal APIs (no controllers) under `/api/v1`: health, list connections
   (no secrets), list entities, peek, send, resubmit-DLQ, purge. Destructive
   endpoints additionally require `?confirm=<name>`. OpenAPI via
@@ -211,11 +240,11 @@ something real to test against.
 ## 6. Service Bus plugin (`SbConsole.Plugins.ServiceBus`)
 
 Connection-string auth only in v1. Built in two plans: **Queues** (2026-09-12,
-this section) first, as the full vertical slice that proves out the plugin
+§6.1) — shipped — as the full vertical slice that proves out the plugin
 architecture end-to-end on the simplest entity type; **Topics &
-Subscriptions** second, reusing everything Queues builds (the wrapper
-interface, the message-peek/send/DLQ components, the confirmation flow) —
-topics/subscriptions/rules are explicitly out of scope until that plan.
+Subscriptions** (2026-09-13, §6.2) second, reusing everything Queues built
+(the wrapper interface, the message-peek/send/DLQ components, the
+confirmation flow).
 
 - **`ServiceBusPlugin : IPlugin`** — `Id`/`ConnectionKind` =
   `"azure-servicebus"`, `DisplayName`/`ConnectionKindDisplayName` =
@@ -234,10 +263,10 @@ topics/subscriptions/rules are explicitly out of scope until that plan.
   `AddSbConsolePlugin<TPlugin>()` constraint, so there's no DI container to
   pull one from at that layer). This is the seam integration tests
   (Testcontainers + the official emulator, `SbConsole.IntegrationTests`, §8)
-  will eventually test against; **not built in this plan** — unit tests
-  against a substitute of `IServiceBusOperations` are the only test strategy
-  for now, deferred per the same "prove the shape out first" reasoning as the
-  plan split above. `AzureServiceBusOperations` itself gets light test
+  will eventually test against; **not built yet** — unit tests against a
+  substitute of `IServiceBusOperations` are the only test strategy across
+  both plans, deferred per the same "prove the shape out first" reasoning as
+  the plan split. `AzureServiceBusOperations` itself gets light test
   coverage as a result — its methods can't be meaningfully unit-tested
   without a real or emulated broker, so most of its value is in being a
   substitutable seam for everything else, not in its own test count.
@@ -248,22 +277,153 @@ topics/subscriptions/rules are explicitly out of scope until that plan.
   connection's secret via `IConnectionProvider.GetSecretAsync` (§3), calls
   the matching `IServiceBusOperations` method, and — for commands — reports
   via `IAuditScope.RecordAsync` (§3).
-- **Queues (this plan)**: list with live counts (active/DLQ/scheduled), create,
-  delete (`Destructive`); peek (non-destructive, paged); send a message;
-  dead-letter browse, resubmit (single selection and multi-select, matching
-  the wireframe's "N selected of M · Resubmit selected"), purge
-  (`Destructive`).
 - **Connection reachability** (§3, §4): `ServiceBusPlugin.TestConnectionAsync`
   attempts a lightweight administrative call (e.g. listing queues with a
   small page size) against the given connection string and maps
   Azure SDK exceptions to a plain `ConnectionTestResult` — auth failures,
   unreachable namespace, and malformed connection strings each produce a
-  distinct, readable `ErrorMessage` rather than a raw exception message.
+  distinct, readable `ErrorMessage` rather than a raw exception message
+  (each Azure failure shape verified via decompilation of the exact
+  installed SDK version, not assumed); raw SDK exception text never reaches
+  the UI or the database — every handler catch site and
+  `TestConnectionCommandHandler` route through a shared `FriendlyError`
+  helper (`SbConsole.Sdk`) that caps and collapses `ex.Message`, logging the
+  full exception server-side. Every real Azure call is bounded: tightened
+  `RetryOptions`/`TryTimeout` on both the admin and AMQP clients, plus a
+  hard wall-clock cap on the two operations that loop over an unbounded
+  number of broker round-trips, so a `Peek`/`Queues`-family page never spins
+  forever against an unreachable namespace with no feedback — the busy
+  operation disables its own triggering control and shows inline progress
+  instead.
 
-Out of this plan (Queues): topics, subscriptions, rules (next plan);
-deferred-message tooling, sessions tooling beyond basic display, metrics
-dashboards/history, ARM/namespace creation, Entra ID auth (all still out of
-v1 generally, per the original scope).
+### 6.1 Queues (shipped)
+
+List with live counts (active/DLQ/scheduled), create, delete
+(`Destructive`); peek (non-destructive, paged); send a message; dead-letter
+browse, resubmit (single selection and multi-select, matching the
+wireframe's "N selected of M · Resubmit selected"), purge (`Destructive`).
+
+Destructive dead-letter purges on a prod-tagged connection go through
+`IConfirmationService`'s typed-for-prod gate; the gate reads `IsProd` from a
+server-side `IConnectionProvider` lookup by the connection's id, never from
+a client-suppliable URL parameter — a purge link that only carried
+`connectionId` (no `isProd`) must still demand the typed prompt on a
+prod-tagged connection.
+
+### 6.2 Topics & subscriptions (2026-09-13, rewritten same day)
+
+The first pass of this section (still visible in
+`docs/superpowers/plans/2026-09-13-servicebus-topics-subscriptions-plugin.md`'s
+original commit) was drafted directly from the Queues plan's own shape —
+two drill-down pages — without checking the actual UI mockups
+(`~/Desktop/UI mockups for NerveCenter/SbConsole Wireframes.html`, screen
+"1h Topics"). That mockup shows a materially different structure, which is
+what's documented below instead.
+
+Full topic/subscription lifecycle plus the same message-handling trio
+Queues has. **Filter rules are deferred** — every subscription created by
+this plugin gets the topic's default catch-all rule; the mockup's "Rules"
+column (filter-count chips) is intentionally **not** built, since it would
+be view-only scaffolding for a feature this plan isn't implementing — that
+column returns when the filter-rules plan does.
+
+- **One combined page, not a drill-down**: a single "Topics & Subscriptions"
+  nav item → `Topics.razor` — one `MudTable` whose rows are either a topic
+  or (only when that topic is expanded) one of its subscriptions,
+  distinguished by a small discriminated view-model
+  (`TopicRowVm`/`SubscriptionRowVm`) and `MudTable`'s `RowClassFunc` for
+  styling/test hooks. Columns: `Name | Active | Dead-letter | Scheduled |
+  Actions`. A topic row shows its subscription count, an expand/collapse
+  toggle, and **aggregated** Active/Dead-letter counts summed from its own
+  subscriptions — visible even collapsed, matching the mockup's "a
+  collapsed list still shows where the backlog is." Its own Scheduled count
+  is real (`TopicRuntimeProperties.ScheduledMessageCount`); a subscription
+  row's Scheduled cell is `—`, because `SubscriptionRuntimeProperties` (the
+  real Azure type, confirmed by decompiling `Azure.Messaging.ServiceBus`
+  7.20.2 the same way earlier work in this file did) has no such field —
+  only `ActiveMessageCount`/`DeadLetterMessageCount`/`TotalMessageCount`/the
+  two transfer counts. The mockup's per-subscription "Scheduled" number
+  doesn't correspond to anything the SDK actually exposes.
+- **Eager aggregation, by choice**: since the aggregate counts must be
+  visible without expanding, the query handler lists every topic's
+  subscriptions up front (one `ListSubscriptionsAsync` call per topic) when
+  the page loads, not lazily on first expand. Accepted cost at this
+  console's scale (a personal/small-team admin tool, not hundreds of
+  topics); a lazy alternative was considered and rejected because it can't
+  show real numbers on a collapsed row, which is the whole point of
+  aggregating them.
+- **Topic-level send**: a topic row's "Send" action reuses `SendMessageDialog`
+  unmodified — publishing to a topic fans out to every matching
+  subscription, so sending is never a per-subscription action. A
+  subscription row's actions are Peek / Dead-letter / Delete.
+- **Shared UI, not duplicated UI**: the existing `Peek.razor`'s message
+  table and dead-letter action bar (selection checkboxes, resubmit-selected,
+  purge, the typed-confirmation flow) are extracted into a shared component
+  rendered by both the unchanged `Peek.razor` (queues) and a new
+  subscription-peek page. `Peek.razor`'s own route, handlers, and tests are
+  untouched.
+- **`IServiceBusOperations` — additive only**: new parallel methods
+  (`ListTopicsAsync`, `CreateTopicAsync`, `DeleteTopicAsync`,
+  `ListSubscriptionsAsync`, `CreateSubscriptionAsync`,
+  `DeleteSubscriptionAsync`, `PeekSubscriptionMessagesAsync`,
+  `ResubmitSubscriptionDeadLetterMessagesAsync`,
+  `PurgeSubscriptionDeadLetterMessagesAsync`) sit alongside the existing
+  queue methods, none of which change signature or behavior. Sending reuses
+  the existing `SendMessageAsync` unmodified — a topic name is just another
+  entity path to `ServiceBusClient.CreateSender`, identical under the hood
+  to a queue name, so no new send method exists. `AzureServiceBusOperations`
+  shares implementation internally via private helpers (the SDK's
+  `CreateReceiver` already has a topic+subscription overload beside the
+  queue one). The page's own aggregation (above) lives in a handler, not in
+  `IServiceBusOperations` — the interface stays at "one entity at a time."
+- **Handlers, audit, and safety mirror Queues exactly**: new plugin handlers
+  follow the identical try/catch → `FriendlyError`-wrapped `PluginResult.Fail`
+  → `ISnackbar` shape, registered in `ServiceBusPlugin.ConfigureServices` in
+  the same task that creates them. Delete topic (cascades to its
+  subscriptions — the confirmation dialog states the subscription count
+  that will be removed), delete subscription, and purge subscription
+  dead-letter are all `ActionRisk.Destructive`, gated the same
+  `IConnectionProvider`-sourced typed-for-prod way as Queues' purge — applied
+  to the new subscription-peek page **from the start**, not retrofitted
+  after a finding, since Queues' final review already established exactly
+  why that matters (§6.1).
+- **No schema changes**: topics and subscriptions live in Azure, not
+  SbConsole's own database, exactly as queues do today.
+
+Out of this plan: filter rules (view/add/delete); deferred-message tooling,
+sessions tooling beyond basic display, metrics dashboards/history, ARM/
+namespace creation, Entra ID auth (all still out of v1 generally, per the
+original scope).
+
+### 6.3 Dead-letter overview (2026-09-13)
+
+A cross-cutting page the mockups show as a third nav item alongside Queues
+and Topics & Subscriptions, with a live badge (e.g. "312") — not scoped to
+one connection, but a single number and a single page spanning every
+`azure-servicebus` connection at once.
+
+- **`IServiceBusOperations.ListDeadLetterEntriesAsync(connectionString, ct)`**
+  returns every queue and subscription with a non-zero dead-letter count for
+  one connection, as `DeadLetterEntry(string EntityType, string? TopicName,
+  string EntityName, long Count)` (`EntityType` is `"Queue"` or
+  `"Subscription"`; `TopicName` is null for a queue). One seam, reused by
+  both the nav badge and the overview page below, so "enumerate everything
+  with a non-zero DLQ" exists exactly once — not duplicated between a
+  per-connection badge computation and a per-connection page computation.
+- **`ServiceBusPlugin.GetNavBadgeAsync`** (§3) answers only for
+  `/p/azure-servicebus/dead-letter`, by summing `ListDeadLetterEntriesAsync`'s
+  counts; every other href it's asked about returns `null`.
+- **`DeadLetterOverview.razor`** at `/p/azure-servicebus/dead-letter` — no
+  namespace picker, one flat table (Namespace | Entity | Type | Count |
+  Peek) across every connection at once, each row's Peek link reusing the
+  existing per-entity queue/subscription peek pages in dead-letter mode. Its
+  handler lists every `azure-servicebus` connection, decrypts each secret,
+  calls the same `ListDeadLetterEntriesAsync`, and merges the results; a
+  connection whose secret is missing or whose Azure call fails is skipped
+  (logged) for that page load rather than failing the whole page.
+
+Out of this plan: per-entity notification/alerting on DLQ growth, historical
+DLQ trend charts — this is a live snapshot only, matching the mockup.
 
 ## 7. Error handling
 
@@ -282,12 +442,17 @@ v1 generally, per the original scope).
 - Core handlers: xUnit + FluentAssertions + NSubstitute (substitute
   `IAuditWriter`, stores, clock).
 - Components: bUnit (confirmation dialog, connection forms, peek grid).
-- Service Bus plugin (Queues, §6): unit tests only against a substitute of
-  `IServiceBusOperations` — no Testcontainers, no real AMQP traffic, for this
-  plan.
+- Service Bus plugin (Queues, Topics & Subscriptions, Dead-letter overview —
+  §6): unit tests only against a substitute of `IServiceBusOperations` — no
+  Testcontainers, no real AMQP traffic, for any of the three.
 - Integration: Testcontainers running the official Azure Service Bus emulator
-  — real peek/send/DLQ flows over AMQP. Deferred past the Queues plan (§6);
-  picked up once the plugin's shape has proven out.
+  — real peek/send/DLQ flows over AMQP. Deferred past all three (§6); picked
+  up once the plugin's shape has proven out across queues, topics, and the
+  cross-connection overview alike.
+- `NavMenu`'s badge-refresh loop (§5, §6.3) is tested by calling its refresh
+  method directly, not by waiting out its real 60-second timer — the loop
+  itself is a thin wrapper (`while` + `Task.Delay` + the same call) around a
+  single testable step.
 - Gate: `dotnet build -warnaserror` and `dotnet test` green before every
   commit.
 

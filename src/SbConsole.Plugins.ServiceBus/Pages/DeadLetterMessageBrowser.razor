@@ -1,0 +1,84 @@
+@* Shared message browser for both queue and subscription peek pages: message list, message
+   detail pane, and (dead-letter mode) the resubmit/purge action bar. Parent pages own all state;
+   this component is presentation and user-input routing only -- extracted from Peek.razor so
+   SubscriptionPeek.razor (Task 7) can reuse it exactly. CSS classes are kept identical to
+   Peek.razor's pre-extraction markup so PeekPageTests.cs needs no changes. *@
+@using SbConsole.Plugins.ServiceBus.Client
+
+@if (DeadLetter)
+{
+    <div class="d-flex align-center gap-2 mb-2">
+        <MudButton Class="resubmit-selected" Disabled="@(SelectedSequenceNumbers.Count == 0 || Busy)" OnClick="@(() => OnResubmitSelected.InvokeAsync())">
+            Resubmit selected (@SelectedSequenceNumbers.Count)
+        </MudButton>
+        @* Disabled until the real connection record resolves (CanPurge): purge reads the caller's
+           connection.IsProd to decide between the typed-confirmation gate and a plain two-button
+           confirm, and while that lookup is still in flight it would fail open. Also disabled while
+           any dead-letter operation is in flight -- purge and resubmit act on the same sub-queue. *@
+        <MudButton Class="purge-queue" Color="Color.Error" Disabled="@(!CanPurge || Busy)" OnClick="@(() => OnPurge.InvokeAsync())">@PurgeLabel</MudButton>
+        @if (Busy)
+        {
+            <MudProgressCircular Class="peek-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+}
+
+@if (Messages.Count == 0 && !Busy)
+{
+    <MudAlert Severity="Severity.Info">No messages found.</MudAlert>
+}
+
+<MudGrid>
+    <MudItem xs="5">
+        @foreach (var message in Messages)
+        {
+            <div class="d-flex align-center gap-2">
+                @if (DeadLetter)
+                {
+                    <input type="checkbox" class="select-message"
+                           checked="@SelectedSequenceNumbers.Contains(message.SequenceNumber)"
+                           @onchange="@(e => OnToggleSelection.InvokeAsync((message.SequenceNumber, (bool)e.Value!)))" />
+                }
+                <MudButton OnClick="@(() => OnSelect.InvokeAsync(message))">
+                    #@message.SequenceNumber · @message.EnqueuedTime.ToLocalTime() · deliveries @message.DeliveryCount
+                </MudButton>
+            </div>
+        }
+    </MudItem>
+    <MudItem xs="7">
+        @if (Selected is not null)
+        {
+            @if (Selected.DeadLetterReason is { } reason)
+            {
+                <MudAlert Severity="Severity.Warning">@reason — @Selected.DeadLetterErrorDescription</MudAlert>
+            }
+            <MudText Typo="Typo.subtitle2">@Selected.ContentType</MudText>
+            <pre>@Selected.Body</pre>
+            <MudText Typo="Typo.subtitle2" Class="mt-4">Application properties</MudText>
+            <MudTable Items="Selected.Properties">
+                <HeaderContent>
+                    <MudTh>Key</MudTh>
+                    <MudTh>Value</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Key</MudTd>
+                    <MudTd>@context.Value</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<PeekedMessage> Messages { get; set; } = [];
+    [Parameter] public bool DeadLetter { get; set; }
+    [Parameter, EditorRequired] public HashSet<long> SelectedSequenceNumbers { get; set; } = [];
+    [Parameter] public PeekedMessage? Selected { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool CanPurge { get; set; }
+    [Parameter] public string PurgeLabel { get; set; } = "Purge queue";
+    [Parameter] public EventCallback<PeekedMessage> OnSelect { get; set; }
+    [Parameter] public EventCallback<(long SequenceNumber, bool Selected)> OnToggleSelection { get; set; }
+    [Parameter] public EventCallback OnResubmitSelected { get; set; }
+    [Parameter] public EventCallback OnPurge { get; set; }
+}

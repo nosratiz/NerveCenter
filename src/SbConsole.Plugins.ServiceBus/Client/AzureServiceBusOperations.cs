@@ -33,10 +33,15 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     // per attempt) — not the AMQP client's ServiceBusRetryOptions (TryTimeout).
     internal static ServiceBusAdministrationClientOptions CreateAdministrationClientOptions()
     {
-        var options = new ServiceBusAdministrationClientOptions();
-        options.Retry.MaxRetries = MaxRetries;
-        options.Retry.NetworkTimeout = AttemptTimeout;
-        options.Retry.MaxDelay = MaxRetryDelay;
+        var options = new ServiceBusAdministrationClientOptions
+        {
+            Retry =
+            {
+                MaxRetries = MaxRetries,
+                NetworkTimeout = AttemptTimeout,
+                MaxDelay = MaxRetryDelay
+            }
+        };
         return options;
     }
 
@@ -179,6 +184,65 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         await adminClient.DeleteQueueAsync(queueName, ct);
     }
 
+    public async Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string connectionString, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var topics = new List<TopicSummary>();
+        await foreach (var props in adminClient.GetTopicsRuntimePropertiesAsync(ct).WithCancellation(ct))
+        {
+            topics.Add(new TopicSummary(props.Name, props.SubscriptionCount, props.SizeInBytes, props.ScheduledMessageCount));
+        }
+
+        return topics;
+    }
+
+    public async Task CreateTopicAsync(string connectionString, CreateTopicRequest request, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.CreateTopicAsync(new CreateTopicOptions(request.Name), ct);
+    }
+
+    public async Task DeleteTopicAsync(string connectionString, string topicName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.DeleteTopicAsync(topicName, ct);
+    }
+
+    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string connectionString, string topicName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var subscriptions = new List<SubscriptionSummary>();
+        await foreach (var props in adminClient.GetSubscriptionsRuntimePropertiesAsync(topicName, ct).WithCancellation(ct))
+        {
+            subscriptions.Add(new SubscriptionSummary(props.SubscriptionName, props.ActiveMessageCount, props.DeadLetterMessageCount, props.TotalMessageCount));
+        }
+
+        return subscriptions;
+    }
+
+    public async Task CreateSubscriptionAsync(string connectionString, string topicName, CreateSubscriptionRequest request, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        var options = new CreateSubscriptionOptions(topicName, request.Name) { MaxDeliveryCount = request.MaxDeliveryCount };
+        if (request.LockDuration is { } lockDuration)
+        {
+            options.LockDuration = lockDuration;
+        }
+
+        if (request.DefaultMessageTimeToLive is { } ttl)
+        {
+            options.DefaultMessageTimeToLive = ttl;
+        }
+
+        await adminClient.CreateSubscriptionAsync(options, ct);
+    }
+
+    public async Task DeleteSubscriptionAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default)
+    {
+        var adminClient = new ServiceBusAdministrationClient(connectionString, CreateAdministrationClientOptions());
+        await adminClient.DeleteSubscriptionAsync(topicName, subscriptionName, ct);
+    }
+
     public async Task<IReadOnlyList<PeekedMessage>> PeekMessagesAsync(
         string connectionString, string queueName, bool fromDeadLetter, int maxMessages,
         long? fromSequenceNumber = null, CancellationToken ct = default)
@@ -189,6 +253,27 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
 
         // ServiceBusReceiver.PeekMessagesAsync(int, long?, CancellationToken) already accepts a
         // nullable starting sequence number, so no branch is needed here.
+        var received = await receiver.PeekMessagesAsync(maxMessages, fromSequenceNumber, ct);
+
+        return received.Select(m => new PeekedMessage(
+            m.SequenceNumber,
+            m.Body.ToString(),
+            m.ContentType,
+            m.EnqueuedTime,
+            m.DeliveryCount,
+            m.ApplicationProperties.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? ""),
+            m.DeadLetterReason,
+            m.DeadLetterErrorDescription)).ToList();
+    }
+
+    public async Task<IReadOnlyList<PeekedMessage>> PeekSubscriptionMessagesAsync(
+        string connectionString, string topicName, string subscriptionName, bool fromDeadLetter, int maxMessages,
+        long? fromSequenceNumber = null, CancellationToken ct = default)
+    {
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = fromDeadLetter ? SubQueue.DeadLetter : SubQueue.None };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+
         var received = await receiver.PeekMessagesAsync(maxMessages, fromSequenceNumber, ct);
 
         return received.Select(m => new PeekedMessage(
@@ -226,20 +311,6 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
     }
 
-    // Design tradeoff: non-matching messages are deferred (not abandoned) during the scan so the
-    // Design: non-matching messages are simply HELD under their PeekLock during the scan (not
-    // deferred, not abandoned, not completed) so the scan makes forward progress through the
-    // dead-letter queue instead of looping on the same head-of-queue messages; the `finally` below
-    // then abandons every held message, restoring it to normal delivery. An earlier version of this
-    // method deferred non-matching messages instead and tried to restore them via
-    // ReceiveDeferredMessagesAsync + AbandonMessageAsync -- proven against a real broker to be
-    // broken: abandoning a message received via ReceiveDeferredMessagesAsync does NOT un-defer it
-    // (there is no un-defer operation in Service Bus), so every unselected message was permanently
-    // stranded the first time this code ran, and Purge then silently reported success while
-    // deleting nothing (deferred messages are invisible to ordinary receive calls regardless of
-    // ReceiveMode). Holding the lock instead is also crash-safe in a way defer never was: an
-    // expired PeekLock is redelivered automatically by the broker with no code involved, whereas a
-    // deferred message never returns on its own.
     public async Task<int> ResubmitDeadLetterMessagesAsync(string connectionString, string queueName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default)
     {
         if (sequenceNumbers.Count == 0)
@@ -251,7 +322,33 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.PeekLock };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
         await using var sender = client.CreateSender(queueName);
+        return await ResubmitDeadLetterCoreAsync(receiver, sender, sequenceNumbers, ct);
+    }
 
+    public async Task<int> ResubmitSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, IReadOnlyList<long> sequenceNumbers, CancellationToken ct = default)
+    {
+        if (sequenceNumbers.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.PeekLock };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+        // Resubmitting publishes back onto the TOPIC, not the subscription -- see the interface's
+        // doc comment on ResubmitSubscriptionDeadLetterMessagesAsync for why.
+        await using var sender = client.CreateSender(topicName);
+        return await ResubmitDeadLetterCoreAsync(receiver, sender, sequenceNumbers, ct);
+    }
+
+    // Design: non-matching messages are simply HELD under their PeekLock during the scan (not
+    // deferred, not abandoned, not completed) so the scan makes forward progress through the
+    // dead-letter sub-queue instead of looping on the same head-of-queue messages; the `finally`
+    // below then abandons every held message, restoring it to normal delivery. Shared by both the
+    // queue and subscription resubmit methods above, which differ only in how `receiver`/`sender`
+    // were constructed.
+    private static async Task<int> ResubmitDeadLetterCoreAsync(ServiceBusReceiver receiver, ServiceBusSender sender, IReadOnlyList<long> sequenceNumbers, CancellationToken ct)
+    {
         // Wall-clock ceiling on the scan below. maxAttempts already bounds the iteration count, but
         // not how long each iteration can take, so a degraded namespace could still keep the scan
         // running for many minutes. On expiry the receive/send/complete call throws
@@ -295,7 +392,16 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                     {
                         // Hold this message's PeekLock open (don't complete, abandon, or defer it) so
                         // it simply isn't redelivered to this or any other receiver until the finally
-                        // below restores it, or its lock naturally expires.
+                        // below restores it, or its lock naturally expires. This replaces an earlier
+                        // defer-based approach that turned out to be broken against the real broker:
+                        // abandoning a message received via ReceiveDeferredMessagesAsync does NOT
+                        // un-defer it (there is no un-defer operation in Service Bus), which
+                        // permanently stranded every non-matching message the first time this code
+                        // ran, made purge silently report success while deleting nothing, and left
+                        // the dead-letter badge/overview counts permanently wrong. Holding the lock
+                        // instead is also crash-safe in a way defer never was: an expired PeekLock is
+                        // redelivered automatically by the broker with no code involved, whereas a
+                        // deferred message never returns on its own.
                         heldMessages.Add(message);
                     }
                 }
@@ -334,12 +440,22 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
         var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete };
         await using var receiver = client.CreateReceiver(queueName, receiverOptions);
+        return await PurgeDeadLetterCoreAsync(receiver, ct);
+    }
 
-        // Wall-clock ceiling on the drain loop below, which is otherwise bounded only by how many
-        // messages the dead-letter queue holds and how fast the broker gives them up. Live testing
-        // against an unreachable namespace saw this loop never return. On expiry ReceiveMessagesAsync
-        // throws OperationCanceledException, which propagates to the calling handler's existing
-        // catch (and is audited there as a failed purge) rather than through a second error path.
+    public async Task<int> PurgeSubscriptionDeadLetterMessagesAsync(string connectionString, string topicName, string subscriptionName, CancellationToken ct = default)
+    {
+        await using var client = new ServiceBusClient(connectionString, CreateClientOptions());
+        var receiverOptions = new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter, ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete };
+        await using var receiver = client.CreateReceiver(topicName, subscriptionName, receiverOptions);
+        return await PurgeDeadLetterCoreAsync(receiver, ct);
+    }
+
+    // Wall-clock ceiling on the drain loop below. On expiry ReceiveMessagesAsync throws
+    // OperationCanceledException, which propagates to the calling handler's existing catch. Shared
+    // by both purge methods above.
+    private static async Task<int> PurgeDeadLetterCoreAsync(ServiceBusReceiver receiver, CancellationToken ct)
+    {
         using var purgeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         purgeCts.CancelAfter(BulkOperationTimeout);
 
@@ -356,5 +472,38 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
         }
 
         return purged;
+    }
+
+    // Composes the admin-list methods above -- no new Azure SDK surface, just orchestration -- so
+    // it can be reused unchanged by both the Dead-letter nav badge (ServiceBusPlugin) and the
+    // Dead-letter overview page's handler (docs/design.md §6.3), rather than enumerating queues and
+    // topics/subscriptions in two separate places.
+    public async Task<IReadOnlyList<DeadLetterEntry>> ListDeadLetterEntriesAsync(string connectionString, CancellationToken ct = default)
+    {
+        var entries = new List<DeadLetterEntry>();
+
+        var queues = await ListQueuesAsync(connectionString, ct);
+        foreach (var queue in queues)
+        {
+            if (queue.DeadLetterMessageCount > 0)
+            {
+                entries.Add(new DeadLetterEntry("Queue", null, queue.Name, queue.DeadLetterMessageCount));
+            }
+        }
+
+        var topics = await ListTopicsAsync(connectionString, ct);
+        foreach (var topic in topics)
+        {
+            var subscriptions = await ListSubscriptionsAsync(connectionString, topic.Name, ct);
+            foreach (var subscription in subscriptions)
+            {
+                if (subscription.DeadLetterMessageCount > 0)
+                {
+                    entries.Add(new DeadLetterEntry("Subscription", topic.Name, subscription.Name, subscription.DeadLetterMessageCount));
+                }
+            }
+        }
+
+        return entries;
     }
 }
