@@ -1,3 +1,4 @@
+using System.Text;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using SbConsole.Sdk;
@@ -100,11 +101,79 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
         await admin.DeleteTopicsAsync([topicName]);
     }
 
-    // PeekMessagesAsync and ProduceMessageAsync are added in Task 6.
-    public Task<IReadOnlyList<KafkaMessageSummary>> PeekMessagesAsync(
-        string config, string topicName, int partition, PeekStart start, long? offset, int maxMessages, CancellationToken ct = default) =>
-        throw new NotImplementedException("Added in Task 6.");
+    // Bounds the whole peek call, not just one Consume() -- a topic/partition with fewer messages
+    // than maxMessages must return early with what it got, not hang until this expires. Mirrors
+    // AzureServiceBusOperations.BulkOperationTimeout's role, sized down since peek is interactive,
+    // not a bulk drain.
+    internal static readonly TimeSpan PeekWallClockCap = TimeSpan.FromSeconds(30);
 
-    public Task ProduceMessageAsync(string config, string topicName, string? key, string value, int? partition, CancellationToken ct = default) =>
-        throw new NotImplementedException("Added in Task 6.");
+    public Task<PeekResult> PeekMessagesAsync(
+        string config, string topicName, int partition, PeekStart start, long? offset, int maxMessages, CancellationToken ct = default) =>
+        Task.Run<PeekResult>(() =>
+        {
+            // A fresh, never-reused group.id every call -- peeking never commits an offset and
+            // never shares a consumer group with anything else. See design spec §5.
+            var consumerConfig = CreateConsumerConfig(config, Guid.NewGuid().ToString());
+            consumerConfig.EnablePartitionEof = true;
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(consumerConfig).Build();
+
+            var topicPartition = new TopicPartition(topicName, new Partition(partition));
+            var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
+
+            var startOffset = start switch
+            {
+                PeekStart.Earliest => Offset.Beginning,
+                PeekStart.Offset => new Offset(offset ?? 0),
+                _ => new Offset(Math.Max(watermarks.High.Value - maxMessages, watermarks.Low.Value)),
+            };
+
+            consumer.Assign(new TopicPartitionOffset(topicPartition, startOffset));
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(PeekWallClockCap);
+
+            var messages = new List<KafkaMessageSummary>();
+            while (messages.Count < maxMessages && !timeoutCts.IsCancellationRequested)
+            {
+                var result = consumer.Consume(TimeSpan.FromSeconds(2));
+                if (result is null || result.IsPartitionEOF)
+                {
+                    break;
+                }
+
+                messages.Add(ToSummary(result));
+            }
+
+            return new PeekResult(messages, watermarks.Low.Value, watermarks.High.Value);
+        }, ct);
+
+    private static KafkaMessageSummary ToSummary(ConsumeResult<byte[], byte[]> result)
+    {
+        var (value, valueIsBase64) = Decode(result.Message.Value);
+        var key = result.Message.Key is { Length: > 0 } keyBytes ? Decode(keyBytes).Text : null;
+        return new KafkaMessageSummary(result.Partition.Value, result.Offset.Value, result.Message.Timestamp.UtcDateTime, key, value, valueIsBase64);
+    }
+
+    // Internal (not private) so ConfluentKafkaOperationsTests can assert it directly --
+    // InternalsVisibleTo already covers the test project (Task 1's csproj).
+    internal static (string Text, bool IsBase64) Decode(byte[] bytes)
+    {
+        try
+        {
+            var text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
+            return (text, false);
+        }
+        catch (DecoderFallbackException)
+        {
+            return (Convert.ToBase64String(bytes), true);
+        }
+    }
+
+    public async Task ProduceMessageAsync(string config, string topicName, string? key, string value, int? partition, CancellationToken ct = default)
+    {
+        using var producer = new ProducerBuilder<string?, string>(CreateProducerConfig(config)).Build();
+        var message = new Message<string?, string> { Key = key, Value = value };
+        var topicPartition = new TopicPartition(topicName, partition is { } p ? new Partition(p) : Partition.Any);
+        await producer.ProduceAsync(topicPartition, message, ct);
+    }
 }

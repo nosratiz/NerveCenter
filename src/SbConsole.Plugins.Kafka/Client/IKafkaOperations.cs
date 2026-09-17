@@ -23,7 +23,7 @@ public interface IKafkaOperations
     /// Non-destructive: a fresh, never-reused consumer group per call, never committing an offset.
     /// offset is read only when start is PeekStart.Offset.
     /// </summary>
-    Task<IReadOnlyList<KafkaMessageSummary>> PeekMessagesAsync(
+    Task<PeekResult> PeekMessagesAsync(
         string config, string topicName, int partition, PeekStart start, long? offset, int maxMessages, CancellationToken ct = default);
 
     /// <summary>partition null lets Kafka's default partitioner choose (by key hash, or round-robin when key is null).</summary>

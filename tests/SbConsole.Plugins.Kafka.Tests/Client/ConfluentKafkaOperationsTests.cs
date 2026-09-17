@@ -43,4 +43,24 @@ public class ConfluentKafkaOperationsTests
 
         config.BootstrapServers.Should().Be("broker1:9092");
     }
+
+    [Fact]
+    public void Valid_UTF8_bytes_decode_as_text()
+    {
+        var (text, isBase64) = ConfluentKafkaOperations.Decode(System.Text.Encoding.UTF8.GetBytes("hello world"));
+
+        text.Should().Be("hello world");
+        isBase64.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Non_UTF8_bytes_decode_as_base64()
+    {
+        byte[] invalidUtf8 = [0xFF, 0xFE, 0x00, 0x01];
+
+        var (text, isBase64) = ConfluentKafkaOperations.Decode(invalidUtf8);
+
+        isBase64.Should().BeTrue();
+        text.Should().Be(Convert.ToBase64String(invalidUtf8));
+    }
 }
