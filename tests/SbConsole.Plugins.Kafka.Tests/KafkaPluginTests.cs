@@ -15,8 +15,9 @@ public class KafkaPluginTests
         plugin.ConnectionKind.Should().Be("kafka");
         plugin.DisplayName.Should().Be("Apache Kafka");
         plugin.ConnectionKindDisplayName.Should().Be("Apache Kafka");
-        plugin.NavItems.Should().ContainSingle(n => n.Title == "Topics" && n.Href == "/p/kafka/topics");
-        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 2, ActionCount: 4));
+        plugin.NavItems.Should().Contain(n => n.Title == "Topics" && n.Href == "/p/kafka/topics");
+        plugin.NavItems.Should().Contain(n => n.Title == "Consumer Groups" && n.Href == "/p/kafka/consumer-groups");
+        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 5));
     }
 
     [Fact]

@@ -6,18 +6,24 @@ namespace SbConsole.Plugins.Kafka;
 
 public sealed class KafkaPlugin : IPlugin
 {
+    // Shared by ConsumerGroups.razor's warning chip (Task 6) and GetDashboardProblemsAsync/
+    // GetNavBadgeAsync (Task 8) so the threshold is defined exactly once. See design spec §6.
+    internal const long LagProblemThreshold = 10_000;
+
     public string Id => "kafka";
     public string DisplayName => "Apache Kafka";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [
         new("Topics", "/p/kafka/topics"),
+        new("Consumer Groups", "/p/kafka/consumer-groups"),
     ];
     public string ConnectionKind => "kafka";
     public string ConnectionKindDisplayName => "Apache Kafka";
 
-    // Topics: Create/Delete topic, Peek, Produce (4). Pages: Topics, Peek.
-    public PluginContribution Contribution => new(PageCount: 2, ActionCount: 4);
+    // Topics: Create/Delete topic, Peek, Produce, Reset offset (5).
+    // Pages: Topics, Peek, ConsumerGroups, ConsumerGroupDetail (4).
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 5);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -28,6 +34,9 @@ public sealed class KafkaPlugin : IPlugin
         services.AddScoped<Topics.GetConnectionEchoQueryHandler>();
         services.AddScoped<Messages.PeekMessagesQueryHandler>();
         services.AddScoped<Messages.ProduceMessageCommandHandler>();
+        services.AddScoped<ConsumerGroups.ListConsumerGroupsQueryHandler>();
+        services.AddScoped<ConsumerGroups.GetConsumerGroupDetailQueryHandler>();
+        services.AddScoped<ConsumerGroups.ResetConsumerGroupOffsetCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`
@@ -48,4 +57,6 @@ public sealed class KafkaPlugin : IPlugin
             new PluginDashboardMetric("Partitions", partitionCount),
         ];
     }
+
+    // GetDashboardProblemsAsync/GetNavBadgeAsync overrides are added in Task 8.
 }
