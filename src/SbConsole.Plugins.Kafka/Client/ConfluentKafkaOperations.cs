@@ -337,4 +337,43 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
 
         return new ConsumerGroupDetail(groupId, description.State.ToString(), partitionLags, members);
     }
+
+    // Extracted as a pure static function, same reasoning as ComputeLag/IsEndOfPartition/Decode --
+    // unit-testable without a real broker.
+    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue) =>
+        offsetsForTimesResultValue == -1 ? Offset.End : new Offset(offsetsForTimesResultValue);
+
+    public async Task ResetConsumerGroupOffsetAsync(
+        string config, string groupId, string topicName, int partition, OffsetResetMode mode,
+        long? offset, DateTimeOffset? timestamp, CancellationToken ct = default)
+    {
+        var topicPartition = new TopicPartition(topicName, new Partition(partition));
+
+        Offset resolvedOffset;
+        if (mode == OffsetResetMode.Timestamp)
+        {
+            using var timestampConsumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            resolvedOffset = await Task.Run(() =>
+            {
+                var results = timestampConsumer.OffsetsForTimes(
+                    [new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout);
+                return ResolveTimestampLookupResult(results[0].Offset.Value);
+            }, ct);
+        }
+        else
+        {
+            resolvedOffset = mode switch
+            {
+                OffsetResetMode.Earliest => Offset.Beginning,
+                OffsetResetMode.Latest => Offset.End,
+                OffsetResetMode.Offset => new Offset(offset!.Value),
+                _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
+            };
+        }
+
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        await admin.AlterConsumerGroupOffsetsAsync(
+            [new ConsumerGroupTopicPartitionOffsets(groupId, [new TopicPartitionOffset(topicPartition, resolvedOffset)])],
+            new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
+    }
 }
