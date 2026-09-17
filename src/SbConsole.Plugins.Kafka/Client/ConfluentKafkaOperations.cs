@@ -222,4 +222,67 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
         var topicPartition = new TopicPartition(topicName, partition is { } p ? new Partition(p) : Partition.Any);
         await producer.ProduceAsync(topicPartition, message, ct);
     }
+
+    // Extracted as a pure static function so the "clamp to >= 0" rule (design spec §3 -- a
+    // committed offset can be momentarily ahead of a just-moved watermark) is unit-testable
+    // without a real broker, same reasoning as IsEndOfPartition/Decode above.
+    internal static long ComputeLag(long committedOffset, long highWatermark) => Math.Max(0, highWatermark - committedOffset);
+
+    // Shared by ListConsumerGroupsAsync (below) and GetConsumerGroupDetailAsync (Task 3). Passing
+    // null for topicPartitions is librdkafka's documented way to mean "every topic-partition this
+    // group has a committed offset for" -- see this plan's Global Constraints; not asserted by any
+    // .NET doc comment, so it isn't (and can't be) covered by a unit test.
+    internal static async Task<IReadOnlyList<TopicPartitionOffsetError>> GetCommittedOffsetsAsync(IAdminClient admin, string groupId)
+    {
+        var results = await admin.ListConsumerGroupOffsetsAsync(
+            [new ConsumerGroupTopicPartitions(groupId, null)],
+            new ListConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
+        return results[0].Partitions;
+    }
+
+    public async Task<IReadOnlyList<ConsumerGroupSummary>> ListConsumerGroupsAsync(string config, CancellationToken ct = default)
+    {
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+
+        var listResult = await admin.ListConsumerGroupsAsync(new ListConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        if (listResult.Valid.Count == 0)
+        {
+            return [];
+        }
+
+        var groupIds = listResult.Valid.Select(g => g.GroupId).ToList();
+        var describeResult = await admin.DescribeConsumerGroupsAsync(groupIds, new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        var memberCountByGroup = describeResult.ConsumerGroupDescriptions.ToDictionary(d => d.GroupId, d => d.Members.Count);
+
+        // One throwaway consumer group, reused across every group's watermark lookups below -- same
+        // "fresh, never-reused group.id, purely to ask the cluster for watermark offsets" convention
+        // ListTopicsAsync already uses.
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+
+        var summaries = new List<ConsumerGroupSummary>();
+        foreach (var listing in listResult.Valid)
+        {
+            var offsets = await GetCommittedOffsetsAsync(admin, listing.GroupId);
+            var totalLag = await Task.Run(() =>
+            {
+                long total = 0;
+                foreach (var partition in offsets)
+                {
+                    if (partition.Error.IsError)
+                    {
+                        continue;
+                    }
+
+                    var watermarks = consumer.QueryWatermarkOffsets(partition.TopicPartition, AttemptTimeout);
+                    total += ComputeLag(partition.Offset.Value, watermarks.High.Value);
+                }
+
+                return total;
+            }, ct);
+
+            summaries.Add(new ConsumerGroupSummary(listing.GroupId, listing.State.ToString(), memberCountByGroup.GetValueOrDefault(listing.GroupId, 0), totalLag));
+        }
+
+        return summaries;
+    }
 }

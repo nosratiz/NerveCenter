@@ -126,4 +126,13 @@ public class ConfluentKafkaOperationsTests
         isBase64.Should().BeTrue();
         text.Should().Be(Convert.ToBase64String(invalidUtf8));
     }
+
+    [Theory]
+    [InlineData(90, 100, 10)]   // normal case: 10 messages behind
+    [InlineData(100, 100, 0)]   // caught up
+    [InlineData(105, 100, 0)]   // committed briefly ahead of a just-moved watermark -- clamped, not negative
+    public void ComputeLag_clamps_to_zero_and_never_returns_negative(long committedOffset, long highWatermark, long expected)
+    {
+        ConfluentKafkaOperations.ComputeLag(committedOffset, highWatermark).Should().Be(expected);
+    }
 }
