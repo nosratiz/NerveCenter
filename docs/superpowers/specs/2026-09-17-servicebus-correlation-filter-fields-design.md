@@ -1,6 +1,6 @@
 # Service Bus correlation-filter full field set — Design
 
-Status: draft, 2026-09-17.
+Status: implemented, 2026-09-17.
 
 ## 1. Context
 
