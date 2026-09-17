@@ -186,11 +186,10 @@ public enum OffsetResetMode { Earliest, Latest, Offset, Timestamp }
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `dotnet test tests/SbConsole.Plugins.Kafka.Tests --filter FriendlyKafkaErrorTests`
-Expected: PASS (11 cases).
-
 Run: `dotnet build SbConsole.slnx -warnaserror`
 Expected: FAIL — `ConfluentKafkaOperations` no longer compiles (it doesn't implement the three new `IKafkaOperations` members yet). This is expected; Tasks 2-4 add them.
+
+Because `tests/SbConsole.Plugins.Kafka.Tests` references `SbConsole.Plugins.Kafka` (which now fails to build), `dotnet test tests/SbConsole.Plugins.Kafka.Tests --filter FriendlyKafkaErrorTests` cannot produce a green run yet either — the whole test project fails to build for the same reason. Confirm the new `[InlineData]` mappings are correct by inspection against the updated `FromKafkaException` switch instead; the first real green run of `FriendlyKafkaErrorTests` happens in Task 4's Step 4, once `ConfluentKafkaOperations` implements all of `IKafkaOperations` again. (You can still confirm the tests were RED before this step's implementation — capture that output — since at that point only the test file had changed and the interface/error-mapping code was still the old version that compiles.)
 
 - [ ] **Step 7: Commit**
 
