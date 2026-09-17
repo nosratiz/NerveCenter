@@ -1,0 +1,215 @@
+@page "/p/kafka/topics"
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.Topics
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject ListTopicsQueryHandler ListHandler
+@inject DeleteTopicCommandHandler DeleteHandler
+@inject GetConnectionEchoQueryHandler EchoHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Topics</PageTitle>
+<h1>Topics</h1>
+
+@if (_connections.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No connections yet. Add an Apache Kafka connection to get started.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Cluster</MudText>
+            <MudMenu Class="cluster-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Typo="Typo.subtitle1" Style="font-family:monospace">@SelectedConnection?.Name</MudText>
+                        @if (SelectedConnection?.IsProd == true)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+                        }
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var connection in _connections)
+                    {
+                        <MudMenuItem Class="cluster-option" OnClick="@(() => OnConnectionChanged(connection.Id))">@connection.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        <MudTextField T="string" Class="topic-filter" Placeholder="Filter topics..." @bind-Value="_filterText" Immediate="true" Style="max-width:220px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        <MudSpacer />
+        <MudButton Class="create-topic-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenCreate">+ Create topic</MudButton>
+        @if (_loading)
+        {
+            <MudProgressCircular Class="topics-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+
+    <MudText Typo="Typo.caption" Class="connection-echo mud-text-secondary">@_connectionEcho</MudText>
+
+    <MudText Class="topics-summary mud-text-secondary mb-2" Typo="Typo.body2">@_topics.Count @(_topics.Count == 1 ? "topic" : "topics") &middot; @_topics.Sum(t => t.PartitionCount) partitions</MudText>
+
+    <MudTable Items="FilteredTopics">
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>Partitions</MudTh>
+            <MudTh>Replication</MudTh>
+            <MudTh>Messages (approx)</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace">
+                @context.Name
+                @if (IsInternal(context.Name))
+                {
+                    <MudChip T="string" Size="Size.Small" Class="internal-badge ms-2">internal</MudChip>
+                }
+                else if (context.ReplicationFactor <= 1)
+                {
+                    <MudChip T="string" Color="Color.Warning" Size="Size.Small" Class="low-replication-badge ms-2">RF @context.ReplicationFactor</MudChip>
+                }
+            </MudTd>
+            <MudTd>@context.PartitionCount</MudTd>
+            <MudTd>@context.ReplicationFactor</MudTd>
+            <MudTd>@context.ApproximateMessageCount</MudTd>
+            <MudTd>
+                @if (IsInternal(context.Name))
+                {
+                    <MudText Class="read-only-label mud-text-secondary">read-only</MudText>
+                }
+                else
+                {
+                    <MudButton Href="@PeekUrl(context.Name, context.PartitionCount)">Peek</MudButton>
+                    <MudButton Class="delete-topic" Color="Color.Error" Disabled="@(_deletingTopic == context.Name)" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
+                    @if (_deletingTopic == context.Name)
+                    {
+                        <MudProgressCircular Class="delete-topic-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                    }
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<TopicSummary> _topics = [];
+    private Guid _selectedConnectionId;
+    private bool _loading;
+    private string? _deletingTopic;
+    private string _filterText = "";
+    private string _connectionEcho = "";
+
+    private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
+
+    private IEnumerable<TopicSummary> FilteredTopics => string.IsNullOrWhiteSpace(_filterText)
+        ? _topics
+        : _topics.Where(t => t.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsInternal(string name) => name.StartsWith("__", StringComparison.Ordinal);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("kafka");
+        if (_connections.Count > 0)
+        {
+            _selectedConnectionId = _connections[0].Id;
+            await LoadTopicsAsync();
+            await LoadEchoAsync();
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid connectionId)
+    {
+        _selectedConnectionId = connectionId;
+        await LoadTopicsAsync();
+        await LoadEchoAsync();
+    }
+
+    private async Task LoadTopicsAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            if (result.IsSuccess)
+            {
+                _topics = result.Value!;
+            }
+            else
+            {
+                _topics = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadEchoAsync()
+    {
+        var result = await EchoHandler.HandleAsync(_selectedConnectionId);
+        _connectionEcho = result.IsSuccess ? result.Value! : "";
+    }
+
+    // Peek.razor (Task 7) looks the connection's name and prod status up itself from
+    // ConnectionId, rather than trusting them off the URL -- same rule Service Bus's Peek.razor
+    // follows. partitionCount is only a display convenience (populating the partition selector
+    // without a second round trip), not security-relevant, so it's fine to carry on the URL.
+    private string PeekUrl(string topicName, int partitionCount)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        return $"/p/kafka/topics/{Uri.EscapeDataString(topicName)}/peek?connectionId={connection.Id}&partitionCount={partitionCount}";
+    }
+
+    private async Task OpenCreate()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateTopicDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateTopicDialog>("Create topic", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadTopicsAsync();
+        }
+    }
+
+    private async Task DeleteAsync(string topicName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", topicName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _deletingTopic = topicName;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteTopicCommand(connection.Id, connection.Name, connection.IsProd, topicName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingTopic = null;
+        }
+
+        await LoadTopicsAsync();
+    }
+}

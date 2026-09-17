@@ -4,6 +4,7 @@
     <ProjectReference Include="..\SbConsole.Core\SbConsole.Core.csproj" />
     <ProjectReference Include="..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
     <ProjectReference Include="..\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
+    <ProjectReference Include="..\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -66,4 +66,31 @@ public class KafkaConfigParserTests
                 ["security.protocol"] = "PLAINTEXT",
             });
     }
+
+    [Fact]
+    public void SafeEcho_echoes_only_the_allowlisted_keys_in_a_fixed_order()
+    {
+        KafkaConfigParser.SafeEcho("sasl.username=alice;security.protocol=SASL_SSL;bootstrap.servers=broker1:9092;sasl.mechanism=PLAIN;sasl.password=s3cr3t")
+            .Should().Be("bootstrap.servers=broker1:9092 · security.protocol=SASL_SSL · sasl.mechanism=PLAIN");
+    }
+
+    [Fact]
+    public void SafeEcho_omits_keys_that_are_absent()
+    {
+        KafkaConfigParser.SafeEcho("bootstrap.servers=broker1:9092")
+            .Should().Be("bootstrap.servers=broker1:9092");
+    }
+
+    [Fact]
+    public void SafeEcho_never_echoes_credentials()
+    {
+        KafkaConfigParser.SafeEcho("sasl.username=alice;sasl.password=s3cr3t;ssl.key.password=k3y")
+            .Should().Be("");
+    }
+
+    [Fact]
+    public void SafeEcho_of_an_empty_config_is_empty()
+    {
+        KafkaConfigParser.SafeEcho("").Should().Be("");
+    }
 }

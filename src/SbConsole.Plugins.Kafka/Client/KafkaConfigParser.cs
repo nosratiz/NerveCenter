@@ -11,6 +11,23 @@ namespace SbConsole.Plugins.Kafka.Client;
 /// </summary>
 public static class KafkaConfigParser
 {
+    private static readonly string[] SafeEchoKeys = ["bootstrap.servers", "security.protocol", "sasl.mechanism"];
+
+    /// <summary>
+    /// A small allowlist-only echo of non-secret connection fields, safe to render in the UI
+    /// under the cluster picker so a user can confirm which cluster/security mode they're
+    /// connected to. Deliberately excludes every credential-shaped key (sasl.username,
+    /// sasl.password, ssl.key.password, ssl.keystore.password, etc.) so the decrypted secret's
+    /// credentials never reach the browser, even indirectly. Keys are echoed in the fixed order
+    /// above (not the input string's order), joined by " · "; a config with none of these keys
+    /// present returns "".
+    /// </summary>
+    public static string SafeEcho(string config)
+    {
+        var parsed = Parse(config);
+        return string.Join(" · ", SafeEchoKeys.Where(parsed.ContainsKey).Select(k => $"{k}={parsed[k]}"));
+    }
+
     public static Dictionary<string, string> Parse(string config)
     {
         var result = new Dictionary<string, string>();
