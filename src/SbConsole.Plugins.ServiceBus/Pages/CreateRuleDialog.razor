@@ -87,8 +87,9 @@
                 ? new CreateSqlRuleRequest(_name, _sqlExpression)
                 : new CreateCorrelationRuleRequest(
                     _name,
-                    string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
-                    string.IsNullOrWhiteSpace(_label) ? null : _label,
+                    new CorrelationMatch(
+                        CorrelationId: string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
+                        Label: string.IsNullOrWhiteSpace(_label) ? null : _label),
                     properties);
 
             var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));

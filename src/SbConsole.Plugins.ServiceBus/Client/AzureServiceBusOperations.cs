@@ -550,8 +550,15 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
                 SqlRuleFilter sqlFilter => new SqlRuleSummary(props.Name, sqlFilter.SqlExpression),
                 CorrelationRuleFilter correlationFilter => new CorrelationRuleSummary(
                     props.Name,
-                    correlationFilter.CorrelationId,
-                    correlationFilter.Subject,
+                    new CorrelationMatch(
+                        CorrelationId: correlationFilter.CorrelationId,
+                        Label: correlationFilter.Subject,
+                        MessageId: correlationFilter.MessageId,
+                        To: correlationFilter.To,
+                        ReplyTo: correlationFilter.ReplyTo,
+                        SessionId: correlationFilter.SessionId,
+                        ReplyToSessionId: correlationFilter.ReplyToSessionId,
+                        ContentType: correlationFilter.ContentType),
                     correlationFilter.ApplicationProperties.ToDictionary(p => p.Key, p => p.Value?.ToString() ?? "")),
                 _ => new OtherRuleSummary(props.Name, props.Filter.ToString() ?? ""),
             });
@@ -576,8 +583,14 @@ public sealed class AzureServiceBusOperations : IServiceBusOperations
     {
         var filter = new CorrelationRuleFilter
         {
-            CorrelationId = request.CorrelationId,
-            Subject = request.Label,
+            CorrelationId = request.Match.CorrelationId,
+            Subject = request.Match.Label,
+            MessageId = request.Match.MessageId,
+            To = request.Match.To,
+            ReplyTo = request.Match.ReplyTo,
+            SessionId = request.Match.SessionId,
+            ReplyToSessionId = request.Match.ReplyToSessionId,
+            ContentType = request.Match.ContentType,
         };
         foreach (var (key, value) in request.Properties)
         {

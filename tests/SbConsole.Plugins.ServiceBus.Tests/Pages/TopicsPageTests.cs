@@ -211,7 +211,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
         _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
-            .Returns(new List<RuleSummary> { new CorrelationRuleSummary("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" }) });
+            .Returns(new List<RuleSummary> { new CorrelationRuleSummary("VipCustomers", new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders"), new Dictionary<string, string> { ["tier"] = "gold" }) });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
@@ -226,6 +226,36 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         cut.Markup.Should().Contain("CorrelationId: vip-123");
         cut.Markup.Should().Contain("Label: Orders");
         cut.Markup.Should().Contain("tier: gold");
+    }
+
+    [Fact]
+    public async Task A_correlation_rule_with_additional_match_fields_renders_all_of_them()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new CorrelationRuleSummary(
+                "VipCustomers",
+                new CorrelationMatch(MessageId: "msg-1", To: "sales", ReplyTo: "support", SessionId: "sess-1", ReplyToSessionId: "sess-2", ContentType: "application/json"),
+                new Dictionary<string, string>()) });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Markup.Should().Contain("MessageId: msg-1");
+        cut.Markup.Should().Contain("To: sales");
+        cut.Markup.Should().Contain("ReplyTo: support");
+        cut.Markup.Should().Contain("SessionId: sess-1");
+        cut.Markup.Should().Contain("ReplyToSessionId: sess-2");
+        cut.Markup.Should().Contain("ContentType: application/json");
     }
 
     [Fact]

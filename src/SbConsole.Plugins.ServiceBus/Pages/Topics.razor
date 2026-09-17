@@ -280,20 +280,28 @@ else
     private static string FormatCorrelationRule(CorrelationRuleSummary rule)
     {
         var parts = new List<string>();
-        if (!string.IsNullOrEmpty(rule.CorrelationId))
-        {
-            parts.Add($"CorrelationId: {rule.CorrelationId}");
-        }
-        if (!string.IsNullOrEmpty(rule.Label))
-        {
-            parts.Add($"Label: {rule.Label}");
-        }
+        AddIfSet(parts, "CorrelationId", rule.Match.CorrelationId);
+        AddIfSet(parts, "Label", rule.Match.Label);
+        AddIfSet(parts, "MessageId", rule.Match.MessageId);
+        AddIfSet(parts, "To", rule.Match.To);
+        AddIfSet(parts, "ReplyTo", rule.Match.ReplyTo);
+        AddIfSet(parts, "SessionId", rule.Match.SessionId);
+        AddIfSet(parts, "ReplyToSessionId", rule.Match.ReplyToSessionId);
+        AddIfSet(parts, "ContentType", rule.Match.ContentType);
         foreach (var (key, value) in rule.Properties)
         {
             parts.Add($"{key}: {value}");
         }
 
         return parts.Count == 0 ? "(matches all messages)" : string.Join(" · ", parts);
+    }
+
+    private static void AddIfSet(List<string> parts, string label, string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            parts.Add($"{label}: {value}");
+        }
     }
 
     private string PeekUrl(string topicName, string subscriptionName, bool deadLetter = false, long? deadLetterCount = null)

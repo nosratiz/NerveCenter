@@ -39,7 +39,7 @@ public class ListSubscriptionRulesQueryHandlerTests
             .Returns(new List<RuleSummary>
             {
                 new SqlRuleSummary("HighPriority", "Priority = 'High'"),
-                new CorrelationRuleSummary("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" }),
+                new CorrelationRuleSummary("VipCustomers", new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders"), new Dictionary<string, string> { ["tier"] = "gold" }),
                 new OtherRuleSummary("$Default", "TrueFilter"),
             });
 
@@ -49,7 +49,7 @@ public class ListSubscriptionRulesQueryHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().HaveCount(3);
         result.Value.Should().Contain(r => r is SqlRuleSummary && ((SqlRuleSummary)r).Name == "HighPriority" && ((SqlRuleSummary)r).SqlExpression == "Priority = 'High'");
-        result.Value.Should().Contain(r => r is CorrelationRuleSummary && ((CorrelationRuleSummary)r).Name == "VipCustomers" && ((CorrelationRuleSummary)r).CorrelationId == "vip-123" && ((CorrelationRuleSummary)r).Label == "Orders" && ((CorrelationRuleSummary)r).Properties["tier"] == "gold");
+        result.Value.Should().Contain(r => r is CorrelationRuleSummary && ((CorrelationRuleSummary)r).Name == "VipCustomers" && ((CorrelationRuleSummary)r).Match.CorrelationId == "vip-123" && ((CorrelationRuleSummary)r).Match.Label == "Orders" && ((CorrelationRuleSummary)r).Properties["tier"] == "gold");
         result.Value.Should().Contain(r => r is OtherRuleSummary && ((OtherRuleSummary)r).Name == "$Default" && ((OtherRuleSummary)r).RawFilterText == "TrueFilter");
     }
 

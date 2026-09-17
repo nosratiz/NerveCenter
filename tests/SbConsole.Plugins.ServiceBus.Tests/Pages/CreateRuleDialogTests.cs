@@ -149,8 +149,8 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
             "Endpoint=sb://real", "orders", "uk-team",
             Arg.Is<CreateRuleRequest>(r => r is CreateCorrelationRuleRequest
                 && ((CreateCorrelationRuleRequest)r).Name == "VipCustomers"
-                && ((CreateCorrelationRuleRequest)r).CorrelationId == "vip-123"
-                && ((CreateCorrelationRuleRequest)r).Label == "Orders"
+                && ((CreateCorrelationRuleRequest)r).Match.CorrelationId == "vip-123"
+                && ((CreateCorrelationRuleRequest)r).Match.Label == "Orders"
                 && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "gold"),
             Arg.Any<CancellationToken>());
     }
