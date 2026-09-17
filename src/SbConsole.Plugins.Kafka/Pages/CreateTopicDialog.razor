@@ -1,0 +1,54 @@
+@using SbConsole.Plugins.Kafka.Topics
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="topic-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudNumericField @bind-Value="_partitionCount" Label="Partitions" Min="1" Max="1000" />
+        <MudNumericField @bind-Value="_replicationFactor" Label="Replication factor" Min="1" Max="32" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-topic-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-topic" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || _busy)" OnClick="Save">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+
+    [Inject] private CreateTopicCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private int _partitionCount = 1;
+    private int _replicationFactor = 1;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var result = await CreateHandler.HandleAsync(new CreateTopicCommand(ConnectionId, ConnectionName, _name, _partitionCount, _replicationFactor));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

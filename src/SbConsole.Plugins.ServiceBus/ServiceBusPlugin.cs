@@ -48,10 +48,6 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Rules.CreateRuleCommandHandler>();
         services.AddScoped<Rules.DeleteRuleCommandHandler>();
         services.AddScoped<Rules.EditRuleCommandHandler>();
-
-        // Pre-bound to this plugin's own Id so pages (Queues.razor) can @inject IPluginStore
-        // directly instead of going through the factory + this plugin's Id at every call site.
-        services.AddScoped<IPluginStore>(sp => sp.GetRequiredService<IPluginStoreFactory>().For(Id));
     }
 
     private const string DeadLetterNavHref = "/p/azure-servicebus/dead-letter";

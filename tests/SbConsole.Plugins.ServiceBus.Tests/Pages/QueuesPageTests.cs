@@ -41,7 +41,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(Substitute.For<IConfirmationService>());
         var store = Substitute.For<IPluginStore>();
         store.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((string?)null);
-        Services.AddSingleton(store);
+        Services.AddKeyedSingleton<IPluginStore>("azure-servicebus", store);
         Services.AddSingleton(TimeProvider.System);
         Services.AddLogging(); // handlers take an ILogger<T> so they can log the full exception behind a truncated UI message
         Services.AddSingleton<ListQueuesQueryHandler>();

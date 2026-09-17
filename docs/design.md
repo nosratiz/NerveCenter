@@ -428,6 +428,48 @@ one connection, but a single number and a single page spanning every
 Out of this plan: per-entity notification/alerting on DLQ growth, historical
 DLQ trend charts — this is a live snapshot only, matching the mockup.
 
+## 6.5 Kafka plugin (`SbConsole.Plugins.Kafka`) — Topics (2026-09-17)
+
+SbConsole's second plugin, built the same way Service Bus's Queues plan proved the
+architecture out for the first: `KafkaPlugin : IPlugin`, `Id`/`ConnectionKind` =
+`"kafka"`, `DisplayName`/`ConnectionKindDisplayName` = `"Apache Kafka"`. Registered via
+`AddSbConsolePlugin<KafkaPlugin>()` in `Program.cs`, right after Service Bus — no host routing
+change was needed (§5's `AdditionalAssemblies` wiring already scans every registered plugin's
+assembly generically).
+
+Connection-string auth model differs from Service Bus's single Azure connection string: since
+every plugin gets exactly one opaque secret string end-to-end (§3), the Kafka connection secret
+is a librdkafka config string (`key=value` pairs separated by `;`), parsed straight into
+`Confluent.Kafka`'s `ClientConfig`-derived types — covers plaintext, SASL/PLAIN, SASL/SCRAM, and
+mTLS without SbConsole inventing its own schema. Full design:
+`docs/superpowers/specs/2026-09-16-kafka-topics-plugin-design.md`.
+
+**Topics (shipped):** list (with per-partition-summed approximate message count — see the design
+spec §4 for why this means "currently retained," not "unprocessed backlog," unlike Service Bus's
+ActiveMessageCount), create, delete (`Destructive`); peek (non-destructive, partition-scoped, not
+merged across partitions — Kafka only orders within a partition); produce. The Topics page adds,
+after a UI wireframe review, the same conventions already established on Service Bus's
+`Queues.razor`: a filter box, a topic/partition-count summary line, a safe echo of the connection's
+non-credential fields (`bootstrap.servers`/`security.protocol`/`sasl.mechanism`) under the cluster
+picker, an "internal" badge with read-only actions for `__`-prefixed topics, and a
+low-replication-factor warning badge. The Peek page shows the selected partition's low/high
+watermark next to the Fetch action, computed from the same watermark query
+`ConfluentKafkaOperations` already needs internally, via a `PeekResult` record.
+
+**A pre-existing bug this second plugin exposed and fixed:** `AddSbConsolePlugin<TPlugin>()`
+registered `IPluginStore` as a single unkeyed scoped service (a "single-plugin simplification" its
+own comment flagged). Registering Kafka alongside Service Bus would have made every unkeyed
+`IPluginStore` resolution in the app resolve to whichever plugin registered last — silently
+redirecting Service Bus's `Queues.razor` metric-history sparkline storage into Kafka's namespace.
+Fixed by making the registration keyed by plugin `Id` (`AddKeyedScoped`), with `Queues.razor`'s
+injection moved from `@inject IPluginStore Store` to a keyed `[Inject, FromKeyedServices(...)]`
+property — the one place in the codebase that used the unkeyed convenience registration.
+
+Deferred past this plan, each its own future plan: consumer group management (list, lag,
+offset reset); dead-letter handling via the DLQ-topic convention (Kafka has no native DLQ);
+Schema Registry integration; topic configuration beyond partition count/replication factor;
+integration tests against a real/emulated broker.
+
 ## 7. Error handling
 
 - Handlers return typed results (`Result<T>` with error category: `NotFound`,
@@ -452,6 +494,8 @@ DLQ trend charts — this is a live snapshot only, matching the mockup.
   — real peek/send/DLQ flows over AMQP. Deferred past all three (§6); picked
   up once the plugin's shape has proven out across queues, topics, and the
   cross-connection overview alike.
+- Kafka plugin (Topics, §6.5): same deferral, same reasoning — unit tests only against a
+  substitute of `IKafkaOperations`, no Testcontainers, no real broker traffic.
 - `NavMenu`'s badge-refresh loop (§5, §6.3) is tested by calling its refresh
   method directly, not by waiting out its real 60-second timer — the loop
   itself is a thin wrapper (`while` + `Task.Delay` + the same call) around a
