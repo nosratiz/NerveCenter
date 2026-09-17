@@ -114,6 +114,7 @@ else
                             {
                                 <div class="rule-row d-flex align-center gap-2">
                                     <span style="font-family:monospace">@rule.Name — @FormatRule(rule)</span>
+                                    <MudButton Class="edit-rule" Size="Size.Small" OnClick="@(() => OpenEditRule(panelRow.TopicName, panelRow.SubscriptionName, rule))">Edit</MudButton>
                                     <MudButton Class="delete-rule" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteRuleAsync(panelRow.TopicName, panelRow.SubscriptionName, rule.Name))">Delete</MudButton>
                                 </div>
                             }
@@ -365,6 +366,26 @@ else
             { x => x.SubscriptionName, subscriptionName },
         };
         var dialog = await DialogService.ShowAsync<CreateRuleDialog>("Add rule", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await RefreshRulesAsync(topicName, subscriptionName);
+        }
+    }
+
+    private async Task OpenEditRule(string topicName, string subscriptionName, RuleSummary existingRule)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateRuleDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicName, topicName },
+            { x => x.SubscriptionName, subscriptionName },
+            { x => x.ExistingRule, existingRule },
+            { x => x.IsProd, connection.IsProd },
+        };
+        var dialog = await DialogService.ShowAsync<CreateRuleDialog>("Edit rule", parameters);
         var result = await dialog.Result;
         if (result is { Canceled: false })
         {
