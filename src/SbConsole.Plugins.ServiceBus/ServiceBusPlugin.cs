@@ -20,9 +20,10 @@ public sealed class ServiceBusPlugin : IPlugin
 
     // Queues: Create/Delete queue, Peek, Send, Resubmit dead-letter, Purge dead-letter (6).
     // Topics & Subscriptions: Create/Delete topic, Create/Delete subscription, Peek subscription,
-    // Resubmit/Purge subscription dead-letter (7 -- Send is reused, not counted again).
+    // Resubmit/Purge subscription dead-letter, Add/Delete rule (9 -- Send is reused, not counted
+    // again).
     // Pages: Queues, Topics & Subscriptions (combined), SubscriptionPeek, DeadLetterOverview.
-    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 13);
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 15);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -43,6 +44,9 @@ public sealed class ServiceBusPlugin : IPlugin
         services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
         services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
+        services.AddScoped<Rules.ListSubscriptionRulesQueryHandler>();
+        services.AddScoped<Rules.CreateRuleCommandHandler>();
+        services.AddScoped<Rules.DeleteRuleCommandHandler>();
 
         // Pre-bound to this plugin's own Id so pages (Queues.razor) can @inject IPluginStore
         // directly instead of going through the factory + this plugin's Id at every call site.

@@ -40,7 +40,7 @@
 
 **Deliverable this task proves:** a correlation rule with any of the 8 built-in match fields set — including ones created outside this app (portal, CLI) — lists and renders correctly. The dialog can still only set CorrelationId/Label after this task (Task 2 adds the other 6 to the UI); this task's own dialog change is a minimal, mechanical fix to keep it compiling against the new `CorrelationMatch` shape.
 
-- [ ] **Step 1: Create `CorrelationMatch.cs`**
+- [x] **Step 1: Create `CorrelationMatch.cs`**
 
 `src/SbConsole.Plugins.ServiceBus/Client/CorrelationMatch.cs`:
 
@@ -58,7 +58,7 @@ public sealed record CorrelationMatch(
     string? ContentType = null);
 ```
 
-- [ ] **Step 2: Reshape `CorrelationRuleSummary` in `RuleSummary.cs`**
+- [x] **Step 2: Reshape `CorrelationRuleSummary` in `RuleSummary.cs`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Client/RuleSummary.cs`. Replace:
 
@@ -76,7 +76,7 @@ with:
 public sealed record CorrelationRuleSummary(string Name, CorrelationMatch Match, IReadOnlyDictionary<string, string> Properties) : RuleSummary(Name);
 ```
 
-- [ ] **Step 3: Reshape `CreateCorrelationRuleRequest` in `CreateRuleRequest.cs`**
+- [x] **Step 3: Reshape `CreateCorrelationRuleRequest` in `CreateRuleRequest.cs`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Client/CreateRuleRequest.cs`. Replace:
 
@@ -94,7 +94,7 @@ with:
 public sealed record CreateCorrelationRuleRequest(string Name, CorrelationMatch Match, IReadOnlyDictionary<string, string> Properties) : CreateRuleRequest(Name);
 ```
 
-- [ ] **Step 4: Update `AzureServiceBusOperations`'s correlation-filter mapping**
+- [x] **Step 4: Update `AzureServiceBusOperations`'s correlation-filter mapping**
 
 Open `src/SbConsole.Plugins.ServiceBus/Client/AzureServiceBusOperations.cs`. In `ListRulesAsync`, replace the `CorrelationRuleFilter` switch arm:
 
@@ -167,7 +167,7 @@ with:
     }
 ```
 
-- [ ] **Step 5: Minimal fix to keep `CreateRuleDialog.razor` compiling**
+- [x] **Step 5: Minimal fix to keep `CreateRuleDialog.razor` compiling**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor`. In `Save()`, replace:
 
@@ -196,7 +196,7 @@ with:
 
 The dialog's UI is unchanged in this step — still only CorrelationId/Label fields visible. `CorrelationMatch`'s other 6 fields default to `null` since they're not named here.
 
-- [ ] **Step 6: Update `Topics.razor`'s rendering for all 8 fields**
+- [x] **Step 6: Update `Topics.razor`'s rendering for all 8 fields**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor`. Replace `FormatCorrelationRule`:
 
@@ -252,7 +252,7 @@ with:
     }
 ```
 
-- [ ] **Step 7: Fix `ListSubscriptionRulesQueryHandlerTests.cs`**
+- [x] **Step 7: Fix `ListSubscriptionRulesQueryHandlerTests.cs`**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Rules/ListSubscriptionRulesQueryHandlerTests.cs`. In `Returns_a_mix_of_sql_correlation_and_other_rules`, replace:
 
@@ -278,7 +278,7 @@ with:
         result.Value.Should().Contain(r => r is CorrelationRuleSummary && ((CorrelationRuleSummary)r).Name == "VipCustomers" && ((CorrelationRuleSummary)r).Match.CorrelationId == "vip-123" && ((CorrelationRuleSummary)r).Match.Label == "Orders" && ((CorrelationRuleSummary)r).Properties["tier"] == "gold");
 ```
 
-- [ ] **Step 8: Fix `CreateRuleCommandHandlerTests.cs`**
+- [x] **Step 8: Fix `CreateRuleCommandHandlerTests.cs`**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Rules/CreateRuleCommandHandlerTests.cs`. In `Creates_a_correlation_rule_and_audits_as_mutating`, replace:
 
@@ -292,7 +292,7 @@ with:
         var request = new CreateCorrelationRuleRequest("VipCustomers", new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders"), new Dictionary<string, string> { ["tier"] = "gold" });
 ```
 
-- [ ] **Step 9: Fix `CreateRuleDialogTests.cs`**
+- [x] **Step 9: Fix `CreateRuleDialogTests.cs`**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs`. In `Saving_a_correlation_rule_with_custom_properties_calls_the_handler_and_closes` only (the other two correlation tests reference `.Properties` alone and need no change), replace:
 
@@ -314,7 +314,7 @@ with:
                 && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "gold"),
 ```
 
-- [ ] **Step 10: Fix `TopicsPageTests.cs`'s existing correlation-rendering test construction**
+- [x] **Step 10: Fix `TopicsPageTests.cs`'s existing correlation-rendering test construction**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. In `A_correlation_rules_panel_row_renders_its_id_label_and_properties`, replace:
 
@@ -330,12 +330,12 @@ with:
 
 The test's markup assertions (`"CorrelationId: vip-123"`, `"Label: Orders"`, `"tier: gold"`) are unchanged — same rendered output, only the construction call changes.
 
-- [ ] **Step 11: Run the full suite to confirm the mechanical fixes are complete**
+- [x] **Step 11: Run the full suite to confirm the mechanical fixes are complete**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: `Build succeeded. 0 Warning(s). 0 Error(s).` and every test passes (259/259, unchanged from before this task).
 
-- [ ] **Step 12: Write the failing test for full-field-set rendering**
+- [x] **Step 12: Write the failing test for full-field-set rendering**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. Add this test after `A_correlation_rules_panel_row_renders_its_id_label_and_properties`:
 
@@ -371,12 +371,12 @@ Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. Add th
     }
 ```
 
-- [ ] **Step 13: Run it to verify it passes**
+- [x] **Step 13: Run it to verify it passes**
 
 Run: `dotnet test --filter "FullyQualifiedName~TopicsPageTests"`
 Expected: PASS (all tests in this file, including the new one). This test passes immediately because Step 6 already implemented the rendering — it exists to pin that behavior with a real test, not to drive new implementation.
 
-- [ ] **Step 14: Run the full suite and commit**
+- [x] **Step 14: Run the full suite and commit**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: 0 warnings, 0 errors, every test passing (260 — the 259 already on the branch plus this task's 1 new test; report the exact total from the `dotnet test` summary line).
@@ -411,7 +411,7 @@ EOF
 
 **Deliverable this task proves:** a user can set any of the 8 built-in correlation match fields end-to-end through the UI, not just CorrelationId/Label.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs`. Add these two tests after `Save_is_disabled_in_correlation_mode_until_at_least_one_match_field_is_set`:
 
@@ -462,34 +462,14 @@ Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs`. 
     }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: the pre-existing tests still pass; the 2 new tests FAIL — `button.toggle-more-match-fields`, `input#rule-message-id`, `input#rule-to`, `input#rule-reply-to`, `input#rule-session-id`, `input#rule-reply-to-session-id`, `input#rule-content-type` don't exist yet.
 
-- [ ] **Step 3: Implement the toggle and the 6 additional fields**
+- [x] **Step 3: Implement the toggle and the 6 additional fields**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor`. Replace the correlation-mode `else` block:
-
-```razor
-        else
-        {
-            <MudTextField id="rule-correlation-id" @bind-Value="_correlationId" Label="Correlation ID" Immediate="true" />
-            <MudTextField id="rule-label" @bind-Value="_label" Label="Label" Immediate="true" />
-            <MudText Typo="Typo.subtitle2" Class="mt-2">Custom properties</MudText>
-            @foreach (var row in _properties)
-            {
-                <div class="d-flex align-center gap-2 property-row">
-                    <MudTextField @bind-Value="row.Key" Label="Key" Immediate="true" Class="property-key" />
-                    <MudTextField @bind-Value="row.Value" Label="Value" Immediate="true" Class="property-value" />
-                    <MudIconButton Class="remove-property-row" Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _properties.Remove(row))" />
-                </div>
-            }
-            <MudButton Class="add-property-row" Size="Size.Small" OnClick="@(() => _properties.Add(new PropertyRow()))">+ Add property</MudButton>
-        }
-```
-
-with:
 
 ```razor
         else
@@ -560,19 +540,6 @@ Replace `CanSave`:
             ? !string.IsNullOrWhiteSpace(_sqlExpression)
             : !string.IsNullOrWhiteSpace(_correlationId)
               || !string.IsNullOrWhiteSpace(_label)
-              || _properties.Any(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)));
-```
-
-with:
-
-```csharp
-    private bool CanSave =>
-        !string.IsNullOrWhiteSpace(_name)
-        && !_busy
-        && (_mode == "sql"
-            ? !string.IsNullOrWhiteSpace(_sqlExpression)
-            : !string.IsNullOrWhiteSpace(_correlationId)
-              || !string.IsNullOrWhiteSpace(_label)
               || !string.IsNullOrWhiteSpace(_messageId)
               || !string.IsNullOrWhiteSpace(_to)
               || !string.IsNullOrWhiteSpace(_replyTo)
@@ -614,12 +581,12 @@ with:
                     properties);
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: PASS (every test in this file, including the 2 new ones).
 
-- [ ] **Step 5: Run the full solution build and test suite**
+- [x] **Step 5: Run the full solution build and test suite**
 
 Run: `dotnet build -warnaserror`
 Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
@@ -627,7 +594,7 @@ Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
 Run: `dotnet test`
 Expected: every test across the solution passes (260 before this task plus 2 new — report the exact total from the `dotnet test` summary line).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs

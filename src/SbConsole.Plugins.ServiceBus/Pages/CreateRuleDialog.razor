@@ -1,0 +1,145 @@
+@using SbConsole.Plugins.ServiceBus.Rules
+@using SbConsole.Plugins.ServiceBus.Client
+@using SbConsole.Sdk
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="rule-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudToggleGroup T="string" @bind-Value="_mode" Class="mt-2 mb-2">
+            <MudToggleItem Value="@("sql")" Class="rule-mode-sql" Text="SQL expression" />
+            <MudToggleItem Value="@("correlation")" Class="rule-mode-correlation" Text="Correlation match" />
+        </MudToggleGroup>
+        @if (_mode == "sql")
+        {
+            <MudTextField id="rule-sql-expression" @bind-Value="_sqlExpression" Label="SQL expression" Placeholder="Priority = 'High'" Required="true" Immediate="true" />
+        }
+        else
+        {
+            <MudTextField id="rule-correlation-id" @bind-Value="_correlationId" Label="Correlation ID" Immediate="true" />
+            <MudTextField id="rule-label" @bind-Value="_label" Label="Label" Immediate="true" />
+            <MudButton Class="toggle-more-match-fields" Size="Size.Small" OnClick="@(() => _showMoreMatchFields = !_showMoreMatchFields)">@(_showMoreMatchFields ? "- Fewer match fields" : "+ More match fields")</MudButton>
+            @if (_showMoreMatchFields)
+            {
+                <MudTextField id="rule-message-id" @bind-Value="_messageId" Label="Message ID" Immediate="true" />
+                <MudTextField id="rule-to" @bind-Value="_to" Label="To" Immediate="true" />
+                <MudTextField id="rule-reply-to" @bind-Value="_replyTo" Label="Reply To" Immediate="true" />
+                <MudTextField id="rule-session-id" @bind-Value="_sessionId" Label="Session ID" Immediate="true" />
+                <MudTextField id="rule-reply-to-session-id" @bind-Value="_replyToSessionId" Label="Reply To Session ID" Immediate="true" />
+                <MudTextField id="rule-content-type" @bind-Value="_contentType" Label="Content Type" Immediate="true" />
+            }
+            <MudText Typo="Typo.subtitle2" Class="mt-2">Custom properties</MudText>
+            @foreach (var row in _properties)
+            {
+                <div class="d-flex align-center gap-2 property-row">
+                    <MudTextField @bind-Value="row.Key" Label="Key" Immediate="true" Class="property-key" />
+                    <MudTextField @bind-Value="row.Value" Label="Value" Immediate="true" Class="property-value" />
+                    <MudIconButton Class="remove-property-row" Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _properties.Remove(row))" />
+                </div>
+            }
+            <MudButton Class="add-property-row" Size="Size.Small" OnClick="@(() => _properties.Add(new PropertyRow()))">+ Add property</MudButton>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-rule-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSave)" OnClick="Save">Add</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public string SubscriptionName { get; set; } = "";
+
+    [Inject] private CreateRuleCommandHandler CreateHandler { get; set; } = default!;
+
+    private sealed class PropertyRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private string _mode = "sql";
+    private string _name = "";
+    private string _sqlExpression = "";
+    private string _correlationId = "";
+    private string _label = "";
+    private bool _showMoreMatchFields;
+    private string _messageId = "";
+    private string _to = "";
+    private string _replyTo = "";
+    private string _sessionId = "";
+    private string _replyToSessionId = "";
+    private string _contentType = "";
+    private readonly List<PropertyRow> _properties = [];
+    private bool _busy;
+
+    private bool CanSave =>
+        !string.IsNullOrWhiteSpace(_name)
+        && !_busy
+        && (_mode == "sql"
+            ? !string.IsNullOrWhiteSpace(_sqlExpression)
+            : !string.IsNullOrWhiteSpace(_correlationId)
+              || !string.IsNullOrWhiteSpace(_label)
+              || !string.IsNullOrWhiteSpace(_messageId)
+              || !string.IsNullOrWhiteSpace(_to)
+              || !string.IsNullOrWhiteSpace(_replyTo)
+              || !string.IsNullOrWhiteSpace(_sessionId)
+              || !string.IsNullOrWhiteSpace(_replyToSessionId)
+              || !string.IsNullOrWhiteSpace(_contentType)
+              || _properties.Any(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)));
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var properties = new Dictionary<string, string>();
+            foreach (var row in _properties.Where(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)))
+            {
+                properties[row.Key] = row.Value;
+            }
+
+            CreateRuleRequest request = _mode == "sql"
+                ? new CreateSqlRuleRequest(_name, _sqlExpression)
+                : new CreateCorrelationRuleRequest(
+                    _name,
+                    new CorrelationMatch(
+                        CorrelationId: string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
+                        Label: string.IsNullOrWhiteSpace(_label) ? null : _label,
+                        MessageId: string.IsNullOrWhiteSpace(_messageId) ? null : _messageId,
+                        To: string.IsNullOrWhiteSpace(_to) ? null : _to,
+                        ReplyTo: string.IsNullOrWhiteSpace(_replyTo) ? null : _replyTo,
+                        SessionId: string.IsNullOrWhiteSpace(_sessionId) ? null : _sessionId,
+                        ReplyToSessionId: string.IsNullOrWhiteSpace(_replyToSessionId) ? null : _replyToSessionId,
+                        ContentType: string.IsNullOrWhiteSpace(_contentType) ? null : _contentType),
+                    properties);
+
+            var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(FriendlyError.From(ex), Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -1,6 +1,6 @@
 # Service Bus subscription filter rules — Design
 
-Status: draft, 2026-09-15.
+Status: implemented, 2026-09-16.
 
 ## 1. Context
 

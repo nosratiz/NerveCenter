@@ -323,11 +323,12 @@ two drill-down pages — without checking the actual UI mockups
 what's documented below instead.
 
 Full topic/subscription lifecycle plus the same message-handling trio
-Queues has. **Filter rules are deferred** — every subscription created by
-this plugin gets the topic's default catch-all rule; the mockup's "Rules"
-column (filter-count chips) is intentionally **not** built, since it would
-be view-only scaffolding for a feature this plan isn't implementing — that
-column returns when the filter-rules plan does.
+Queues has. **Filter rules** are covered by
+`docs/superpowers/plans/2026-09-15-servicebus-filter-rules.md`: the
+mockup's "Rules" column (filter-count chips) is built, and expanding a
+subscription reveals a panel listing its SQL filter rules with add/delete
+actions. Correlation filters and rule editing remain out of scope (see
+that plan's design doc, §7).
 
 - **One combined page, not a drill-down**: a single "Topics & Subscriptions"
   nav item → `Topics.razor` — one `MudTable` whose rows are either a topic

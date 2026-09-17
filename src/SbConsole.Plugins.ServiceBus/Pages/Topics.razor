@@ -8,6 +8,9 @@
 @inject CreateTopicCommandHandler CreateTopicHandler
 @inject DeleteTopicCommandHandler DeleteTopicHandler
 @inject DeleteSubscriptionCommandHandler DeleteSubscriptionHandler
+@using SbConsole.Plugins.ServiceBus.Rules
+@inject ListSubscriptionRulesQueryHandler RulesHandler
+@inject DeleteRuleCommandHandler DeleteRuleHandler
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -38,25 +41,27 @@ else
         }
     </div>
 
-    <MudTable Items="_rows" RowClassFunc="@((row, _) => row is SubscriptionRowEntry ? "subscription-row" : "topic-row")">
+    <MudTable Items="_rows" RowClassFunc="@((row, _) => row switch { SubscriptionRowEntry => "subscription-row", SubscriptionRulesPanelRowEntry => "rules-panel-row", _ => "topic-row" })">
         <HeaderContent>
             <MudTh>Name</MudTh>
             <MudTh>Active</MudTh>
             <MudTh>Dead-letter</MudTh>
             <MudTh>Scheduled</MudTh>
+            <MudTh>Rules</MudTh>
             <MudTh>Actions</MudTh>
         </HeaderContent>
         <RowTemplate>
             @if (context is TopicRowEntry topicRow)
             {
                 <MudTd>
-                    <MudButton Class="expand-topic" OnClick="@(() => ToggleExpanded(topicRow.Topic.Name))">@(topicRow.IsExpanded ? "▾" : "▸")</MudButton>
+                    <MudButton Class="expand-topic" OnClick="@(() => ToggleTopicExpandedAsync(topicRow.Topic.Name))">@(topicRow.IsExpanded ? "▾" : "▸")</MudButton>
                     <span style="font-family:monospace">@topicRow.Topic.Name</span>
                     <span class="mud-text-secondary" style="font-size:11px"> @topicRow.Topic.SubscriptionCount subs</span>
                 </MudTd>
                 <MudTd>@topicRow.ActiveMessageCount</MudTd>
                 <MudTd>@topicRow.DeadLetterMessageCount</MudTd>
                 <MudTd>@topicRow.Topic.ScheduledMessageCount</MudTd>
+                <MudTd>—</MudTd>
                 <MudTd>
                     <MudButton Class="send-message-action" OnClick="@(() => OpenSend(topicRow.Topic.Name))">Send</MudButton>
                     <MudButton Class="add-subscription-action" OnClick="@(() => OpenCreateSubscription(topicRow.Topic.Name))">+ Subscription</MudButton>
@@ -75,6 +80,17 @@ else
                 <MudTd>@subRow.Subscription.DeadLetterMessageCount</MudTd>
                 <MudTd>—</MudTd>
                 <MudTd>
+                    @if (_rulesByKey.TryGetValue(rowKey, out var subRules))
+                    {
+                        <MudButton Class="expand-subscription-rules" Size="Size.Small" OnClick="@(() => ToggleSubscriptionRulesExpanded(rowKey))">@(_expandedSubscriptionRules.Contains(rowKey) ? "▾" : "▸")</MudButton>
+                        <MudChip T="string" Class="rule-count-chip" Size="Size.Small">@subRules.Count @(subRules.Count == 1 ? "rule" : "rules")</MudChip>
+                    }
+                    else if (_loadingRulesForTopic == subRow.TopicName)
+                    {
+                        <MudProgressCircular Class="rules-loading" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                    }
+                </MudTd>
+                <MudTd>
                     <MudButton Href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name)">Peek</MudButton>
                     <MudButton Class="dead-letter-action" Href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name, deadLetter: true, deadLetterCount: subRow.Subscription.DeadLetterMessageCount)">Dead-letter</MudButton>
                     <MudButton Class="delete-subscription" Color="Color.Error" Disabled="@(_deletingEntity == rowKey)" OnClick="@(() => DeleteSubscriptionAsync(subRow.TopicName, subRow.Subscription.Name))">Delete</MudButton>
@@ -82,6 +98,28 @@ else
                     {
                         <MudProgressCircular Class="delete-subscription-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
                     }
+                </MudTd>
+            }
+            else if (context is SubscriptionRulesPanelRowEntry panelRow)
+            {
+                <MudTd colspan="6" Class="rules-panel">
+                    <div style="padding-left:80px">
+                        @if (panelRow.Rules.Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary">No rules.</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var rule in panelRow.Rules)
+                            {
+                                <div class="rule-row d-flex align-center gap-2">
+                                    <span style="font-family:monospace">@rule.Name — @FormatRule(rule)</span>
+                                    <MudButton Class="delete-rule" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteRuleAsync(panelRow.TopicName, panelRow.SubscriptionName, rule.Name))">Delete</MudButton>
+                                </div>
+                            }
+                        }
+                        <MudButton Class="add-rule-action" Size="Size.Small" OnClick="@(() => OpenCreateRule(panelRow.TopicName, panelRow.SubscriptionName))">+ Add rule</MudButton>
+                    </div>
                 </MudTd>
             }
         </RowTemplate>
@@ -92,10 +130,14 @@ else
     private abstract record TopicsTableRow;
     private sealed record TopicRowEntry(TopicSummary Topic, long ActiveMessageCount, long DeadLetterMessageCount, bool IsExpanded) : TopicsTableRow;
     private sealed record SubscriptionRowEntry(string TopicName, SubscriptionSummary Subscription) : TopicsTableRow;
+    private sealed record SubscriptionRulesPanelRowEntry(string TopicName, string SubscriptionName, IReadOnlyList<RuleSummary> Rules) : TopicsTableRow;
 
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private IReadOnlyList<TopicRow> _topics = [];
     private readonly HashSet<string> _expandedTopics = [];
+    private readonly Dictionary<string, IReadOnlyList<RuleSummary>> _rulesByKey = new();
+    private readonly HashSet<string> _expandedSubscriptionRules = [];
+    private string? _loadingRulesForTopic;
     private Guid _selectedConnectionId;
     private bool _loading;
     private string? _deletingEntity;
@@ -114,11 +156,18 @@ else
     {
         var expanded = _expandedTopics.Contains(topic.Topic.Name);
         yield return new TopicRowEntry(topic.Topic, topic.ActiveMessageCount, topic.DeadLetterMessageCount, expanded);
-        if (expanded)
+        if (!expanded)
         {
-            foreach (var subscription in topic.Subscriptions)
+            yield break;
+        }
+
+        foreach (var subscription in topic.Subscriptions)
+        {
+            var rowKey = $"{topic.Topic.Name}/{subscription.Name}";
+            yield return new SubscriptionRowEntry(topic.Topic.Name, subscription);
+            if (_expandedSubscriptionRules.Contains(rowKey) && _rulesByKey.TryGetValue(rowKey, out var rules))
             {
-                yield return new SubscriptionRowEntry(topic.Topic.Name, subscription);
+                yield return new SubscriptionRulesPanelRowEntry(topic.Topic.Name, subscription.Name, rules);
             }
         }
     }
@@ -137,6 +186,8 @@ else
     {
         _selectedConnectionId = connectionId;
         _expandedTopics.Clear();
+        _rulesByKey.Clear();
+        _expandedSubscriptionRules.Clear();
         await LoadTopicsAsync();
     }
 
@@ -162,11 +213,94 @@ else
         }
     }
 
-    private void ToggleExpanded(string topicName)
+    private async Task ToggleTopicExpandedAsync(string topicName)
     {
-        if (!_expandedTopics.Remove(topicName))
+        if (_expandedTopics.Remove(topicName))
         {
-            _expandedTopics.Add(topicName);
+            return;
+        }
+
+        _expandedTopics.Add(topicName);
+        await EnsureRulesLoadedAsync(topicName);
+    }
+
+    private async Task EnsureRulesLoadedAsync(string topicName)
+    {
+        var topic = _topics.FirstOrDefault(t => t.Topic.Name == topicName);
+        if (topic is null)
+        {
+            return;
+        }
+
+        var toFetch = topic.Subscriptions.Where(s => !_rulesByKey.ContainsKey($"{topicName}/{s.Name}")).ToList();
+        if (toFetch.Count == 0)
+        {
+            return;
+        }
+
+        _loadingRulesForTopic = topicName;
+        try
+        {
+            var results = await Task.WhenAll(toFetch.Select(s => RulesHandler.HandleAsync(_selectedConnectionId, topicName, s.Name)));
+            for (var i = 0; i < toFetch.Count; i++)
+            {
+                var key = $"{topicName}/{toFetch[i].Name}";
+                if (results[i].IsSuccess)
+                {
+                    _rulesByKey[key] = results[i].Value!;
+                }
+                else
+                {
+                    Snackbar.Add(results[i].Error!, Severity.Error);
+                }
+            }
+        }
+        finally
+        {
+            _loadingRulesForTopic = null;
+        }
+    }
+
+    private void ToggleSubscriptionRulesExpanded(string rowKey)
+    {
+        if (!_expandedSubscriptionRules.Remove(rowKey))
+        {
+            _expandedSubscriptionRules.Add(rowKey);
+        }
+    }
+
+    private static string FormatRule(RuleSummary rule) => rule switch
+    {
+        SqlRuleSummary sql => sql.SqlExpression,
+        CorrelationRuleSummary correlation => FormatCorrelationRule(correlation),
+        OtherRuleSummary other => other.RawFilterText,
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "Unknown rule kind."),
+    };
+
+    private static string FormatCorrelationRule(CorrelationRuleSummary rule)
+    {
+        var parts = new List<string>();
+        AddIfSet(parts, "CorrelationId", rule.Match.CorrelationId);
+        AddIfSet(parts, "Label", rule.Match.Label);
+        AddIfSet(parts, "MessageId", rule.Match.MessageId);
+        AddIfSet(parts, "To", rule.Match.To);
+        AddIfSet(parts, "ReplyTo", rule.Match.ReplyTo);
+        AddIfSet(parts, "SessionId", rule.Match.SessionId);
+        AddIfSet(parts, "ReplyToSessionId", rule.Match.ReplyToSessionId);
+        AddIfSet(parts, "ContentType", rule.Match.ContentType);
+        foreach (var (key, value) in rule.Properties)
+        {
+            parts.Add($"{key}: {value}");
+        }
+
+        return parts.Count == 0 ? "(matches all messages)" : string.Join(" · ", parts);
+    }
+
+    private static void AddIfSet(List<string> parts, string label, string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            parts.Add($"{label}: {value}");
         }
     }
 
@@ -216,6 +350,25 @@ else
         {
             _expandedTopics.Add(topicName);
             await LoadTopicsAsync();
+            await EnsureRulesLoadedAsync(topicName);
+        }
+    }
+
+    private async Task OpenCreateRule(string topicName, string subscriptionName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateRuleDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicName, topicName },
+            { x => x.SubscriptionName, subscriptionName },
+        };
+        var dialog = await DialogService.ShowAsync<CreateRuleDialog>("Add rule", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await RefreshRulesAsync(topicName, subscriptionName);
         }
     }
 
@@ -286,5 +439,36 @@ else
         }
 
         await LoadTopicsAsync();
+    }
+
+    private async Task RefreshRulesAsync(string topicName, string subscriptionName)
+    {
+        var result = await RulesHandler.HandleAsync(_selectedConnectionId, topicName, subscriptionName);
+        if (result.IsSuccess)
+        {
+            _rulesByKey[$"{topicName}/{subscriptionName}"] = result.Value!;
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task DeleteRuleAsync(string topicName, string subscriptionName, string ruleName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", ruleName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var result = await DeleteRuleHandler.HandleAsync(new DeleteRuleCommand(connection.Id, connection.Name, connection.IsProd, topicName, subscriptionName, ruleName));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
+        await RefreshRulesAsync(topicName, subscriptionName);
     }
 }
