@@ -1,0 +1,149 @@
+@page "/p/kafka/consumer-groups/{GroupId}"
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.ConsumerGroups
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject GetConsumerGroupDetailQueryHandler DetailHandler
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Consumer Group — @GroupId</PageTitle>
+<h1>Consumer Group: @GroupId</h1>
+
+@if (_loading)
+{
+    <MudProgressCircular Class="detail-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_detail is null)
+{
+    <MudAlert Severity="Severity.Error">@_loadError</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center gap-2 my-4">
+        <MudChip T="string" Class="group-state" Color="@StateColor(_detail.State)" Size="Size.Small">@_detail.State</MudChip>
+        @if (!IsResettable)
+        {
+            <MudText Typo="Typo.caption" Class="reset-blocked-reason mud-text-secondary">Offsets can only be reset while the group is Empty.</MudText>
+        }
+    </div>
+
+    <MudText Typo="Typo.h6" Class="mt-4 mb-2">Members</MudText>
+    <MudTable Items="_detail.Members" Class="members-table">
+        <HeaderContent>
+            <MudTh>Client ID</MudTh>
+            <MudTh>Host</MudTh>
+            <MudTh>Assigned Partitions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace">@context.ClientId</MudTd>
+            <MudTd>@(context.Host ?? "—")</MudTd>
+            <MudTd>@string.Join(", ", context.AssignedPartitions.Select(p => $"{p.TopicName}-{p.Partition}"))</MudTd>
+        </RowTemplate>
+    </MudTable>
+
+    <MudText Typo="Typo.h6" Class="mt-6 mb-2">Partitions</MudText>
+    <MudTable Items="_detail.Partitions" Class="partitions-table">
+        <HeaderContent>
+            <MudTh>Topic</MudTh>
+            <MudTh>Partition</MudTh>
+            <MudTh>Committed Offset</MudTh>
+            <MudTh>High Watermark</MudTh>
+            <MudTh>Lag</MudTh>
+            <MudTh>Consumer</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace">@context.TopicName</MudTd>
+            <MudTd>@context.Partition</MudTd>
+            <MudTd>@context.CommittedOffset</MudTd>
+            <MudTd>@context.HighWatermark</MudTd>
+            <MudTd>@context.Lag</MudTd>
+            <MudTd>@(context.ConsumerClientId is { } clientId ? $"{clientId}@{context.ConsumerHost}" : "idle")</MudTd>
+            <MudTd>
+                <MudButton Class="reset-offset" Disabled="@(!IsResettable)" OnClick="@(() => OpenResetAsync(context.TopicName, context.Partition))">Reset</MudButton>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    [Parameter] public string GroupId { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+
+    // Fully qualified: this component's own class name (SbConsole.Plugins.Kafka.Pages.ConsumerGroupDetail)
+    // shadows the unqualified "ConsumerGroupDetail" identifier, even with the Client namespace @using'd
+    // above -- a bare `ConsumerGroupDetail?` here would bind to the self type instead of the model record.
+    private SbConsole.Plugins.Kafka.Client.ConsumerGroupDetail? _detail;
+    private ConnectionInfo? _connection;
+    private bool _loading;
+    private string _loadError = "";
+
+    // The client-side half of the "block Reset unless Empty" guard (design spec §5) -- the broker
+    // itself is the authoritative backstop: ResetConsumerGroupOffsetAsync surfaces a
+    // FriendlyKafkaError if the group's state changed between this page load and the click.
+    private bool IsResettable => _detail?.State == "Empty";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // IsProd (used to gate the Reset confirmation dialog) is always re-resolved here from
+            // IConnectionProvider, never trusted off the ConnectionId query parameter alone -- same
+            // "read the authoritative value fresh" rule every other destructive action follows
+            // (design spec §5; docs/design.md §6.1).
+            var connections = await Connections.ListAsync("kafka");
+            _connection = connections.SingleOrDefault(c => c.Id == ConnectionId);
+            if (_connection is null)
+            {
+                _detail = null;
+                _loadError = "Connection not found.";
+                return;
+            }
+
+            var result = await DetailHandler.HandleAsync(ConnectionId, GroupId);
+            if (result.IsSuccess)
+            {
+                _detail = result.Value;
+            }
+            else
+            {
+                _detail = null;
+                _loadError = result.Error!;
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static Color StateColor(string state) => state switch
+    {
+        "Dead" => Color.Error,
+        "PreparingRebalance" or "CompletingRebalance" => Color.Info,
+        _ => Color.Default,
+    };
+
+    private async Task OpenResetAsync(string topicName, int partition)
+    {
+        var parameters = new DialogParameters<ResetOffsetDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, _connection!.Name },
+            { x => x.IsProd, _connection!.IsProd },
+            { x => x.GroupId, GroupId },
+            { x => x.TopicName, topicName },
+            { x => x.Partition, partition },
+        };
+        var dialog = await DialogService.ShowAsync<ResetOffsetDialog>("Reset offset", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+}
