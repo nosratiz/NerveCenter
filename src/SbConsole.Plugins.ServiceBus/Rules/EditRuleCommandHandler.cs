@@ -12,7 +12,19 @@ public sealed class EditRuleCommandHandler(IServiceBusOperations operations, ICo
 {
     public async Task<PluginResult> HandleAsync(EditRuleCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        string? secret;
+        try
+        {
+            // Inside the try: Unprotect can throw on a wrong-key ciphertext (e.g. after an
+            // SBC_DATA_KEY rotation), and that must not escape this handler.
+            secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Resolving the connection secret for an edit of rule {OriginalName} failed.", cmd.OriginalName);
+            return PluginResult.Fail(ex);
+        }
+
         if (secret is null)
         {
             return PluginResult.Fail("Connection not found.");

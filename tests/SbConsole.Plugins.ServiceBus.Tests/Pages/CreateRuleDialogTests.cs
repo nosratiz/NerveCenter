@@ -321,6 +321,50 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Saving_an_edited_correlation_rule_round_trips_all_eight_match_fields_and_properties()
+    {
+        var existingMatch = new CorrelationMatch(
+            CorrelationId: "corr-1",
+            Label: "label-1",
+            MessageId: "msg-1",
+            To: "to-1",
+            ReplyTo: "reply-1",
+            SessionId: "session-1",
+            ReplyToSessionId: "replysession-1",
+            ContentType: "type-1");
+        var existingProperties = new Dictionary<string, string> { ["tier"] = "gold", ["region"] = "uk" };
+        _confirmation.ConfirmAsync("Edit", "VipCustomers", false, null, Arg.Any<CancellationToken>()).Returns(true);
+
+        var cut = RenderDialog(existingRule: new CorrelationRuleSummary("VipCustomers", existingMatch, existingProperties));
+
+        // Change exactly one field to prove this is an edit, not just a pass-through of the
+        // pre-filled values back to the handler.
+        cut.Find("input#rule-label").Input("label-2");
+
+        cut.Find("button.save-rule").Click();
+        await Task.Delay(30);
+
+        _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
+        await _operations.Received(1).CreateRuleAsync(
+            "Endpoint=sb://real", "orders", "uk-team",
+            Arg.Is<CreateRuleRequest>(r => r is CreateCorrelationRuleRequest
+                && ((CreateCorrelationRuleRequest)r).Name == "VipCustomers"
+                && ((CreateCorrelationRuleRequest)r).Match.CorrelationId == "corr-1"
+                && ((CreateCorrelationRuleRequest)r).Match.Label == "label-2"
+                && ((CreateCorrelationRuleRequest)r).Match.MessageId == "msg-1"
+                && ((CreateCorrelationRuleRequest)r).Match.To == "to-1"
+                && ((CreateCorrelationRuleRequest)r).Match.ReplyTo == "reply-1"
+                && ((CreateCorrelationRuleRequest)r).Match.SessionId == "session-1"
+                && ((CreateCorrelationRuleRequest)r).Match.ReplyToSessionId == "replysession-1"
+                && ((CreateCorrelationRuleRequest)r).Match.ContentType == "type-1"
+                && ((CreateCorrelationRuleRequest)r).Properties.Count == 2
+                && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "gold"
+                && ((CreateCorrelationRuleRequest)r).Properties["region"] == "uk"),
+            Arg.Any<CancellationToken>());
+        await _operations.Received(1).DeleteRuleAsync("Endpoint=sb://real", "orders", "uk-team", "VipCustomers", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Declining_the_confirmation_in_edit_mode_does_not_call_the_handler()
     {
         _confirmation.ConfirmAsync("Edit", "HighPriority", false, null, Arg.Any<CancellationToken>()).Returns(false);

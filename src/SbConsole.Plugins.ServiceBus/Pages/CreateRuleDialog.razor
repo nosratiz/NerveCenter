@@ -114,11 +114,11 @@
         else if (ExistingRule is not null)
         {
             // OtherRuleSummary (e.g. a TrueRuleFilter/FalseRuleFilter, or an unrecognized filter
-            // kind created outside this app) has no fields this dialog can pre-fill — it falls
-            // through to the same blank SQL-mode defaults as adding a brand-new rule. Name is
-            // deliberately NOT pre-filled from ExistingRule.Name here: Save() reads the original
-            // name from ExistingRule.Name directly, not from _name's initial value, so leaving
-            // _name blank simply means the user must type a name, same as any new rule.
+            // kind created outside this app) has no fields this dialog can pre-fill beyond the
+            // name — pre-filling the name at least shows the user what they're editing, rather
+            // than presenting a blank form indistinguishable from Add (which silently deletes
+            // the original on save once a different name is typed).
+            _name = ExistingRule.Name;
         }
     }
 
