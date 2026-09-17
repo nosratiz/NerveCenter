@@ -87,6 +87,7 @@ else
                 else
                 {
                     <MudButton Href="@PeekUrl(context.Name, context.PartitionCount)">Peek</MudButton>
+                    <MudButton Class="produce-action" OnClick="@(() => OpenProduce(context.Name))">Produce</MudButton>
                     <MudButton Class="delete-topic" Color="Color.Error" Disabled="@(_deletingTopic == context.Name)" OnClick="@(() => DeleteAsync(context.Name))">Delete</MudButton>
                     @if (_deletingTopic == context.Name)
                     {
@@ -185,6 +186,18 @@ else
         {
             await LoadTopicsAsync();
         }
+    }
+
+    private async Task OpenProduce(string topicName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<ProduceMessageDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicName, topicName },
+        };
+        await DialogService.ShowAsync<ProduceMessageDialog>("Produce message", parameters);
     }
 
     private async Task DeleteAsync(string topicName)

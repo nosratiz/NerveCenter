@@ -1,0 +1,55 @@
+@using SbConsole.Plugins.Kafka.Messages
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @TopicName</MudText>
+        <MudTextField id="message-key" @bind-Value="_key" Label="Key (optional)" Immediate="true" />
+        <MudTextField id="message-value" @bind-Value="_value" Label="Value" Lines="8" Immediate="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="produce-message-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="produce-message" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_value) || _busy)" OnClick="Produce">Produce</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+
+    [Inject] private ProduceMessageCommandHandler ProduceHandler { get; set; } = default!;
+
+    private string _key = "";
+    private string _value = "";
+    private bool _busy;
+
+    private async Task Produce()
+    {
+        _busy = true;
+        try
+        {
+            var key = string.IsNullOrWhiteSpace(_key) ? null : _key;
+            var result = await ProduceHandler.HandleAsync(new ProduceMessageCommand(ConnectionId, ConnectionName, TopicName, key, _value, null));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

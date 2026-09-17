@@ -16,7 +16,7 @@ public sealed class KafkaPlugin : IPlugin
     public string ConnectionKind => "kafka";
     public string ConnectionKindDisplayName => "Apache Kafka";
 
-    // Topics: Create/Delete topic, Peek, Send (4 -- Peek/Send land in Task 7). Pages: Topics, Peek.
+    // Topics: Create/Delete topic, Peek, Produce (4). Pages: Topics, Peek.
     public PluginContribution Contribution => new(PageCount: 2, ActionCount: 4);
 
     public void ConfigureServices(IServiceCollection services)
@@ -26,6 +26,8 @@ public sealed class KafkaPlugin : IPlugin
         services.AddScoped<Topics.CreateTopicCommandHandler>();
         services.AddScoped<Topics.DeleteTopicCommandHandler>();
         services.AddScoped<Topics.GetConnectionEchoQueryHandler>();
+        services.AddScoped<Messages.PeekMessagesQueryHandler>();
+        services.AddScoped<Messages.ProduceMessageCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

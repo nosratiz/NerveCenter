@@ -1,9 +1,11 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Kafka.Client;
+using SbConsole.Plugins.Kafka.Pages;
 using SbConsole.Plugins.Kafka.Topics;
 using SbConsole.Sdk;
 
@@ -18,6 +20,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     private readonly IKafkaOperations _operations = Substitute.For<IKafkaOperations>();
     private readonly Guid _connectionId = Guid.NewGuid();
     private readonly ConnectionInfo _connectionInfo;
+    private readonly IDialogService _dialogService = Substitute.For<IDialogService>();
 
     public TopicsPageTests()
     {
@@ -30,6 +33,10 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_operations);
         Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddSingleton(Substitute.For<IConfirmationService>());
+        // Overrides MudServices' real IDialogService so the "Produce" button test can verify the
+        // dialog is requested without rendering a MudDialogProvider -- same pattern
+        // SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs uses.
+        Services.AddSingleton(_dialogService);
         Services.AddLogging();
         Services.AddSingleton<ListTopicsQueryHandler>();
         Services.AddSingleton<CreateTopicCommandHandler>();
@@ -173,5 +180,24 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
 
         cut.FindAll(".low-replication-badge").Should().ContainSingle();
         cut.Markup.Should().Contain("RF 1");
+    }
+
+    [Fact]
+    public async Task Produce_button_opens_the_produce_dialog_for_the_rows_topic()
+    {
+        _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 3, 1, 42) });
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(true)));
+        _dialogService.ShowAsync<ProduceMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.Kafka.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.produce-action").Click();
+        await Task.Delay(30);
+
+        await _dialogService.Received(1).ShowAsync<ProduceMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>());
     }
 }

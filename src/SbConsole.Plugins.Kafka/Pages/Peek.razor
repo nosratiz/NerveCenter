@@ -1,0 +1,103 @@
+@page "/p/kafka/topics/{TopicName}/peek"
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.Messages
+@using SbConsole.Sdk
+@inject PeekMessagesQueryHandler PeekHandler
+@inject ISnackbar Snackbar
+
+<PageTitle>Peek — @TopicName</PageTitle>
+<h1>Peek: @TopicName</h1>
+
+<div class="d-flex flex-wrap gap-4 align-center my-4">
+    <MudSelect T="int" Label="Partition" @bind-Value="_partition" Style="min-width:120px">
+        @for (var i = 0; i < PartitionCount; i++)
+        {
+            <MudSelectItem Value="@i">@i</MudSelectItem>
+        }
+    </MudSelect>
+    <MudSelect T="PeekStart" Label="Start from" @bind-Value="_start" Style="min-width:160px">
+        <MudSelectItem Value="PeekStart.Earliest">Earliest</MudSelectItem>
+        <MudSelectItem Value="PeekStart.Latest">Latest</MudSelectItem>
+        <MudSelectItem Value="PeekStart.Offset">Offset</MudSelectItem>
+    </MudSelect>
+    @if (_start == PeekStart.Offset)
+    {
+        <MudNumericField T="long" Label="Offset" @bind-Value="_offset" />
+    }
+    <MudNumericField T="int" Label="Max messages" @bind-Value="_maxMessages" Min="1" Max="500" />
+    <MudButton Class="fetch-messages" Color="Color.Primary" Variant="Variant.Filled" Disabled="_busy" OnClick="LoadAsync">Fetch</MudButton>
+    @if (_busy)
+    {
+        <MudProgressCircular Class="peek-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+    @if (_hasFetched)
+    {
+        <MudText Typo="Typo.caption" Class="partition-watermarks mud-text-secondary">Partition @_partition watermarks: low @_lowWatermark &middot; high @_highWatermark</MudText>
+    }
+</div>
+
+<MudTable Items="_messages">
+    <HeaderContent>
+        <MudTh>Partition</MudTh>
+        <MudTh>Offset</MudTh>
+        <MudTh>Timestamp</MudTh>
+        <MudTh>Key</MudTh>
+        <MudTh>Value</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Partition</MudTd>
+        <MudTd>@context.Offset</MudTd>
+        <MudTd>@context.Timestamp</MudTd>
+        <MudTd Style="font-family:monospace">@(context.Key ?? "—")</MudTd>
+        <MudTd Style="font-family:monospace">
+            @context.Value
+            @if (context.ValueIsBase64)
+            {
+                <MudChip T="string" Size="Size.Small" Class="ms-2">binary (base64)</MudChip>
+            }
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    [Parameter] public string TopicName { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+    // Carried from Topics.razor's own already-fetched TopicSummary.PartitionCount (via PeekUrl) so
+    // the partition selector doesn't need a second round trip just to populate itself.
+    [SupplyParameterFromQuery] public int PartitionCount { get; set; } = 1;
+
+    private IReadOnlyList<KafkaMessageSummary> _messages = [];
+    private int _partition;
+    private PeekStart _start = PeekStart.Latest;
+    private long _offset;
+    private int _maxMessages = 32;
+    private bool _busy;
+    private long _lowWatermark;
+    private long _highWatermark;
+    private bool _hasFetched;
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        try
+        {
+            var result = await PeekHandler.HandleAsync(ConnectionId, TopicName, _partition, _start, _start == PeekStart.Offset ? _offset : null, _maxMessages);
+            if (result.IsSuccess)
+            {
+                _messages = result.Value!.Messages;
+                _lowWatermark = result.Value!.LowWatermark;
+                _highWatermark = result.Value!.HighWatermark;
+                _hasFetched = true;
+            }
+            else
+            {
+                _messages = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
