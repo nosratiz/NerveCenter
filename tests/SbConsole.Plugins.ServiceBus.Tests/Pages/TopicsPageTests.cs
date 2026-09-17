@@ -329,6 +329,66 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Edit_rule_opens_the_dialog_pre_filled_with_the_rules_current_values()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Cancel()));
+        _dialogService.ShowAsync<CreateRuleDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+        cut.Find("button.edit-rule").Click();
+        await Task.Delay(30);
+
+        await _dialogService.Received(1).ShowAsync<CreateRuleDialog>("Edit rule", Arg.Is<DialogParameters>(p =>
+            p.Get<RuleSummary>(nameof(CreateRuleDialog.ExistingRule)) is SqlRuleSummary
+            && ((SqlRuleSummary)p.Get<RuleSummary>(nameof(CreateRuleDialog.ExistingRule))!).Name == "HighPriority"
+            && ((SqlRuleSummary)p.Get<RuleSummary>(nameof(CreateRuleDialog.ExistingRule))!).SqlExpression == "Priority = 'High'"
+            && p.Get<bool>(nameof(CreateRuleDialog.IsProd)) == _connectionInfo.IsProd));
+    }
+
+    [Fact]
+    public async Task A_non_canceled_edit_refreshes_the_rules_panel()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(true)));
+        _dialogService.ShowAsync<CreateRuleDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+        cut.Find("button.edit-rule").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(2).ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Creating_a_subscription_fetches_its_rules_even_when_the_topic_starts_collapsed()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())

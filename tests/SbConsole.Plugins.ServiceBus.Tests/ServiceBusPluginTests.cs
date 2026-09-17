@@ -17,7 +17,7 @@ public class ServiceBusPluginTests
         plugin.ConnectionKindDisplayName.Should().Be("Azure Service Bus");
         plugin.NavItems.Should().ContainSingle(n => n.Title == "Queues" && n.Href == "/p/azure-servicebus/queues");
         plugin.NavItems.Should().ContainSingle(n => n.Title == "Dead-letter" && n.Href == "/p/azure-servicebus/dead-letter");
-        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 15));
+        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 16));
     }
 
     [Fact]
