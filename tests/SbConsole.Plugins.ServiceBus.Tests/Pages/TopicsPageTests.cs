@@ -417,6 +417,134 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_subscriptions_status_is_shown_as_a_chip_so_a_receive_disabled_subscription_is_visible()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 92, 0, 92, "ReceiveDisabled") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        cut.Render();
+
+        cut.Find(".subscription-status-chip").TextContent.Should().Contain("ReceiveDisabled");
+    }
+
+    [Fact]
+    public async Task The_has_dead_letter_toggle_hides_topics_with_no_dead_lettered_messages()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("clean-topic", 1, 0, 0), new("dirty-topic", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "clean-topic", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("sub", 1, 0, 1, "Active") });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "dirty-topic", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("sub", 1, 3, 4, "Active") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("clean-topic");
+        cut.Markup.Should().Contain("dirty-topic");
+
+        cut.Find(".dead-letter-filter-toggle").Click();
+        cut.Render();
+
+        cut.Markup.Should().NotContain("clean-topic");
+        cut.Markup.Should().Contain("dirty-topic");
+    }
+
+    [Fact]
+    public async Task The_disabled_toggle_hides_topics_whose_subscriptions_are_all_active()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("healthy-topic", 1, 0, 0), new("stuck-topic", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "healthy-topic", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("sub", 1, 0, 1, "Active") });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "stuck-topic", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("sub", 92, 0, 92, "ReceiveDisabled") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find(".disabled-filter-toggle").Click();
+        cut.Render();
+
+        cut.Markup.Should().NotContain("healthy-topic");
+        cut.Markup.Should().Contain("stuck-topic");
+    }
+
+    [Fact]
+    public async Task A_subscription_with_only_the_default_rule_is_labelled_default_not_one_rule()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new OtherRuleSummary("$Default", "TrueFilter") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find(".rule-count-chip").TextContent.Trim().Should().Be("default");
+    }
+
+    [Fact]
+    public async Task Topic_size_and_counts_use_invariant_formatting_on_a_comma_decimal_locale()
+    {
+        var originalCulture = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+                .Returns(new List<TopicSummary> { new("payments-settled", 1, (long)(1.2 * 1024 * 1024), 0) });
+            _operations.ListSubscriptionsAsync("Endpoint=sb://real", "payments-settled", Arg.Any<CancellationToken>())
+                .Returns(new List<SubscriptionSummary> { new("sub", 1880, 0, 1880, "Active") });
+
+            var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+            await Task.Delay(30);
+            cut.Render();
+
+            cut.Markup.Should().Contain("1.2 MB");
+            cut.Markup.Should().Contain("1,880");
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public async Task A_rules_panel_row_labels_each_rule_with_its_kind()
+    {
+        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListRulesAsync("Endpoint=sb://real", "orders", "uk-team", Arg.Any<CancellationToken>())
+            .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
+
+        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-topic").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.expand-subscription-rules").Click();
+        cut.Render();
+
+        cut.Find(".rule-kind-chip").TextContent.Should().Contain("SQL");
+    }
+
+    [Fact]
     public async Task A_failed_rules_fetch_shows_the_error_instead_of_caching_it_as_empty()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
