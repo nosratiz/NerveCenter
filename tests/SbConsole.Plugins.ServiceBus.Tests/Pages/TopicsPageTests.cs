@@ -54,7 +54,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public async Task Collapsed_topic_row_shows_aggregated_counts_without_expanding()
+    public async Task Topic_list_shows_aggregated_counts_and_the_first_topic_is_selected()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 2, 4096, 3) });
@@ -65,28 +65,35 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
         cut.Render();
 
-        cut.Markup.Should().Contain("orders");
-        cut.Markup.Should().Contain("7"); // aggregated Active (5 + 2)
-        cut.Markup.Should().Contain("1"); // aggregated Dead-letter (1 + 0)
-        cut.FindAll(".subscription-row").Should().BeEmpty("collapsed by default");
+        cut.Find(".topic-item").TextContent.Should().Contain("7 active"); // aggregated Active (5 + 2)
+        cut.Find(".dlq-badge").TextContent.Should().Be("1"); // aggregated Dead-letter (1 + 0)
+        cut.Find(".topic-item").ClassList.Should().Contain("selected");
+        cut.FindAll(".subscription-row").Should().HaveCount(2, "the selected topic's subscriptions fill the detail pane");
     }
 
     [Fact]
-    public async Task Expanding_a_topic_reveals_its_subscription_rows()
+    public async Task Selecting_another_topic_swaps_the_detail_pane()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
-            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0), new("invoices", 1, 0, 0) });
         _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 1, 6, "Active") });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "invoices", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("finance", 2, 0, 2, "Active") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
+
+        cut.FindAll(".subscription-row").Single().TextContent.Should().Contain("uk-team");
+
+        cut.FindAll("button.select-topic").Single(b => b.TextContent.Contains("invoices")).Click();
+        await Task.Delay(30);
         cut.Render();
 
-        cut.FindAll(".subscription-row").Should().HaveCount(1);
-        cut.Markup.Should().Contain("uk-team");
+        cut.FindAll(".subscription-row").Single().TextContent.Should().Contain("finance");
+        cut.Markup.Should().NotContain("uk-team");
+        cut.Find(".detail-stat-active").TextContent.Should().Be("2");
     }
 
     [Fact]
@@ -111,8 +118,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         cut.Render();
 
         var link = cut.Find("a.dead-letter-action");
@@ -151,8 +156,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        cut.Render();
         cut.Find("button.delete-subscription").Click();
         await Task.Delay(30);
 
@@ -160,7 +163,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public async Task Rules_chip_shows_the_live_count_after_the_topic_expands()
+    public async Task Rules_chip_shows_the_live_count_for_the_selected_topic()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
@@ -170,9 +173,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
             .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'"), new SqlRuleSummary("LowPriority", "Priority = 'Low'") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
 
@@ -190,9 +190,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
             .Returns(new List<RuleSummary> { new SqlRuleSummary("HighPriority", "Priority = 'High'") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
@@ -214,9 +211,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
             .Returns(new List<RuleSummary> { new CorrelationRuleSummary("VipCustomers", new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders"), new Dictionary<string, string> { ["tier"] = "gold" }) });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
@@ -244,9 +238,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        await Task.Delay(30);
-        cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
         cut.Render();
 
@@ -271,9 +262,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        await Task.Delay(30);
-        cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
         cut.Render();
 
@@ -294,9 +282,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        await Task.Delay(30);
-        cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
         cut.Render();
 
@@ -315,9 +300,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         _confirmation.ConfirmAsync("Delete", "HighPriority", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
@@ -343,9 +325,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
             .Returns(Task.FromResult(dialogReference));
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
@@ -377,9 +356,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        await Task.Delay(30);
-        cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
         cut.Render();
         cut.Find("button.edit-rule").Click();
@@ -389,7 +365,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public async Task Creating_a_subscription_fetches_its_rules_even_when_the_topic_starts_collapsed()
+    public async Task Creating_a_subscription_reloads_the_selected_topic_and_its_rules()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
             .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
@@ -407,8 +383,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
         cut.Render();
 
-        // Topic is still collapsed here - the row and its "+ Subscription" action are always visible.
-        cut.FindAll(".subscription-row").Should().BeEmpty("collapsed by default");
         cut.Find("button.add-subscription-action").Click();
         await Task.Delay(30);
         cut.Render();
@@ -427,54 +401,23 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        cut.Render();
 
         cut.Find(".subscription-status-chip").TextContent.Should().Contain("ReceiveDisabled");
     }
 
     [Fact]
-    public async Task The_has_dead_letter_toggle_hides_topics_with_no_dead_lettered_messages()
+    public async Task A_topic_with_no_dead_letters_shows_no_badge_in_the_list()
     {
         _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
-            .Returns(new List<TopicSummary> { new("clean-topic", 1, 0, 0), new("dirty-topic", 1, 0, 0) });
-        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "clean-topic", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("sub", 1, 0, 1, "Active") });
-        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "dirty-topic", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("sub", 1, 3, 4, "Active") });
+            .Returns(new List<TopicSummary> { new("orders", 1, 0, 0) });
+        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionSummary> { new("uk-team", 5, 0, 5, "Active") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
 
-        cut.Markup.Should().Contain("clean-topic");
-        cut.Markup.Should().Contain("dirty-topic");
-
-        cut.Find(".dead-letter-filter-toggle").Click();
-        cut.Render();
-
-        cut.Markup.Should().NotContain("clean-topic");
-        cut.Markup.Should().Contain("dirty-topic");
-    }
-
-    [Fact]
-    public async Task The_disabled_toggle_hides_topics_whose_subscriptions_are_all_active()
-    {
-        _operations.ListTopicsAsync("Endpoint=sb://real", Arg.Any<CancellationToken>())
-            .Returns(new List<TopicSummary> { new("healthy-topic", 1, 0, 0), new("stuck-topic", 1, 0, 0) });
-        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "healthy-topic", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("sub", 1, 0, 1, "Active") });
-        _operations.ListSubscriptionsAsync("Endpoint=sb://real", "stuck-topic", Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary> { new("sub", 92, 0, 92, "ReceiveDisabled") });
-
-        var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find(".disabled-filter-toggle").Click();
-        cut.Render();
-
-        cut.Markup.Should().NotContain("healthy-topic");
-        cut.Markup.Should().Contain("stuck-topic");
+        cut.FindAll(".dlq-badge").Should().BeEmpty();
     }
 
     [Fact]
@@ -488,9 +431,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
             .Returns(new List<RuleSummary> { new OtherRuleSummary("$Default", "TrueFilter") });
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
 
@@ -535,9 +475,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.expand-topic").Click();
-        await Task.Delay(30);
-        cut.Render();
         cut.Find("button.expand-subscription-rules").Click();
         cut.Render();
 
@@ -556,9 +493,6 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var snackbar = Services.GetRequiredService<ISnackbar>();
 
         var cut = Render<SbConsole.Plugins.ServiceBus.Pages.Topics>();
-        await Task.Delay(30);
-        cut.Render();
-        cut.Find("button.expand-topic").Click();
         await Task.Delay(30);
         cut.Render();
 

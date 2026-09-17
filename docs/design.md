@@ -29,6 +29,12 @@ Deployment model: one shared instance per team (Docker/VM), single shared
 admin login, API key for automation. Per-user accounts are a later concern;
 the audit schema keeps an `Actor` column from day one.
 
+Local development: `docker-compose.yml` at the repo root runs the brokers the
+plugins talk to — a single-node KRaft Kafka with seeded topics and a Kafka UI
+by default, the Azure Service Bus emulator under `--profile servicebus`, and
+the app itself (built from `Dockerfile`) under `--profile app`. See
+`docker/README.md` for the connection secrets to paste into the app.
+
 ## 2. Solution layout
 
 ```
@@ -331,14 +337,15 @@ actions. Correlation filters and rule editing remain out of scope (see
 that plan's design doc, §7).
 
 - **One combined page, not a drill-down**: a single "Topics & Subscriptions"
-  nav item → `Topics.razor` — one `MudTable` whose rows are either a topic
-  or (only when that topic is expanded) one of its subscriptions,
-  distinguished by a small discriminated view-model
-  (`TopicRowVm`/`SubscriptionRowVm`) and `MudTable`'s `RowClassFunc` for
-  styling/test hooks. Columns: `Name | Active | Dead-letter | Scheduled |
-  Actions`. A topic row shows its subscription count, an expand/collapse
-  toggle, and **aggregated** Active/Dead-letter counts summed from its own
-  subscriptions — visible even collapsed, matching the mockup's "a
+  nav item → `Topics.razor`. **Superseded 2026-09-17 — see §6.2.1**: this
+  was one `MudTable` whose rows were either a topic or (only when that topic
+  was expanded) one of its subscriptions, distinguished by a discriminated
+  view-model and `MudTable`'s `RowClassFunc`, with columns `Name | Active |
+  Dead-letter | Scheduled | Actions`. The page is now a master/detail split;
+  what follows in this bullet still describes the data each level shows, and
+  the rest of §6.2 is unchanged. A topic shows its subscription count and
+  **aggregated** Active/Dead-letter counts summed from its own
+  subscriptions — visible without opening it, matching the mockup's "a
   collapsed list still shows where the backlog is." Its own Scheduled count
   is real (`TopicRuntimeProperties.ScheduledMessageCount`); a subscription
   row's Scheduled cell is `—`, because `SubscriptionRuntimeProperties` (the
@@ -397,6 +404,41 @@ Out of this plan: filter rules (view/add/delete); deferred-message tooling,
 sessions tooling beyond basic display, metrics dashboards/history, ARM/
 namespace creation, Entra ID auth (all still out of v1 generally, per the
 original scope).
+
+#### 6.2.1 Master/detail layout (2026-09-17)
+
+The three-tier flat table above (topic row → subscription row → rules panel
+row) was re-drawn against a later mockup revision — "4a Master / detail" in
+`SbConsole Wireframes.dc.html`, chosen over that revision's "4b", which kept
+the table. The page is now a 286px master list of topics beside a detail
+pane for the selected one:
+
+- **The topology is navigation, not nesting.** Selecting a topic in the left
+  list replaces the detail pane; nothing expands in place. The first topic
+  is selected on load, and a selection that survives a reload is kept. This
+  is why the rules tier is worth drawing at all: one topic at a time means a
+  rule gets a full-width line, so a SQL expression or a correlation match is
+  readable instead of truncated into a chip — the thing the flat table could
+  not do at any column width.
+- **The left list keeps the aggregate roll-up**, so "where is the backlog" is
+  still answerable without clicking: name, subscription count, active count,
+  size, and a dead-letter badge **only when non-zero** (amber, or red past
+  `DeadLetterBadThreshold`) so the eye lands on the topics that have one.
+- **Status is a first-class chip** on each subscription card. The data was
+  always there (`SubscriptionSummary.Status`) and was never rendered: a
+  `ReceiveDisabled` subscription sitting on 92 active messages is the bug
+  this screen exists to catch, and it was invisible before. Such a
+  subscription also carries a "not draining" note.
+- **Presentation is a scoped stylesheet**, `Topics.razor.css`, not MudBlazor
+  table chrome — the mockup's own measurements, with every colour derived
+  from the `--mud-palette-*` tokens `NocturneTheme.cs` defines (the same hex
+  values the mockup's Nocturne stylesheet uses), so light/dark still follows
+  the theme and no brand colour is hard-coded. Counts and sizes format
+  through `CultureInfo.InvariantCulture`; a comma-decimal server locale
+  otherwise rendered "1,2 MB".
+- **Unchanged**: eager aggregation, the handler/audit/safety shape, the
+  dialogs, the peek routes, and `IServiceBusOperations`. This pass moved
+  markup, not behaviour.
 
 ### 6.3 Dead-letter overview (2026-09-13)
 

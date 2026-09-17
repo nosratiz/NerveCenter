@@ -25,7 +25,7 @@
 else
 {
     <div class="topics-page">
-        <div class="toolbar">
+        <div class="topbar">
             <MudMenu Class="namespace-menu">
                 <ActivatorContent>
                     <div class="namespace-pill">
@@ -45,125 +45,153 @@ else
                     }
                 </ChildContent>
             </MudMenu>
-            <input class="input topic-filter" placeholder="Filter topics…" @bind="_filterText" @bind:event="oninput" />
-            <span class="@ToggleClass("dead-letter-filter-toggle", _onlyWithDeadLetter)" @onclick="@(() => _onlyWithDeadLetter = !_onlyWithDeadLetter)">Has dead-letter</span>
-            <span class="@ToggleClass("disabled-filter-toggle", _onlyWithDisabled)" @onclick="@(() => _onlyWithDisabled = !_onlyWithDisabled)">Disabled</span>
-            <span class="summary topics-summary">@TopicCount @(TopicCount == 1 ? "topic" : "topics") &middot; @SubscriptionCount @(SubscriptionCount == 1 ? "sub" : "subs")</span>
             @if (_loading)
             {
                 <MudProgressCircular Class="topics-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
             }
-            <button type="button" class="btn btn-primary create-topic-action" @onclick="OpenCreateTopic">+ Create topic</button>
         </div>
 
-        <div class="list">
-            <div class="grid-row grid-head">
-                <span>Name</span><span>Status</span><span class="num">Active</span><span class="num">DLQ</span><span class="num">Sched</span><span class="num">Actions</span>
-            </div>
+        <div class="split">
+            <aside class="master">
+                <div class="master-head">
+                    <input class="input topic-filter" placeholder="Filter topics…" @bind="_filterText" @bind:event="oninput" />
+                    <div class="row">
+                        <span class="summary topics-summary">@TopicCount @(TopicCount == 1 ? "topic" : "topics") &middot; @SubscriptionCount @(SubscriptionCount == 1 ? "subscription" : "subscriptions")</span>
+                        <button type="button" class="btn btn-primary sm create-topic-action" @onclick="OpenCreateTopic">+ Topic</button>
+                    </div>
+                </div>
+                <div class="topic-list">
+                    @foreach (var topic in FilteredTopics)
+                    {
+                        var isSelected = topic.Topic.Name == _selectedTopic;
+                        <button type="button" class="@($"topic-item select-topic{(isSelected ? " selected" : "")}{(topic.ActiveMessageCount == 0 ? " quiet" : "")}")" @onclick="@(() => SelectTopicAsync(topic.Topic.Name))">
+                            <span class="line">
+                                <span class="name">@topic.Topic.Name</span>
+                                @if (topic.DeadLetterMessageCount > 0)
+                                {
+                                    <span class="@($"dlq-badge{(topic.DeadLetterMessageCount >= DeadLetterBadThreshold ? " bad" : "")}")">@FormatCount(topic.DeadLetterMessageCount)</span>
+                                }
+                            </span>
+                            <span class="meta">@topic.Topic.SubscriptionCount @(topic.Topic.SubscriptionCount == 1 ? "sub" : "subs") &middot; @FormatCount(topic.ActiveMessageCount) active &middot; @FormatSize(topic.Topic.SizeInBytes)</span>
+                        </button>
+                    }
+                </div>
+            </aside>
 
-            @{ TopicsTableRow? previous = null; }
-            @foreach (var row in _rows)
-            {
-                if (row is TopicRowEntry topicRow)
+            <section class="detail">
+                @if (SelectedTopic is { } selected)
                 {
-                    <div class="@($"grid-row topic-row{(topicRow.IsExpanded ? " expanded" : "")}{(previous is not null && !topicRow.IsExpanded ? " divided" : "")}")">
-                        <span class="name-cell">
-                            <button type="button" class="@($"chevron expand-topic{(topicRow.IsExpanded ? " open" : "")}")" @onclick="@(() => ToggleTopicExpandedAsync(topicRow.Topic.Name))">@(topicRow.IsExpanded ? "▾" : "▸")</button>
-                            <span class="mono">@topicRow.Topic.Name</span>
-                            <span class="meta">@topicRow.Topic.SubscriptionCount subs &middot; @FormatSize(topicRow.Topic.SizeInBytes)</span>
-                        </span>
-                        <span class="status-cell"></span>
-                        <span class="num">@FormatCount(topicRow.ActiveMessageCount)</span>
-                        <span class="@($"num{(topicRow.DeadLetterMessageCount > 0 ? " warn" : "")}")">@FormatCount(topicRow.DeadLetterMessageCount)</span>
-                        <span class="num">@FormatCount(topicRow.Topic.ScheduledMessageCount)</span>
-                        <span class="actions">
-                            <button type="button" class="btn btn-ghost plain send-message-action" @onclick="@(() => OpenSend(topicRow.Topic.Name))">Send</button>
-                            <button type="button" class="btn btn-ghost accent add-subscription-action" @onclick="@(() => OpenCreateSubscription(topicRow.Topic.Name))">+ Subscription</button>
-                            <button type="button" class="btn btn-ghost bad delete-topic" disabled="@(_deletingEntity == topicRow.Topic.Name)" @onclick="@(() => DeleteTopicAsync(topicRow.Topic.Name, topicRow.Topic.SubscriptionCount))">Delete</button>
-                            @if (_deletingEntity == topicRow.Topic.Name)
-                            {
-                                <MudProgressCircular Class="delete-topic-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
-                            }
-                        </span>
+                    <div class="detail-head">
+                        <div class="title-row">
+                            <span class="title">@selected.Topic.Name</span>
+                            <div class="actions">
+                                <button type="button" class="btn btn-secondary send-message-action" @onclick="@(() => OpenSend(selected.Topic.Name))">Send</button>
+                                <button type="button" class="btn btn-primary add-subscription-action" @onclick="@(() => OpenCreateSubscription(selected.Topic.Name))">+ Subscription</button>
+                                <button type="button" class="btn btn-ghost bad delete-topic" disabled="@(_deletingEntity == selected.Topic.Name)" @onclick="@(() => DeleteTopicAsync(selected.Topic.Name, selected.Topic.SubscriptionCount))">Delete</button>
+                                @if (_deletingEntity == selected.Topic.Name)
+                                {
+                                    <MudProgressCircular Class="delete-topic-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                                }
+                            </div>
+                        </div>
+                        <div class="stats">
+                            <div class="stat"><span class="label">Active</span><span class="value detail-stat-active">@FormatCount(selected.ActiveMessageCount)</span></div>
+                            <div class="stat"><span class="label">Dead-letter</span><span class="@($"value detail-stat-dead-letter{(selected.DeadLetterMessageCount > 0 ? " warn" : "")}")">@FormatCount(selected.DeadLetterMessageCount)</span></div>
+                            <div class="stat"><span class="label">Scheduled</span><span class="value">@FormatCount(selected.Topic.ScheduledMessageCount)</span></div>
+                            <div class="stat"><span class="label">Size</span><span class="value">@FormatSize(selected.Topic.SizeInBytes)</span></div>
+                            <div class="stat"><span class="label">Subscriptions</span><span class="value">@selected.Topic.SubscriptionCount</span></div>
+                        </div>
                     </div>
-                }
-                else if (row is SubscriptionRowEntry subRow)
-                {
-                    var rowKey = $"{subRow.TopicName}/{subRow.Subscription.Name}";
-                    var hasRules = _rulesByKey.TryGetValue(rowKey, out var subRules);
-                    var rulesOpen = _expandedSubscriptionRules.Contains(rowKey);
-                    var isDisabled = subRow.Subscription.Status == "Disabled";
-                    var dlq = subRow.Subscription.DeadLetterMessageCount;
-                    <div class="@($"grid-row subscription-row{(previous is TopicRowEntry ? "" : " divided")}{(isDisabled ? " disabled" : "")}")">
-                        <span class="name-cell">
-                            @if (hasRules)
-                            {
-                                <button type="button" class="@($"chevron expand-subscription-rules{(rulesOpen ? " open" : "")}")" @onclick="@(() => ToggleSubscriptionRulesExpanded(rowKey))">@(rulesOpen ? "▾" : "▸")</button>
-                            }
-                            else if (_loadingRulesForTopic == subRow.TopicName)
-                            {
-                                <MudProgressCircular Class="rules-loading" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
-                            }
-                            <span class="mono">@subRow.Subscription.Name</span>
-                            @if (hasRules)
-                            {
-                                <span class="tag tag-neutral rule-count-chip" style="font-size:10px">@RuleCountLabel(subRules!)</span>
-                            }
-                        </span>
-                        <span class="status-cell"><span class="@($"tag subscription-status-chip {StatusTagClass(subRow.Subscription.Status)}")" style="font-size:10px">@subRow.Subscription.Status</span></span>
-                        <span class="@($"num{(subRow.Subscription.Status == "ReceiveDisabled" && subRow.Subscription.ActiveMessageCount > 0 ? " warn" : "")}")">@FormatCount(subRow.Subscription.ActiveMessageCount)</span>
-                        <span class="@($"num{(dlq > 0 ? " warn" : "")}")">@FormatCount(dlq)</span>
-                        <span class="dash">&mdash;</span>
-                        <span class="actions">
-                            <a class="btn btn-ghost plain peek-action" href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name)">Peek</a>
-                            <a class="@($"btn btn-ghost dead-letter-action {(dlq > 0 ? "warn" : "muted")}")" href="@PeekUrl(subRow.TopicName, subRow.Subscription.Name, deadLetter: true, deadLetterCount: dlq)">Dead-letter&nbsp;@dlq</a>
-                            <button type="button" class="btn btn-ghost bad delete-subscription" disabled="@(_deletingEntity == rowKey)" @onclick="@(() => DeleteSubscriptionAsync(subRow.TopicName, subRow.Subscription.Name))">Delete</button>
-                            @if (_deletingEntity == rowKey)
-                            {
-                                <MudProgressCircular Class="delete-subscription-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
-                            }
-                        </span>
-                    </div>
-                }
-                else if (row is SubscriptionRulesPanelRowEntry panelRow)
-                {
-                    <div class="rules-panel-row rules-panel">
-                        @if (panelRow.Rules.Count == 0)
+
+                    <div class="subs">
+                        <div class="section-label"><span class="head">Subscriptions</span><span class="hint">rules load on expand</span></div>
+                        @foreach (var subscription in selected.Subscriptions)
                         {
-                            <span class="no-rules">No rules.</span>
-                        }
-                        else
-                        {
-                            @foreach (var rule in panelRow.Rules)
-                            {
-                                <div class="rule-row">
-                                    <span class="tag tag-outline rule-kind-chip">@RuleKindLabel(rule)</span>
-                                    <span class="rule-text">@rule.Name &mdash; <span class="expr">@FormatRule(rule)</span></span>
+                            var rowKey = $"{selected.Topic.Name}/{subscription.Name}";
+                            var hasRules = _rulesByKey.TryGetValue(rowKey, out var subRules);
+                            var rulesOpen = hasRules && _expandedSubscriptionRules.Contains(rowKey);
+                            var isDisabled = subscription.Status == "Disabled";
+                            var dlq = subscription.DeadLetterMessageCount;
+                            <div class="@($"sub-card subscription-row{(isDisabled ? " disabled" : "")}")">
+                                <div class="sub-row">
+                                    @if (hasRules)
+                                    {
+                                        <button type="button" class="@($"chevron expand-subscription-rules{(rulesOpen ? " open" : "")}")" @onclick="@(() => ToggleSubscriptionRulesExpanded(rowKey))">@(rulesOpen ? "▾" : "▸")</button>
+                                    }
+                                    else if (_loadingRulesForTopic == selected.Topic.Name)
+                                    {
+                                        <MudProgressCircular Class="rules-loading" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                                    }
+                                    <span class="name">@subscription.Name</span>
+                                    <span class="@($"tag subscription-status-chip {StatusTagClass(subscription.Status)}")">@subscription.Status</span>
+                                    <span class="@($"count{(isDisabled ? " muted" : "")}")">@FormatCount(subscription.ActiveMessageCount) active</span>
+                                    @if (dlq > 0)
+                                    {
+                                        <span class="count warn">@FormatCount(dlq) DLQ</span>
+                                    }
+                                    @if (subscription.Status == "ReceiveDisabled" && subscription.ActiveMessageCount > 0)
+                                    {
+                                        <span class="note">not draining</span>
+                                    }
+                                    @if (hasRules && !rulesOpen)
+                                    {
+                                        <span class="tag tag-neutral rule-count-chip">@RuleCountLabel(subRules!)</span>
+                                    }
                                     <span class="actions">
-                                        <button type="button" class="btn btn-ghost plain edit-rule" @onclick="@(() => OpenEditRule(panelRow.TopicName, panelRow.SubscriptionName, rule))">Edit</button>
-                                        <button type="button" class="btn btn-ghost bad delete-rule" @onclick="@(() => DeleteRuleAsync(panelRow.TopicName, panelRow.SubscriptionName, rule.Name))">Delete</button>
+                                        <a class="btn btn-ghost plain peek-action" href="@PeekUrl(selected.Topic.Name, subscription.Name)">Peek</a>
+                                        <a class="@($"btn btn-ghost dead-letter-action {(dlq > 0 ? "warn" : "muted")}")" href="@PeekUrl(selected.Topic.Name, subscription.Name, deadLetter: true, deadLetterCount: dlq)">Dead-letter&nbsp;@dlq</a>
+                                        <button type="button" class="btn btn-ghost bad delete-subscription" disabled="@(_deletingEntity == rowKey)" @onclick="@(() => DeleteSubscriptionAsync(selected.Topic.Name, subscription.Name))">Delete</button>
+                                        @if (_deletingEntity == rowKey)
+                                        {
+                                            <MudProgressCircular Class="delete-subscription-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                                        }
                                     </span>
                                 </div>
-                            }
+                                @if (rulesOpen)
+                                {
+                                    <div class="rules-panel-row rules-panel">
+                                        @if (subRules!.Count == 0)
+                                        {
+                                            <span class="no-rules">No rules.</span>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var rule in subRules)
+                                            {
+                                                <div class="rule-row">
+                                                    <span class="tag tag-outline rule-kind-chip">@RuleKindLabel(rule)</span>
+                                                    <span class="rule-text">@rule.Name &mdash; <span class="expr">@FormatRule(rule)</span></span>
+                                                    <span class="actions">
+                                                        <button type="button" class="btn btn-ghost plain edit-rule" @onclick="@(() => OpenEditRule(selected.Topic.Name, subscription.Name, rule))">Edit</button>
+                                                        <button type="button" class="btn btn-ghost bad delete-rule" @onclick="@(() => DeleteRuleAsync(selected.Topic.Name, subscription.Name, rule.Name))">Delete</button>
+                                                    </span>
+                                                </div>
+                                            }
+                                        }
+                                        <button type="button" class="btn btn-ghost add-rule-action" @onclick="@(() => OpenCreateRule(selected.Topic.Name, subscription.Name))">+ Add rule</button>
+                                    </div>
+                                }
+                            </div>
                         }
-                        <button type="button" class="btn btn-ghost accent add-rule-action" @onclick="@(() => OpenCreateRule(panelRow.TopicName, panelRow.SubscriptionName))">+ Add rule</button>
                     </div>
                 }
-                previous = row;
-            }
+                else
+                {
+                    <div class="empty">@(TopicCount == 0 ? "No topics in this namespace." : "Select a topic to see its subscriptions.")</div>
+                }
+            </section>
         </div>
     </div>
 }
 
 @code {
-    private abstract record TopicsTableRow;
-    private sealed record TopicRowEntry(TopicSummary Topic, long ActiveMessageCount, long DeadLetterMessageCount, bool IsExpanded) : TopicsTableRow;
-    private sealed record SubscriptionRowEntry(string TopicName, SubscriptionSummary Subscription) : TopicsTableRow;
-    private sealed record SubscriptionRulesPanelRowEntry(string TopicName, string SubscriptionName, IReadOnlyList<RuleSummary> Rules) : TopicsTableRow;
+    // The mockup draws a topic's dead-letter badge in the warning colour at 11 and the error colour
+    // at 168; this is the boundary between "someone should look" and "something is wrong".
+    private const long DeadLetterBadThreshold = 100;
 
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private IReadOnlyList<TopicRow> _topics = [];
-    private readonly HashSet<string> _expandedTopics = [];
+    private string? _selectedTopic;
     private readonly Dictionary<string, IReadOnlyList<RuleSummary>> _rulesByKey = new();
     private readonly HashSet<string> _expandedSubscriptionRules = [];
     private string? _loadingRulesForTopic;
@@ -171,8 +199,6 @@ else
     private bool _loading;
     private string? _deletingEntity;
     private string _filterText = "";
-    private bool _onlyWithDeadLetter;
-    private bool _onlyWithDisabled;
 
     private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
 
@@ -180,31 +206,9 @@ else
     private int SubscriptionCount => _topics.Sum(t => t.Topic.SubscriptionCount);
 
     private IEnumerable<TopicRow> FilteredTopics => _topics
-        .Where(t => string.IsNullOrWhiteSpace(_filterText) || t.Topic.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase))
-        .Where(t => !_onlyWithDeadLetter || t.DeadLetterMessageCount > 0)
-        .Where(t => !_onlyWithDisabled || t.Subscriptions.Any(s => s.Status != "Active"));
+        .Where(t => string.IsNullOrWhiteSpace(_filterText) || t.Topic.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
 
-    private IReadOnlyList<TopicsTableRow> _rows => FilteredTopics.SelectMany(FlattenRows).ToList();
-
-    private IEnumerable<TopicsTableRow> FlattenRows(TopicRow topic)
-    {
-        var expanded = _expandedTopics.Contains(topic.Topic.Name);
-        yield return new TopicRowEntry(topic.Topic, topic.ActiveMessageCount, topic.DeadLetterMessageCount, expanded);
-        if (!expanded)
-        {
-            yield break;
-        }
-
-        foreach (var subscription in topic.Subscriptions)
-        {
-            var rowKey = $"{topic.Topic.Name}/{subscription.Name}";
-            yield return new SubscriptionRowEntry(topic.Topic.Name, subscription);
-            if (_expandedSubscriptionRules.Contains(rowKey) && _rulesByKey.TryGetValue(rowKey, out var rules))
-            {
-                yield return new SubscriptionRulesPanelRowEntry(topic.Topic.Name, subscription.Name, rules);
-            }
-        }
-    }
+    private TopicRow? SelectedTopic => _topics.FirstOrDefault(t => t.Topic.Name == _selectedTopic);
 
     protected override async Task OnInitializedAsync()
     {
@@ -219,7 +223,7 @@ else
     private async Task OnConnectionChanged(Guid connectionId)
     {
         _selectedConnectionId = connectionId;
-        _expandedTopics.Clear();
+        _selectedTopic = null;
         _rulesByKey.Clear();
         _expandedSubscriptionRules.Clear();
         await LoadTopicsAsync();
@@ -245,16 +249,23 @@ else
         {
             _loading = false;
         }
-    }
 
-    private async Task ToggleTopicExpandedAsync(string topicName)
-    {
-        if (_expandedTopics.Remove(topicName))
+        // The detail pane always shows something when there is something to show: keep the
+        // current selection if it survived the reload, otherwise fall back to the first topic.
+        if (SelectedTopic is null)
         {
-            return;
+            _selectedTopic = _topics.FirstOrDefault()?.Topic.Name;
         }
 
-        _expandedTopics.Add(topicName);
+        if (_selectedTopic is { } topicName)
+        {
+            await EnsureRulesLoadedAsync(topicName);
+        }
+    }
+
+    private async Task SelectTopicAsync(string topicName)
+    {
+        _selectedTopic = topicName;
         await EnsureRulesLoadedAsync(topicName);
     }
 
@@ -316,8 +327,6 @@ else
         "Disabled" => "tag-neutral",
         _ => "tag-warn", // SendDisabled, ReceiveDisabled
     };
-
-    private static string ToggleClass(string name, bool on) => $"tag tag-outline toggle {name}{(on ? " on" : "")}";
 
     private static string FormatCount(long count) => count.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -413,9 +422,8 @@ else
         var result = await dialog.Result;
         if (result is { Canceled: false })
         {
-            _expandedTopics.Add(topicName);
+            _selectedTopic = topicName;
             await LoadTopicsAsync();
-            await EnsureRulesLoadedAsync(topicName);
         }
     }
 
