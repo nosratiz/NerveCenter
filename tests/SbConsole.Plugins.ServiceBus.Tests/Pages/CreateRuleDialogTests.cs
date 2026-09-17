@@ -20,6 +20,7 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
 
     private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
     private readonly IServiceBusOperations _operations = Substitute.For<IServiceBusOperations>();
+    private readonly IConfirmationService _confirmation = Substitute.For<IConfirmationService>();
     private readonly IMudDialogInstance _dialogInstance;
     private readonly Guid _connectionId = Guid.NewGuid();
 
@@ -34,15 +35,17 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
         Services.AddSingleton(_connections);
         Services.AddSingleton(_operations);
+        Services.AddSingleton(_confirmation);
         Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddLogging();
         Services.AddSingleton<CreateRuleCommandHandler>();
+        Services.AddSingleton<EditRuleCommandHandler>();
 
         _dialogInstance = (IMudDialogInstance)Substitute.For(
             [typeof(IMudDialogInstance), MudDialogInstanceInternalType], []);
     }
 
-    private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderDialog()
+    private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderDialog(RuleSummary? existingRule = null, bool isProd = false)
     {
         var cascadingValueType = typeof(CascadingValue<>).MakeGenericType(_dialogInstance.GetType());
 
@@ -58,6 +61,8 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
                 inner.AddComponentParameter(2, nameof(CreateRuleDialog.ConnectionName), "sb-dev");
                 inner.AddComponentParameter(3, nameof(CreateRuleDialog.TopicName), "orders");
                 inner.AddComponentParameter(4, nameof(CreateRuleDialog.SubscriptionName), "uk-team");
+                inner.AddComponentParameter(5, nameof(CreateRuleDialog.ExistingRule), existingRule);
+                inner.AddComponentParameter(6, nameof(CreateRuleDialog.IsProd), isProd);
                 inner.CloseComponent();
             }));
             builder.CloseComponent();
@@ -266,5 +271,66 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
                 && ((CreateCorrelationRuleRequest)r).Properties.Count == 1
                 && ((CreateCorrelationRuleRequest)r).Properties["tier"] == "platinum"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Pre_fills_from_an_existing_sql_rule_and_shows_Save_not_Add()
+    {
+        var cut = RenderDialog(existingRule: new SqlRuleSummary("HighPriority", "Priority = 'High'"));
+
+        cut.Find("input#rule-name").GetAttribute("value").Should().Be("HighPriority");
+        cut.Find("input#rule-sql-expression").GetAttribute("value").Should().Be("Priority = 'High'");
+        cut.Find("button.save-rule").TextContent.Should().Be("Save");
+    }
+
+    [Fact]
+    public void Pre_fills_from_an_existing_correlation_rule_including_extra_fields_and_properties()
+    {
+        var cut = RenderDialog(existingRule: new CorrelationRuleSummary(
+            "VipCustomers",
+            new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders", MessageId: "msg-1"),
+            new Dictionary<string, string> { ["tier"] = "gold" }));
+
+        cut.Find("input#rule-name").GetAttribute("value").Should().Be("VipCustomers");
+        cut.Find("input#rule-correlation-id").GetAttribute("value").Should().Be("vip-123");
+        cut.Find("input#rule-label").GetAttribute("value").Should().Be("Orders");
+        cut.Find("input#rule-message-id").GetAttribute("value").Should().Be("msg-1");
+        cut.Find(".property-key input").GetAttribute("value").Should().Be("tier");
+        cut.Find(".property-value input").GetAttribute("value").Should().Be("gold");
+    }
+
+    [Fact]
+    public async Task Saving_in_edit_mode_confirms_then_calls_EditRuleCommandHandler_not_CreateRuleCommandHandler()
+    {
+        _confirmation.ConfirmAsync("Edit", "HighPriority", true, null, Arg.Any<CancellationToken>()).Returns(true);
+        var cut = RenderDialog(existingRule: new SqlRuleSummary("HighPriority", "Priority = 'High'"), isProd: true);
+        cut.Find("input#rule-sql-expression").Input("Priority = 'Highest'");
+
+        cut.Find("button.save-rule").Click();
+        await Task.Delay(30);
+
+        _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
+        await _confirmation.Received(1).ConfirmAsync("Edit", "HighPriority", true, null, Arg.Any<CancellationToken>());
+        await _operations.Received(1).CreateRuleAsync(
+            "Endpoint=sb://real", "orders", "uk-team",
+            Arg.Is<CreateRuleRequest>(r => r is CreateSqlRuleRequest
+                && ((CreateSqlRuleRequest)r).Name == "HighPriority"
+                && ((CreateSqlRuleRequest)r).SqlExpression == "Priority = 'Highest'"),
+            Arg.Any<CancellationToken>());
+        await _operations.Received(1).DeleteRuleAsync("Endpoint=sb://real", "orders", "uk-team", "HighPriority", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Declining_the_confirmation_in_edit_mode_does_not_call_the_handler()
+    {
+        _confirmation.ConfirmAsync("Edit", "HighPriority", false, null, Arg.Any<CancellationToken>()).Returns(false);
+        var cut = RenderDialog(existingRule: new SqlRuleSummary("HighPriority", "Priority = 'High'"));
+
+        cut.Find("button.save-rule").Click();
+        await Task.Delay(30);
+
+        _dialogInstance.DidNotReceive().Close(Arg.Any<DialogResult>());
+        await _operations.DidNotReceive().CreateRuleAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CreateRuleRequest>(), Arg.Any<CancellationToken>());
+        await _operations.DidNotReceive().DeleteRuleAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }
