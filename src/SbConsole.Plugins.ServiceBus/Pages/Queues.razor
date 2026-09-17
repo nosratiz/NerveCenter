@@ -3,7 +3,6 @@
 @using SbConsole.Plugins.ServiceBus.Queues
 @using SbConsole.Sdk
 @inject IConnectionProvider Connections
-@inject IPluginStore Store
 @inject TimeProvider Clock
 @inject ListQueuesQueryHandler ListHandler
 @inject DeleteQueueCommandHandler DeleteHandler
@@ -119,6 +118,12 @@ else
     private MetricRange _range = MetricRange.SixHours;
 
     private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
+
+    // FromKeyedServicesAttribute is Parameter-only in this SDK (AttributeUsage), so Blazor's own
+    // keyed property-injection mechanism is used instead: InjectAttribute.Key, resolved against
+    // the same "azure-servicebus" key AddSbConsolePlugin<TPlugin>() registers IPluginStore under.
+    [Inject(Key = "azure-servicebus")]
+    private IPluginStore Store { get; set; } = default!;
 
     // Busy-state convention for this plugin's pages (the host had none to match -- Connections.razor
     // grew the same shape in the same change). Every button that awaits an Azure call flips a flag
