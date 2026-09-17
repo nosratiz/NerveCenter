@@ -46,7 +46,7 @@
         {
             <MudProgressCircular Class="save-rule-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }
-        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSave)" OnClick="Save">Add</MudButton>
+        <MudButton Class="save-rule" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSave)" OnClick="Save">@(ExistingRule is null ? "Add" : "Save")</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -56,8 +56,12 @@
     [Parameter] public string ConnectionName { get; set; } = "";
     [Parameter] public string TopicName { get; set; } = "";
     [Parameter] public string SubscriptionName { get; set; } = "";
+    [Parameter] public RuleSummary? ExistingRule { get; set; }
+    [Parameter] public bool IsProd { get; set; }
 
     [Inject] private CreateRuleCommandHandler CreateHandler { get; set; } = default!;
+    [Inject] private EditRuleCommandHandler EditHandler { get; set; } = default!;
+    [Inject] private IConfirmationService Confirmation { get; set; } = default!;
 
     private sealed class PropertyRow
     {
@@ -79,6 +83,44 @@
     private string _contentType = "";
     private readonly List<PropertyRow> _properties = [];
     private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        if (ExistingRule is SqlRuleSummary sql)
+        {
+            _mode = "sql";
+            _name = sql.Name;
+            _sqlExpression = sql.SqlExpression;
+        }
+        else if (ExistingRule is CorrelationRuleSummary correlation)
+        {
+            _mode = "correlation";
+            _name = correlation.Name;
+            _correlationId = correlation.Match.CorrelationId ?? "";
+            _label = correlation.Match.Label ?? "";
+            _messageId = correlation.Match.MessageId ?? "";
+            _to = correlation.Match.To ?? "";
+            _replyTo = correlation.Match.ReplyTo ?? "";
+            _sessionId = correlation.Match.SessionId ?? "";
+            _replyToSessionId = correlation.Match.ReplyToSessionId ?? "";
+            _contentType = correlation.Match.ContentType ?? "";
+            _showMoreMatchFields = !string.IsNullOrEmpty(_messageId) || !string.IsNullOrEmpty(_to) || !string.IsNullOrEmpty(_replyTo)
+                || !string.IsNullOrEmpty(_sessionId) || !string.IsNullOrEmpty(_replyToSessionId) || !string.IsNullOrEmpty(_contentType);
+            foreach (var (key, value) in correlation.Properties)
+            {
+                _properties.Add(new PropertyRow { Key = key, Value = value });
+            }
+        }
+        else if (ExistingRule is not null)
+        {
+            // OtherRuleSummary (e.g. a TrueRuleFilter/FalseRuleFilter, or an unrecognized filter
+            // kind created outside this app) has no fields this dialog can pre-fill beyond the
+            // name — pre-filling the name at least shows the user what they're editing, rather
+            // than presenting a blank form indistinguishable from Add (which silently deletes
+            // the original on save once a different name is typed).
+            _name = ExistingRule.Name;
+        }
+    }
 
     private bool CanSave =>
         !string.IsNullOrWhiteSpace(_name)
@@ -121,7 +163,22 @@
                         ContentType: string.IsNullOrWhiteSpace(_contentType) ? null : _contentType),
                     properties);
 
-            var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
+            PluginResult result;
+            if (ExistingRule is null)
+            {
+                result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
+            }
+            else
+            {
+                var confirmed = await Confirmation.ConfirmAsync("Edit", ExistingRule.Name, IsProd);
+                if (!confirmed)
+                {
+                    return;
+                }
+
+                result = await EditHandler.HandleAsync(new EditRuleCommand(ConnectionId, ConnectionName, IsProd, TopicName, SubscriptionName, ExistingRule.Name, request));
+            }
+
             if (result.IsSuccess)
             {
                 MudDialog.Close(DialogResult.Ok(true));
