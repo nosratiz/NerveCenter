@@ -34,7 +34,7 @@
 
 **Deliverable this task proves:** the command/handler layer can edit a rule (same-name or rename) correctly, including both failure-window messages, entirely independent of any UI — proven by tests substituting `IServiceBusOperations` directly.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/SbConsole.Plugins.ServiceBus.Tests/Rules/EditRuleCommandHandlerTests.cs`:
 
@@ -171,12 +171,12 @@ public class EditRuleCommandHandlerTests
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~EditRuleCommandHandlerTests"`
 Expected: FAIL to compile — `EditRuleCommand`/`EditRuleCommandHandler` don't exist yet.
 
-- [ ] **Step 3: Implement `EditRuleCommandHandler.cs`**
+- [x] **Step 3: Implement `EditRuleCommandHandler.cs`**
 
 `src/SbConsole.Plugins.ServiceBus/Rules/EditRuleCommandHandler.cs`:
 
@@ -271,7 +271,7 @@ public sealed class EditRuleCommandHandler(IServiceBusOperations operations, ICo
 }
 ```
 
-- [ ] **Step 4: Register the handler**
+- [x] **Step 4: Register the handler**
 
 Open `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`. Find:
 
@@ -290,12 +290,12 @@ Add a fourth line immediately after:
         services.AddScoped<Rules.EditRuleCommandHandler>();
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~EditRuleCommandHandlerTests"`
 Expected: PASS (7 tests).
 
-- [ ] **Step 6: Run the full suite and commit**
+- [x] **Step 6: Run the full suite and commit**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: 0 warnings, 0 errors, every test passing.
@@ -329,7 +329,7 @@ EOF
 
 **Deliverable this task proves:** opening the dialog with an existing rule pre-fills every field correctly for both SQL and correlation rules, and saving in that mode calls `EditRuleCommandHandler` (after confirmation) instead of `CreateRuleCommandHandler`. `Topics.razor` doesn't call any of this yet — Task 3 adds the Edit button.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs`. Replace the constructor and `RenderDialog` helper:
 
@@ -508,12 +508,12 @@ Then add these tests after the last existing test in the file (`Saving_a_correla
 
 Add `using SbConsole.Plugins.ServiceBus.Client;` to the file's usings if not already present (it already is, per the existing file).
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: the pre-existing tests still pass; the 4 new tests FAIL to compile — `CreateRuleDialog.ExistingRule`/`.IsProd` don't exist yet, and `EditRuleCommandHandler` isn't referenced by the dialog.
 
-- [ ] **Step 3: Implement the pre-fill, title/button switch, and edit save path**
+- [x] **Step 3: Implement the pre-fill, title/button switch, and edit save path**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor`. Replace the `Add` button:
 
@@ -662,17 +662,17 @@ Replace `Save()` in full:
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~CreateRuleDialogTests"`
 Expected: PASS (every test in this file, including the 4 new ones).
 
-- [ ] **Step 5: Run the full solution build and test suite**
+- [x] **Step 5: Run the full solution build and test suite**
 
 Run: `dotnet build -warnaserror && dotnet test`
 Expected: 0 warnings, 0 errors, every test passing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Pages/CreateRuleDialog.razor tests/SbConsole.Plugins.ServiceBus.Tests/Pages/CreateRuleDialogTests.cs
@@ -706,7 +706,7 @@ EOF
 
 **Deliverable this task proves:** a user can edit a rule end-to-end from the Topics & Subscriptions page.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. Add these two tests after `Delete_rule_goes_through_confirmation_before_calling_the_handler`:
 
@@ -772,12 +772,12 @@ Open `tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs`. Add th
     }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `dotnet test --filter "FullyQualifiedName~TopicsPageTests"`
 Expected: FAIL — `button.edit-rule` doesn't exist yet, so `cut.Find` throws.
 
-- [ ] **Step 3: Add the Edit button and `OpenEditRule`**
+- [x] **Step 3: Add the Edit button and `OpenEditRule`**
 
 Open `src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor`. Replace:
 
@@ -822,7 +822,7 @@ Add `OpenEditRule` to the `@code` block, immediately after `OpenCreateRule`:
     }
 ```
 
-- [ ] **Step 4: Update the `Contribution` tally**
+- [x] **Step 4: Update the `Contribution` tally**
 
 Open `src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs`. Replace:
 
@@ -852,12 +852,12 @@ Open `tests/SbConsole.Plugins.ServiceBus.Tests/ServiceBusPluginTests.cs`. Find t
         plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 16));
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~TopicsPageTests|FullyQualifiedName~ServiceBusPluginTests"`
 Expected: PASS (every test in both files).
 
-- [ ] **Step 6: Run the full solution build and test suite**
+- [x] **Step 6: Run the full solution build and test suite**
 
 Run: `dotnet build -warnaserror`
 Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
@@ -865,7 +865,7 @@ Expected: `Build succeeded. 0 Warning(s). 0 Error(s).`
 Run: `dotnet test`
 Expected: every test across the solution passes — report the exact total from the `dotnet test` summary line.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/SbConsole.Plugins.ServiceBus/Pages/Topics.razor src/SbConsole.Plugins.ServiceBus/ServiceBusPlugin.cs tests/SbConsole.Plugins.ServiceBus.Tests/Pages/TopicsPageTests.cs tests/SbConsole.Plugins.ServiceBus.Tests/ServiceBusPluginTests.cs
