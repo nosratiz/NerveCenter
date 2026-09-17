@@ -128,6 +128,51 @@ public class CreateRuleDialogTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Clicking_more_match_fields_reveals_the_six_additional_fields()
+    {
+        var cut = RenderDialog();
+        cut.Find("button.rule-mode-correlation").Click();
+        cut.Render();
+
+        cut.FindAll("input#rule-message-id").Should().BeEmpty();
+
+        cut.Find("button.toggle-more-match-fields").Click();
+        cut.Render();
+
+        cut.Find("input#rule-message-id").Should().NotBeNull();
+        cut.Find("input#rule-to").Should().NotBeNull();
+        cut.Find("input#rule-reply-to").Should().NotBeNull();
+        cut.Find("input#rule-session-id").Should().NotBeNull();
+        cut.Find("input#rule-reply-to-session-id").Should().NotBeNull();
+        cut.Find("input#rule-content-type").Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Saving_a_correlation_rule_with_only_a_new_match_field_set_succeeds()
+    {
+        var cut = RenderDialog();
+        cut.Find("input#rule-name").Input("VipCustomers");
+        cut.Find("button.rule-mode-correlation").Click();
+        cut.Render();
+        cut.Find("button.toggle-more-match-fields").Click();
+        cut.Render();
+        cut.Find("input#rule-message-id").Input("msg-1");
+
+        cut.Find("button.save-rule").HasAttribute("disabled").Should().BeFalse();
+        cut.Find("button.save-rule").Click();
+        await Task.Delay(30);
+
+        _dialogInstance.Received(1).Close(Arg.Is<DialogResult>(r => r != null && !r.Canceled));
+        await _operations.Received(1).CreateRuleAsync(
+            "Endpoint=sb://real", "orders", "uk-team",
+            Arg.Is<CreateRuleRequest>(r => r is CreateCorrelationRuleRequest
+                && ((CreateCorrelationRuleRequest)r).Match.MessageId == "msg-1"
+                && ((CreateCorrelationRuleRequest)r).Match.CorrelationId == null
+                && ((CreateCorrelationRuleRequest)r).Match.Label == null),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Saving_a_correlation_rule_with_custom_properties_calls_the_handler_and_closes()
     {
         var cut = RenderDialog();

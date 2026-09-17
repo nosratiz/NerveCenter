@@ -18,6 +18,16 @@
         {
             <MudTextField id="rule-correlation-id" @bind-Value="_correlationId" Label="Correlation ID" Immediate="true" />
             <MudTextField id="rule-label" @bind-Value="_label" Label="Label" Immediate="true" />
+            <MudButton Class="toggle-more-match-fields" Size="Size.Small" OnClick="@(() => _showMoreMatchFields = !_showMoreMatchFields)">@(_showMoreMatchFields ? "- Fewer match fields" : "+ More match fields")</MudButton>
+            @if (_showMoreMatchFields)
+            {
+                <MudTextField id="rule-message-id" @bind-Value="_messageId" Label="Message ID" Immediate="true" />
+                <MudTextField id="rule-to" @bind-Value="_to" Label="To" Immediate="true" />
+                <MudTextField id="rule-reply-to" @bind-Value="_replyTo" Label="Reply To" Immediate="true" />
+                <MudTextField id="rule-session-id" @bind-Value="_sessionId" Label="Session ID" Immediate="true" />
+                <MudTextField id="rule-reply-to-session-id" @bind-Value="_replyToSessionId" Label="Reply To Session ID" Immediate="true" />
+                <MudTextField id="rule-content-type" @bind-Value="_contentType" Label="Content Type" Immediate="true" />
+            }
             <MudText Typo="Typo.subtitle2" Class="mt-2">Custom properties</MudText>
             @foreach (var row in _properties)
             {
@@ -60,6 +70,13 @@
     private string _sqlExpression = "";
     private string _correlationId = "";
     private string _label = "";
+    private bool _showMoreMatchFields;
+    private string _messageId = "";
+    private string _to = "";
+    private string _replyTo = "";
+    private string _sessionId = "";
+    private string _replyToSessionId = "";
+    private string _contentType = "";
     private readonly List<PropertyRow> _properties = [];
     private bool _busy;
 
@@ -70,6 +87,12 @@
             ? !string.IsNullOrWhiteSpace(_sqlExpression)
             : !string.IsNullOrWhiteSpace(_correlationId)
               || !string.IsNullOrWhiteSpace(_label)
+              || !string.IsNullOrWhiteSpace(_messageId)
+              || !string.IsNullOrWhiteSpace(_to)
+              || !string.IsNullOrWhiteSpace(_replyTo)
+              || !string.IsNullOrWhiteSpace(_sessionId)
+              || !string.IsNullOrWhiteSpace(_replyToSessionId)
+              || !string.IsNullOrWhiteSpace(_contentType)
               || _properties.Any(p => !string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Value)));
 
     private async Task Save()
@@ -89,7 +112,13 @@
                     _name,
                     new CorrelationMatch(
                         CorrelationId: string.IsNullOrWhiteSpace(_correlationId) ? null : _correlationId,
-                        Label: string.IsNullOrWhiteSpace(_label) ? null : _label),
+                        Label: string.IsNullOrWhiteSpace(_label) ? null : _label,
+                        MessageId: string.IsNullOrWhiteSpace(_messageId) ? null : _messageId,
+                        To: string.IsNullOrWhiteSpace(_to) ? null : _to,
+                        ReplyTo: string.IsNullOrWhiteSpace(_replyTo) ? null : _replyTo,
+                        SessionId: string.IsNullOrWhiteSpace(_sessionId) ? null : _sessionId,
+                        ReplyToSessionId: string.IsNullOrWhiteSpace(_replyToSessionId) ? null : _replyToSessionId,
+                        ContentType: string.IsNullOrWhiteSpace(_contentType) ? null : _contentType),
                     properties);
 
             var result = await CreateHandler.HandleAsync(new CreateRuleCommand(ConnectionId, ConnectionName, TopicName, SubscriptionName, request));
