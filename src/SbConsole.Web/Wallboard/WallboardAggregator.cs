@@ -94,4 +94,31 @@ public static class WallboardAggregator
     }
 
     private static string FormatWindow(TimeSpan window) => $"{(int)window.TotalHours}h";
+
+    /// <summary>
+    /// Maps outage-event timestamps (real connection.test audit-log failures) onto the same
+    /// 0..1 fractional position along the time axis a chart of these buckets would plot them at,
+    /// so a caller can draw a marker exactly where the corresponding dip appears on the line --
+    /// the wireframe's "outage rule". Events outside the bucket window are dropped: there is no
+    /// on-screen position to point them at.
+    /// </summary>
+    public static IReadOnlyList<double> OutageMarkerPositions(IReadOnlyList<DateTimeOffset> events, IReadOnlyList<Bucket> buckets)
+    {
+        if (buckets.Count < 2)
+        {
+            return [];
+        }
+
+        var start = buckets[0].At;
+        var end = buckets[^1].At;
+        var span = (end - start).TotalSeconds;
+        if (span <= 0)
+        {
+            return [];
+        }
+
+        return [.. events
+            .Where(e => e >= start && e <= end)
+            .Select(e => (e - start).TotalSeconds / span)];
+    }
 }

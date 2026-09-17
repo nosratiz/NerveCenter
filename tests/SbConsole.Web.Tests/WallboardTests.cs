@@ -52,6 +52,7 @@ public class WallboardTests : BunitContext, IAsyncLifetime
         Services.AddLogging();
         _pluginStoreFactory.For(Arg.Any<string>()).Returns(Substitute.For<IPluginStore>());
         Services.AddSingleton(_pluginStoreFactory);
+        Services.AddSingleton<ListAuditEntriesQueryHandler>();
         Services.AddSingleton<WallboardSnapshotLoader>();
     }
 
@@ -155,6 +156,101 @@ public class WallboardTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("payments-dlq");
         cut.Markup.Should().NotContain("test-queue");
+    }
+
+    [Fact]
+    public async Task Throughput_chart_shows_an_outage_rule_at_a_connection_test_failure()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-15T12:00:00Z"));
+        Services.AddSingleton(clock);
+        Services.AddSingleton<TimeProvider>(clock);
+
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.AuditEntries.Add(new AuditEntry
+            {
+                At = clock.GetUtcNow().AddMinutes(-30),
+                Actor = "admin",
+                Action = "connection.test",
+                Target = "sb-eu-prod",
+                Risk = ActionRisk.Safe,
+                Succeeded = false,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.FindAll(".outage-rule").Count > 0);
+
+        cut.FindAll(".outage-rule").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task The_outage_rules_x_coordinate_uses_an_invariant_decimal_point_on_any_server_locale()
+    {
+        // A comma-decimal culture (e.g. de-DE) reproduces a real bug: double.ToString() with no
+        // format provider emits "649,49" instead of "649.49", which most SVG parsers reject as an
+        // x1/x2 coordinate. This must render "." regardless of the server's OS/thread culture.
+        var originalCulture = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-15T12:00:00Z"));
+            Services.AddSingleton(clock);
+            Services.AddSingleton<TimeProvider>(clock);
+
+            await using (var db = _testDb.CreateDbContext())
+            {
+                db.AuditEntries.Add(new AuditEntry
+                {
+                    At = clock.GetUtcNow().AddMinutes(-17), // an off-bucket offset, so x isn't a round number
+                    Actor = "admin",
+                    Action = "connection.test",
+                    Target = "sb-eu-prod",
+                    Risk = ActionRisk.Safe,
+                    Succeeded = false,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+            cut.WaitForState(() => cut.FindAll(".outage-rule").Count > 0);
+
+            var line = cut.Find(".outage-rule");
+            line.GetAttribute("x1").Should().NotContain(",");
+            double.Parse(line.GetAttribute("x1")!, System.Globalization.CultureInfo.InvariantCulture).Should().BeInRange(30, 670);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public async Task Throughput_chart_shows_no_outage_rule_when_every_connection_test_succeeded()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-15T12:00:00Z"));
+        Services.AddSingleton(clock);
+        Services.AddSingleton<TimeProvider>(clock);
+
+        await using (var db = _testDb.CreateDbContext())
+        {
+            db.AuditEntries.Add(new AuditEntry
+            {
+                At = clock.GetUtcNow().AddMinutes(-30),
+                Actor = "admin",
+                Action = "connection.test",
+                Target = "sb-eu-prod",
+                Risk = ActionRisk.Safe,
+                Succeeded = true,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var cut = Render<global::SbConsole.Web.Components.Pages.Wallboard>();
+        cut.WaitForState(() => cut.FindAll(".range-toggle-1h").Count > 0);
+
+        cut.FindAll(".outage-rule").Should().BeEmpty();
     }
 
     [Fact]

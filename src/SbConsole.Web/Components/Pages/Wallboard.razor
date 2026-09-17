@@ -43,7 +43,27 @@
 
     <MudPaper Class="pa-4 mb-4" Style="border:1px solid var(--mud-palette-lines-default)" Elevation="0">
         <MudText Typo="Typo.h6" Class="mb-2">Throughput</MudText>
-        <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@TrendSeries" ChartLabels="@TrendLabels" Width="100%" Height="260px" />
+        <div style="position:relative">
+            <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@TrendSeries" ChartLabels="@TrendLabels" Width="100%" Height="260px" />
+            @*
+                The outage rule: a vertical marker at the moment a connection.test failed, so the
+                outage and the dip in the line read as one event instead of two separate widgets
+                (per the mockup's "2a" caption). MudChart has no annotation API, so this is a
+                second SVG stacked exactly on top of it -- same width/height/viewBox and no
+                preserveAspectRatio override, so the browser applies MudChart's own letterboxing
+                identically to both and the two line up regardless of the actual scale factor.
+                The x=30/x=670 plot-area bounds are MudBlazor.Charts' Line-chart margins for its
+                700x350 viewBox (empirically measured against the rendered chart) -- if a MudBlazor
+                upgrade ever changes them, only these two numbers need to move.
+            *@
+            <svg viewBox="0 0 700 350" width="100%" height="260px" style="position:absolute;inset:0;pointer-events:none" aria-hidden="true">
+                @foreach (var position in OutageMarkerPositions)
+                {
+                    var x = FormatChartX(30 + (position * 640));
+                    <line class="outage-rule" x1="@x" y1="0" x2="@x" y2="350" stroke="var(--mud-palette-error)" stroke-width="2" stroke-dasharray="4,3" />
+                }
+            </svg>
+        </div>
     </MudPaper>
 
     <div class="d-flex gap-4 flex-wrap">
@@ -90,6 +110,7 @@
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets1h = [];
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets12h = [];
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets24h = [];
+    private IReadOnlyList<DateTimeOffset> _outageEvents = [];
     private string _growthSummary = "";
 
     private string _selectedRange = "1h";
@@ -107,6 +128,8 @@
 
     private string[] TrendLabels => ThinnedLabels(SelectedBuckets);
 
+    private IReadOnlyList<double> OutageMarkerPositions => WallboardAggregator.OutageMarkerPositions(_outageEvents, SelectedBuckets);
+
     private List<ChartSeries<double>> GrowthSeries =>
     [
         new() { Name = "Dead-lettered", Data = _buckets12h.Select(b => (double)b.TotalDeadLetter).ToList() },
@@ -122,6 +145,10 @@
         var stride = Math.Max(1, buckets.Count / 10);
         return [.. buckets.Select((b, i) => i % stride == 0 ? b.At.ToLocalTime().ToString("HH:mm") : "")];
     }
+
+    // SVG numeric attributes require an invariant "." decimal point -- the default ToString()
+    // would emit "," on a comma-decimal server locale, which most SVG parsers reject outright.
+    private static string FormatChartX(double x) => x.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
@@ -139,6 +166,7 @@
         _buckets1h = snapshot.Buckets1h;
         _buckets12h = snapshot.Buckets12h;
         _buckets24h = snapshot.Buckets24h;
+        _outageEvents = snapshot.OutageEvents;
         _growthSummary = snapshot.GrowthSummary;
         _activeCount = snapshot.ActiveCount;
         _activeDeltaLastMinute = snapshot.ActiveDeltaLastMinute;

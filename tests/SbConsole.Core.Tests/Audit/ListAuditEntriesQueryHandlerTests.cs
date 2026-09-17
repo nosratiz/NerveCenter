@@ -55,6 +55,20 @@ public class ListAuditEntriesQueryHandlerTests
     }
 
     [Fact]
+    public async Task Filters_by_exact_action()
+    {
+        using var testDb = new TestDb();
+        var now = DateTimeOffset.UtcNow;
+        await SeedAsync(testDb,
+            Entry("admin", "connection.test", "sb-eu-prod", ActionRisk.Safe, false, now),
+            Entry("admin", "queue.purge", "payments-dlq", ActionRisk.Destructive, true, now));
+
+        var result = await new ListAuditEntriesQueryHandler(testDb).HandleAsync(new AuditQuery(Action: "connection.test"));
+
+        result.Entries.Should().ContainSingle(e => e.Target == "sb-eu-prod");
+    }
+
+    [Fact]
     public async Task Filters_by_date_range()
     {
         using var testDb = new TestDb();

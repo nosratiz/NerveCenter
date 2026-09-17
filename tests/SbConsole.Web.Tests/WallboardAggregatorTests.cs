@@ -137,4 +137,40 @@ public class WallboardAggregatorTests
 
         summary.Should().Be("+50 in the last 12h — sb-uk-prod / payments-dlq accounts for 100% of the rise.");
     }
+
+    private static WallboardAggregator.Bucket Bucket(DateTimeOffset at) => new(at, 0, 0);
+
+    [Fact]
+    public void OutageMarkerPositions_maps_an_event_to_its_fractional_position_in_the_bucket_window()
+    {
+        var buckets = new List<WallboardAggregator.Bucket>
+        {
+            Bucket(Now.AddMinutes(-60)),
+            Bucket(Now.AddMinutes(-30)), // 50% through the window
+            Bucket(Now),
+        };
+
+        var positions = WallboardAggregator.OutageMarkerPositions([Now.AddMinutes(-30)], buckets);
+
+        positions.Should().ContainSingle().Which.Should().BeApproximately(0.5, 1e-9);
+    }
+
+    [Fact]
+    public void OutageMarkerPositions_drops_events_outside_the_bucket_window()
+    {
+        var buckets = new List<WallboardAggregator.Bucket> { Bucket(Now.AddMinutes(-60)), Bucket(Now) };
+
+        var positions = WallboardAggregator.OutageMarkerPositions(
+            [Now.AddMinutes(-90), Now.AddMinutes(-30), Now.AddMinutes(30)], buckets);
+
+        positions.Should().ContainSingle().Which.Should().BeApproximately(0.5, 1e-9);
+    }
+
+    [Fact]
+    public void OutageMarkerPositions_returns_empty_for_fewer_than_two_buckets()
+    {
+        var positions = WallboardAggregator.OutageMarkerPositions([Now], [Bucket(Now)]);
+
+        positions.Should().BeEmpty();
+    }
 }

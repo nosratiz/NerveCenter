@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SbConsole.Core.Audit;
 using SbConsole.Core.Connections;
 using SbConsole.Sdk;
 using SbConsole.Web.Plugins;
@@ -18,7 +19,8 @@ public sealed record WallboardSnapshot(
     long ActiveCount,
     long ActiveDeltaLastMinute,
     long DeadLetterTotal,
-    long? DeadLetterDeltaLastHour);
+    long? DeadLetterDeltaLastHour,
+    IReadOnlyList<DateTimeOffset> OutageEvents);
 
 /// <summary>
 /// The Azure-calling load behind the wallboard's tiles and charts, shared by the full
@@ -30,6 +32,7 @@ public sealed class WallboardSnapshotLoader(
     PluginRegistry registry,
     IConnectionProvider connectionProvider,
     IPluginStoreFactory pluginStoreFactory,
+    ListAuditEntriesQueryHandler auditHandler,
     ILogger<WallboardSnapshotLoader> logger,
     TimeProvider clock)
 {
@@ -114,6 +117,15 @@ public sealed class WallboardSnapshotLoader(
         var deadLetterTotal = orderedBacklog.Sum(n => (long)n.Item2);
         var deadLetterDeltaLastHour = buckets1h.Count > 0 ? deadLetterTotal - buckets1h[0].TotalDeadLetter : (long?)null;
 
+        // The wireframe's "outage rule": a vertical marker on the throughput chart at the moment
+        // a connection.test failed, so the outage and the dip in the line read as one event. This
+        // is scoped to Action: "connection.test" (not just filtered client-side after the default
+        // page) so a busy audit log elsewhere can't crowd genuine test failures out of the page --
+        // see AuditQuery.Action.
+        var outagePage = await auditHandler.HandleAsync(
+            new AuditQuery(From: now - TimeSpan.FromHours(24), To: now, Action: "connection.test", PageSize: 1000), ct);
+        var outageEvents = outagePage.Entries.Where(e => !e.Succeeded).Select(e => e.At).ToList();
+
         return new WallboardSnapshot(
             orderedBacklog,
             oldest,
@@ -126,6 +138,7 @@ public sealed class WallboardSnapshotLoader(
             activeCount,
             activeDeltaLastMinute,
             deadLetterTotal,
-            deadLetterDeltaLastHour);
+            deadLetterDeltaLastHour,
+            outageEvents);
     }
 }

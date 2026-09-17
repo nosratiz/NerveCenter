@@ -9,6 +9,7 @@ public sealed record AuditQuery(
     DateTimeOffset? From = null,
     DateTimeOffset? To = null,
     string? Actor = null,
+    string? Action = null,
     ActionRisk? Risk = null,
     string? TargetContains = null,
     int Page = 1,
@@ -26,6 +27,7 @@ public sealed class ListAuditEntriesQueryHandler(IDbContextFactory<SbcDbContext>
         if (query.From is { } from) filtered = filtered.Where(e => e.At >= from);
         if (query.To is { } to) filtered = filtered.Where(e => e.At <= to);
         if (query.Actor is { } actor) filtered = filtered.Where(e => e.Actor == actor);
+        if (query.Action is { } action) filtered = filtered.Where(e => e.Action == action);
         if (query.Risk is { } risk) filtered = filtered.Where(e => e.Risk == risk);
         if (query.TargetContains is { } target) filtered = filtered.Where(e => e.Target.Contains(target));
 
