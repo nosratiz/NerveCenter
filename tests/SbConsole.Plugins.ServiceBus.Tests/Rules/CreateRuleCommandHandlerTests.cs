@@ -53,7 +53,7 @@ public class CreateRuleCommandHandlerTests
         connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("Endpoint=sb://real");
         var operations = Substitute.For<IServiceBusOperations>();
         var audit = Substitute.For<IAuditScope>();
-        var request = new CreateCorrelationRuleRequest("VipCustomers", "vip-123", "Orders", new Dictionary<string, string> { ["tier"] = "gold" });
+        var request = new CreateCorrelationRuleRequest("VipCustomers", new CorrelationMatch(CorrelationId: "vip-123", Label: "Orders"), new Dictionary<string, string> { ["tier"] = "gold" });
 
         var result = await new CreateRuleCommandHandler(operations, connections, audit, NullLogger<CreateRuleCommandHandler>.Instance)
             .HandleAsync(new CreateRuleCommand(connectionId, "sb-dev", "orders", "uk-team", request));
