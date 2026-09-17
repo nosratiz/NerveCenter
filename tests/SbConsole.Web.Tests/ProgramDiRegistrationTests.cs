@@ -71,7 +71,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect, "login must succeed for the page requests below to be authenticated");
         var authCookie = loginResponse.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith("sbc.auth", StringComparison.Ordinal)).Split(';')[0];
 
-        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics", "/p/azure-servicebus/dead-letter" })
+        foreach (var route in new[] { "/", "/audit", "/plugins", "/connections", "/settings", "/p/azure-servicebus/queues", "/p/azure-servicebus/topics", "/p/azure-servicebus/dead-letter", "/p/kafka/topics" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, route);
             request.Headers.Add("Cookie", authCookie);
@@ -115,6 +115,27 @@ public sealed class ProgramDiRegistrationTests : IDisposable
     public void Every_service_bus_plugin_page_declares_Authorize_directly_on_the_component()
     {
         var routableTypes = typeof(SbConsole.Plugins.ServiceBus.Pages.Queues).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttributes(typeof(Microsoft.AspNetCore.Components.RouteAttribute), inherit: false).Length > 0)
+            .ToList();
+
+        routableTypes.Should().NotBeEmpty("this assembly is expected to contain at least one @page component");
+        foreach (var type in routableTypes)
+        {
+            type.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+                .Should().NotBeEmpty($"{type.Name} must declare [Authorize] directly (or inherit it from " +
+                    "Pages/_Imports.razor), not merely rely on the app's fallback authorization policy to " +
+                    "redirect anonymous requests");
+        }
+    }
+
+    /// <summary>
+    /// Same guard as Every_service_bus_plugin_page_declares_Authorize_directly_on_the_component,
+    /// for the Kafka plugin assembly added alongside it.
+    /// </summary>
+    [Fact]
+    public void Every_kafka_plugin_page_declares_Authorize_directly_on_the_component()
+    {
+        var routableTypes = typeof(SbConsole.Plugins.Kafka.Pages.Topics).Assembly.GetTypes()
             .Where(t => t.GetCustomAttributes(typeof(Microsoft.AspNetCore.Components.RouteAttribute), inherit: false).Length > 0)
             .ToList();
 
