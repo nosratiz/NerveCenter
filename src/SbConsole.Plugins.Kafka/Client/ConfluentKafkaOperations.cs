@@ -285,4 +285,56 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
 
         return summaries;
     }
+
+    public async Task<ConsumerGroupDetail> GetConsumerGroupDetailAsync(string config, string groupId, CancellationToken ct = default)
+    {
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+
+        var describeResult = await admin.DescribeConsumerGroupsAsync([groupId], new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        var description = describeResult.ConsumerGroupDescriptions[0];
+
+        // Maps each currently-assigned TopicPartition to the member holding it -- a partition with
+        // a committed offset but no entry here is idle (design spec §3).
+        var assignedTo = new Dictionary<TopicPartition, (string? ClientId, string? Host)>();
+        foreach (var member in description.Members)
+        {
+            foreach (var topicPartition in member.Assignment.TopicPartitions)
+            {
+                assignedTo[topicPartition] = (member.ClientId, member.Host);
+            }
+        }
+
+        var offsets = await GetCommittedOffsetsAsync(admin, groupId);
+
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+        var partitionLags = await Task.Run(() =>
+        {
+            var result = new List<ConsumerGroupPartitionLag>();
+            foreach (var partition in offsets)
+            {
+                if (partition.Error.IsError)
+                {
+                    continue;
+                }
+
+                var watermarks = consumer.QueryWatermarkOffsets(partition.TopicPartition, AttemptTimeout);
+                assignedTo.TryGetValue(partition.TopicPartition, out var member);
+                result.Add(new ConsumerGroupPartitionLag(
+                    partition.Topic, partition.Partition.Value, partition.Offset.Value, watermarks.High.Value,
+                    ComputeLag(partition.Offset.Value, watermarks.High.Value), member.ClientId, member.Host));
+            }
+
+            return result;
+        }, ct);
+
+        var members = description.Members
+            .Select(m => new ConsumerGroupMember(
+                m.ClientId, m.Host,
+                (IReadOnlyList<TopicPartitionRef>)m.Assignment.TopicPartitions
+                    .Select(tp => new TopicPartitionRef(tp.Topic, tp.Partition.Value))
+                    .ToList()))
+            .ToList();
+
+        return new ConsumerGroupDetail(groupId, description.State.ToString(), partitionLags, members);
+    }
 }
