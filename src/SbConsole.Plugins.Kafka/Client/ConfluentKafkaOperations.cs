@@ -273,6 +273,11 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
                         continue;
                     }
 
+                    if (partition.Offset == Offset.Unset)
+                    {
+                        continue;
+                    }
+
                     var watermarks = consumer.QueryWatermarkOffsets(partition.TopicPartition, AttemptTimeout);
                     total += ComputeLag(partition.Offset.Value, watermarks.High.Value);
                 }
@@ -313,6 +318,11 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             foreach (var partition in offsets)
             {
                 if (partition.Error.IsError)
+                {
+                    continue;
+                }
+
+                if (partition.Offset == Offset.Unset)
                 {
                     continue;
                 }

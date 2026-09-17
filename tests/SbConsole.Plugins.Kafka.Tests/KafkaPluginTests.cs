@@ -67,4 +67,90 @@ public class KafkaPluginTests
 
         KafkaPlugin.HasHighLag(group).Should().Be(expected);
     }
+
+    // Regression coverage for the "dashboard problem link is a dead end" fix: ConsumerGroupDetail.razor
+    // requires ?connectionId= to resolve the connection (without it, ConnectionId binds to Guid.Empty
+    // and the page renders "Connection not found"), and Kafka group IDs are nearly unconstrained so the
+    // group ID segment must be escaped -- same shape as ConsumerGroups.razor's own DetailUrl. Exercises
+    // GetDashboardProblemsAsync itself (not a copy of its logic) by pre-seeding the ListConsumerGroups
+    // cache for this connection string with a fake fetch, so GetDashboardProblemsAsync's own call to
+    // GetCachedConsumerGroupsAsync hits the cache instead of the real broker (which crashes the process
+    // on this environment -- see the comment above on GetDashboardProblemsAsync's missing smoke test).
+    [Fact]
+    public async Task GetDashboardProblemsAsync_links_to_the_group_detail_page_with_an_escaped_group_id_and_connectionId()
+    {
+        var plugin = new KafkaPlugin();
+        var connectionId = Guid.NewGuid();
+        var connectionString = $"conn-{connectionId}";
+        var fetch = FakeFetch([new ConsumerGroupSummary("orders/consumer group", "Stable", 1, KafkaPlugin.LagProblemThreshold + 1)]);
+        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, DateTimeOffset.UtcNow, fetch, CancellationToken.None);
+
+        var problems = await plugin.GetDashboardProblemsAsync(connectionId, connectionString, store: null!);
+
+        problems.Should().ContainSingle().Which.LinkHref.Should().Be(
+            $"/p/kafka/consumer-groups/{Uri.EscapeDataString("orders/consumer group")}?connectionId={connectionId}");
+    }
+
+    [Fact]
+    public async Task GetCachedConsumerGroupsAsync_reuses_the_result_for_a_repeat_call_within_the_TTL()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        var groups = new List<ConsumerGroupSummary> { new("g1", "Stable", 1, 42) };
+        Task<IReadOnlyList<ConsumerGroupSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<ConsumerGroupSummary>>(groups);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var first = await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 30 seconds later, still within the ~60s TTL -- should reuse the cached result, not fetch again.
+        var second = await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, now.AddSeconds(30), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(1);
+        first.Should().BeSameAs(groups);
+        second.Should().BeSameAs(groups);
+    }
+
+    [Fact]
+    public async Task GetCachedConsumerGroupsAsync_fetches_again_once_the_TTL_has_expired()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<ConsumerGroupSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<ConsumerGroupSummary>>([new ConsumerGroupSummary("g", "Stable", 1, callCount)]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 61 seconds later -- past the ~60s TTL -- should fetch a fresh result.
+        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, now.AddSeconds(61), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetCachedConsumerGroupsAsync_caches_independently_per_connection_string()
+    {
+        var connectionA = $"conn-a-{Guid.NewGuid()}";
+        var connectionB = $"conn-b-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<ConsumerGroupSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<ConsumerGroupSummary>>([]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionA, now, Fetch, CancellationToken.None);
+        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionB, now, Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    private static Func<string, CancellationToken, Task<IReadOnlyList<ConsumerGroupSummary>>> FakeFetch(IReadOnlyList<ConsumerGroupSummary> groups) =>
+        (_, _) => Task.FromResult(groups);
 }
