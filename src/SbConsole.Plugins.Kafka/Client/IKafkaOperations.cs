@@ -14,6 +14,13 @@ public interface IKafkaOperations
 
     Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string config, CancellationToken ct = default);
 
+    /// <summary>
+    /// Lightweight counterpart to ListTopicsAsync for callers that only need topic/partition
+    /// counts (e.g. the Dashboard and Wallboard): reads GetMetadata alone, with no per-partition
+    /// QueryWatermarkOffsets round trip.
+    /// </summary>
+    Task<(int TopicCount, int PartitionCount)> GetTopicCountsAsync(string config, CancellationToken ct = default);
+
     Task CreateTopicAsync(string config, CreateTopicRequest request, CancellationToken ct = default);
 
     /// <summary>Destructive.</summary>

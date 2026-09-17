@@ -24,11 +24,11 @@ public sealed class CreateTopicCommandHandler(IKafkaOperations operations, IConn
         catch (Exception ex)
         {
             logger.LogError(ex, "Creating topic {Target} failed.", target);
-            await audit.RecordAsync("topic.create", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
+            await audit.RecordAsync("kafka.topic.create", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
             return PluginResult.Fail(ex);
         }
 
-        await audit.RecordAsync("topic.create", target, ActionRisk.Mutating, succeeded: true, ct: ct);
+        await audit.RecordAsync("kafka.topic.create", target, ActionRisk.Mutating, succeeded: true, ct: ct);
         return PluginResult.Ok();
     }
 }

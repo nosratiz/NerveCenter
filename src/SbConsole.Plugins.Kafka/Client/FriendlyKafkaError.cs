@@ -22,7 +22,7 @@ public static class FriendlyKafkaError
 
     private static string FromKafkaException(KafkaException ex) => ex.Error.Code switch
     {
-        ErrorCode.Local_AllBrokersDown or ErrorCode.Local_Transport => "Broker(s) unreachable",
+        ErrorCode.Local_AllBrokersDown or ErrorCode.Local_Transport or ErrorCode.BrokerNotAvailable => "Broker(s) unreachable",
         ErrorCode.SaslAuthenticationFailed or ErrorCode.TopicAuthorizationFailed => "Authentication failed",
         ErrorCode.UnknownTopicOrPart => "Topic not found",
         _ => FriendlyError.Truncate(ex.Error.Reason) is { Length: > 0 } reason ? reason : FriendlyError.From(ex),

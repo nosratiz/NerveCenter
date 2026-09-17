@@ -22,7 +22,17 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
     internal static ConsumerConfig CreateConsumerConfig(string config, string groupId) =>
         new(KafkaConfigParser.Parse(config)) { GroupId = groupId, EnableAutoCommit = false };
 
-    internal static ProducerConfig CreateProducerConfig(string config) => new(KafkaConfigParser.Parse(config));
+    // Without these, message.timeout.ms/socket.timeout.ms stay at librdkafka's defaults (300000ms /
+    // 60000ms) and ProduceMessageAsync can hang for minutes against an unreachable cluster --
+    // verified empirically against the installed Confluent.Kafka 2.15.1 (ProduceAsync to an
+    // unreachable broker had not completed after 5+ seconds). Bounding both to AttemptTimeout gives
+    // produce the same fail-fast behavior TestConnectionAsync/ListTopicsAsync already have.
+    internal static ProducerConfig CreateProducerConfig(string config) =>
+        new(KafkaConfigParser.Parse(config))
+        {
+            MessageTimeoutMs = (int)AttemptTimeout.TotalMilliseconds,
+            SocketTimeoutMs = (int)AttemptTimeout.TotalMilliseconds,
+        };
 
     // Confluent.Kafka's AdminClient/Consumer APIs (GetMetadata, QueryWatermarkOffsets, Assign,
     // Consume) are synchronous/blocking with no async overload -- Task.Run keeps every one of
@@ -81,6 +91,28 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             return topics;
         }, ct);
 
+    // Same Task.Run + AdminClientBuilder + GetMetadata shape ListTopicsAsync/TestConnectionAsync
+    // already use, but stops after summing partition counts -- no ConsumerBuilder, no
+    // QueryWatermarkOffsets at all, since the Dashboard/Wallboard callers only need the two counts.
+    public Task<(int TopicCount, int PartitionCount)> GetTopicCountsAsync(string config, CancellationToken ct = default) =>
+        Task.Run(() =>
+        {
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            var metadata = admin.GetMetadata(AttemptTimeout);
+            return (metadata.Topics.Count, metadata.Topics.Sum(t => t.Partitions.Count));
+        }, ct);
+
+    internal static CreateTopicsOptions BuildCreateTopicsOptions() => new() { RequestTimeout = AttemptTimeout };
+
+    internal static DeleteTopicsOptions BuildDeleteTopicsOptions() => new() { RequestTimeout = AttemptTimeout };
+
+    // ct is intentionally unused by both methods below: verified against the installed
+    // Confluent.Kafka 2.15.1 (via decompilation) that IAdminClient.CreateTopicsAsync/
+    // DeleteTopicsAsync have exactly one overload each -- (topics, options) -- with no
+    // CancellationToken parameter or overload anywhere on IAdminClient. RequestTimeout on the
+    // options object above is this API's only way to bound the call, replacing librdkafka's
+    // default admin timeout with AttemptTimeout, same role AttemptTimeout plays everywhere else
+    // in this class.
     public async Task CreateTopicAsync(string config, CreateTopicRequest request, CancellationToken ct = default)
     {
         using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
@@ -92,13 +124,13 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
                 NumPartitions = request.PartitionCount,
                 ReplicationFactor = (short)request.ReplicationFactor,
             }
-        ]);
+        ], BuildCreateTopicsOptions());
     }
 
     public async Task DeleteTopicAsync(string config, string topicName, CancellationToken ct = default)
     {
         using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
-        await admin.DeleteTopicsAsync([topicName]);
+        await admin.DeleteTopicsAsync([topicName], BuildDeleteTopicsOptions());
     }
 
     // Bounds the whole peek call, not just one Consume() -- a topic/partition with fewer messages
@@ -136,9 +168,14 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             while (messages.Count < maxMessages && !timeoutCts.IsCancellationRequested)
             {
                 var result = consumer.Consume(TimeSpan.FromSeconds(2));
-                if (result is null || result.IsPartitionEOF)
+                if (IsEndOfPartition(result))
                 {
                     break;
+                }
+
+                if (result is null)
+                {
+                    continue; // poll timeout, not end of data -- PeekWallClockCap bounds the loop overall
                 }
 
                 messages.Add(ToSummary(result));
@@ -146,6 +183,15 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
 
             return new PeekResult(messages, watermarks.Low.Value, watermarks.High.Value);
         }, ct);
+
+    // Consume(TimeSpan) returns null on a plain poll timeout (nothing ready in that 2s slice) --
+    // a completely different condition from IsPartitionEOF (no more messages in the partition right
+    // now). Conflating the two used to make Peek silently return an empty message list on a real
+    // remote cluster whenever the first Consume()'s broker connect (TCP+TLS+SASL+metadata+fetch)
+    // took longer than the poll slice. Extracted as its own predicate, separate from the null check
+    // above, so the null-vs-EOF distinction is unit-testable without a real broker --
+    // ConsumeResult<TKey,TValue> is a plain settable POCO, unlike IConsumer itself (design spec §8).
+    internal static bool IsEndOfPartition(ConsumeResult<byte[], byte[]>? result) => result is { IsPartitionEOF: true };
 
     private static KafkaMessageSummary ToSummary(ConsumeResult<byte[], byte[]> result)
     {

@@ -38,11 +38,14 @@ public sealed class KafkaPlugin : IPlugin
 
     public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
     {
-        var topics = await new ConfluentKafkaOperations().ListTopicsAsync(connectionString, ct);
+        // GetTopicCountsAsync, not ListTopicsAsync -- this runs on every Dashboard render and every
+        // Wallboard refresh, and neither metric below needs the per-partition watermark walk
+        // ListTopicsAsync pays for.
+        var (topicCount, partitionCount) = await new ConfluentKafkaOperations().GetTopicCountsAsync(connectionString, ct);
         return
         [
-            new PluginDashboardMetric("Topics", topics.Count),
-            new PluginDashboardMetric("Partitions", topics.Sum(t => t.PartitionCount)),
+            new PluginDashboardMetric("Topics", topicCount),
+            new PluginDashboardMetric("Partitions", partitionCount),
         ];
     }
 }

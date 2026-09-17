@@ -54,6 +54,8 @@ else
 
     <MudText Typo="Typo.caption" Class="connection-echo mud-text-secondary">@_connectionEcho</MudText>
 
+    @* Counts are over every topic (_topics), not the filtered subset (FilteredTopics, bound below) --
+       same convention Queues.razor's own summary line uses. *@
     <MudText Class="topics-summary mud-text-secondary mb-2" Typo="Typo.body2">@_topics.Count @(_topics.Count == 1 ? "topic" : "topics") &middot; @_topics.Sum(t => t.PartitionCount) partitions</MudText>
 
     <MudTable Items="FilteredTopics">
@@ -108,7 +110,11 @@ else
     private string _filterText = "";
     private string _connectionEcho = "";
 
-    private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
+    // Single, not FirstOrDefault -- same invariant every other lookup of the selected connection in
+    // this file relies on (a connection is always chosen from _connections before this is read;
+    // the "No connections yet" branch above renders instead of this markup when _connections is
+    // empty), applied uniformly rather than mixing conventions.
+    private ConnectionInfo? SelectedConnection => _connections.Single(c => c.Id == _selectedConnectionId);
 
     private IEnumerable<TopicSummary> FilteredTopics => string.IsNullOrWhiteSpace(_filterText)
         ? _topics
@@ -162,10 +168,12 @@ else
         _connectionEcho = result.IsSuccess ? result.Value! : "";
     }
 
-    // Peek.razor (Task 7) looks the connection's name and prod status up itself from
-    // ConnectionId, rather than trusting them off the URL -- same rule Service Bus's Peek.razor
-    // follows. partitionCount is only a display convenience (populating the partition selector
-    // without a second round trip), not security-relevant, so it's fine to carry on the URL.
+    // Kafka's Peek.razor has no destructive action to gate (unlike Service Bus's Peek.razor, which
+    // resolves ConnectionInfo itself to check IsProd before purge/resubmit), so it never injects
+    // IConnectionProvider or looks anything up from ConnectionId -- it just uses the connection
+    // config to fetch messages. Nothing carried on this URL (connectionId, partitionCount) is
+    // security-relevant: partitionCount is only a display convenience, populating the partition
+    // selector without a second round trip.
     private string PeekUrl(string topicName, int partitionCount)
     {
         var connection = _connections.Single(c => c.Id == _selectedConnectionId);
@@ -197,7 +205,12 @@ else
             { x => x.ConnectionName, connection.Name },
             { x => x.TopicName, topicName },
         };
-        await DialogService.ShowAsync<ProduceMessageDialog>("Produce message", parameters);
+        var dialog = await DialogService.ShowAsync<ProduceMessageDialog>("Produce message", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadTopicsAsync();
+        }
     }
 
     private async Task DeleteAsync(string topicName)

@@ -23,7 +23,7 @@ public class DeleteTopicCommandHandlerTests
 
         result.IsSuccess.Should().BeTrue();
         await operations.Received(1).DeleteTopicAsync("bootstrap.servers=real:9092", "orders", Arg.Any<CancellationToken>());
-        await audit.Received(1).RecordAsync("topic.delete", "kafka-dev/orders", ActionRisk.Destructive, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.topic.delete", "kafka-dev/orders", ActionRisk.Destructive, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -42,6 +42,6 @@ public class DeleteTopicCommandHandlerTests
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("not found");
-        await audit.Received(1).RecordAsync("topic.delete", "kafka-dev/orders", ActionRisk.Destructive, false, "not found", Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.topic.delete", "kafka-dev/orders", ActionRisk.Destructive, false, "not found", Arg.Any<CancellationToken>());
     }
 }

@@ -9,6 +9,7 @@ public class FriendlyKafkaErrorTests
     [Theory]
     [InlineData(ErrorCode.Local_AllBrokersDown, "Broker(s) unreachable")]
     [InlineData(ErrorCode.Local_Transport, "Broker(s) unreachable")]
+    [InlineData(ErrorCode.BrokerNotAvailable, "Broker(s) unreachable")]
     [InlineData(ErrorCode.SaslAuthenticationFailed, "Authentication failed")]
     [InlineData(ErrorCode.TopicAuthorizationFailed, "Authentication failed")]
     [InlineData(ErrorCode.UnknownTopicOrPart, "Topic not found")]

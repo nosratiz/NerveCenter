@@ -24,11 +24,11 @@ public sealed class ProduceMessageCommandHandler(IKafkaOperations operations, IC
         catch (Exception ex)
         {
             logger.LogError(ex, "Producing a message to {Target} failed.", target);
-            await audit.RecordAsync("message.produce", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
+            await audit.RecordAsync("kafka.message.produce", target, ActionRisk.Mutating, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
             return PluginResult.Fail(ex);
         }
 
-        await audit.RecordAsync("message.produce", target, ActionRisk.Mutating, succeeded: true, ct: ct);
+        await audit.RecordAsync("kafka.message.produce", target, ActionRisk.Mutating, succeeded: true, ct: ct);
         return PluginResult.Ok();
     }
 }

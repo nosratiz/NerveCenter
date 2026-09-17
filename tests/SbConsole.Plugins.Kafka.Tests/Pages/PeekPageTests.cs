@@ -2,6 +2,7 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Kafka.Client;
@@ -72,6 +73,46 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
     {
         NavigateToPeekQuery(_connectionId);
         var cut = RenderPage();
+
+        cut.FindAll(".partition-watermarks").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Changing_the_start_mode_after_a_fetch_hides_the_now_stale_watermark_caption()
+    {
+        _operations.PeekMessagesAsync("bootstrap.servers=real:9092", "orders", 0, PeekStart.Latest, null, 32, Arg.Any<CancellationToken>())
+            .Returns(new PeekResult(new List<KafkaMessageSummary> { new(0, 5, DateTimeOffset.UtcNow, "k1", "hello", false) }, 100, 205));
+
+        NavigateToPeekQuery(_connectionId);
+
+        // MudSelect's dropdown content is rendered by <MudPopoverProvider/>, a separate component
+        // the real app hosts once in its layout -- bUnit only renders what's given to Render(...),
+        // so a lone <Peek/> never gets the popover's <div class="mud-list-item"> markup in its
+        // subtree. Same pattern SbConsole.Web.Tests/AddEditConnectionDialogTests.cs uses.
+        RenderFragment fragment = builder =>
+        {
+            builder.OpenComponent<MudPopoverProvider>(0);
+            builder.CloseComponent();
+            builder.OpenComponent<SbConsole.Plugins.Kafka.Pages.Peek>(1);
+            builder.AddComponentParameter(2, nameof(SbConsole.Plugins.Kafka.Pages.Peek.TopicName), "orders");
+            builder.CloseComponent();
+        };
+        var cut = Render(fragment);
+
+        cut.Find("button.fetch-messages").Click();
+        await Task.Delay(30);
+        cut.Render();
+        cut.FindAll(".partition-watermarks").Should().ContainSingle();
+
+        // Open the "Start from" select (the second MudSelect on the page) and pick a different
+        // option without clicking Fetch again -- the caption belongs to the fetch that just ran
+        // and must disappear rather than keep showing a now-stale pairing.
+        cut.FindAll("div.mud-input-control.mud-select")[1].MouseDown(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await Task.Delay(30);
+        cut.Render();
+        cut.FindAll("div.mud-list-item").First(item => item.TextContent.Contains("Offset")).Click();
+        await Task.Delay(30);
+        cut.Render();
 
         cut.FindAll(".partition-watermarks").Should().BeEmpty();
     }

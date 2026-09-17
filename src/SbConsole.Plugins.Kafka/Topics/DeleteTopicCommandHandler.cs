@@ -24,11 +24,11 @@ public sealed class DeleteTopicCommandHandler(IKafkaOperations operations, IConn
         catch (Exception ex)
         {
             logger.LogError(ex, "Deleting topic {Target} failed.", target);
-            await audit.RecordAsync("topic.delete", target, ActionRisk.Destructive, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
+            await audit.RecordAsync("kafka.topic.delete", target, ActionRisk.Destructive, succeeded: false, detail: FriendlyKafkaError.From(ex), ct: ct);
             return PluginResult.Fail(ex);
         }
 
-        await audit.RecordAsync("topic.delete", target, ActionRisk.Destructive, succeeded: true, ct: ct);
+        await audit.RecordAsync("kafka.topic.delete", target, ActionRisk.Destructive, succeeded: true, ct: ct);
         return PluginResult.Ok();
     }
 }

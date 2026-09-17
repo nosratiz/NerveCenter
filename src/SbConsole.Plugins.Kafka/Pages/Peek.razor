@@ -9,13 +9,13 @@
 <h1>Peek: @TopicName</h1>
 
 <div class="d-flex flex-wrap gap-4 align-center my-4">
-    <MudSelect T="int" Label="Partition" @bind-Value="_partition" Style="min-width:120px">
-        @for (var i = 0; i < PartitionCount; i++)
+    <MudSelect T="int" Label="Partition" Value="_partition" ValueChanged="OnPartitionChanged" Style="min-width:120px">
+        @for (var i = 0; i < ClampedPartitionCount; i++)
         {
             <MudSelectItem Value="@i">@i</MudSelectItem>
         }
     </MudSelect>
-    <MudSelect T="PeekStart" Label="Start from" @bind-Value="_start" Style="min-width:160px">
+    <MudSelect T="PeekStart" Label="Start from" Value="_start" ValueChanged="OnStartChanged" Style="min-width:160px">
         <MudSelectItem Value="PeekStart.Earliest">Earliest</MudSelectItem>
         <MudSelectItem Value="PeekStart.Latest">Latest</MudSelectItem>
         <MudSelectItem Value="PeekStart.Offset">Offset</MudSelectItem>
@@ -66,6 +66,11 @@
     // the partition selector doesn't need a second round trip just to populate itself.
     [SupplyParameterFromQuery] public int PartitionCount { get; set; } = 1;
 
+    // PartitionCount arrives from the query string, so a mistyped/tampered huge value must not
+    // drive the @for loop below into rendering an enormous number of MudSelectItems -- clamped to
+    // CreateTopicDialog's own partition ceiling (1000).
+    private int ClampedPartitionCount => Math.Clamp(PartitionCount, 1, 1000);
+
     private IReadOnlyList<KafkaMessageSummary> _messages = [];
     private int _partition;
     private PeekStart _start = PeekStart.Latest;
@@ -75,6 +80,22 @@
     private long _lowWatermark;
     private long _highWatermark;
     private bool _hasFetched;
+
+    // Changing either selector invalidates the watermark caption from the last fetch (it belongs to
+    // the previous partition/start-mode combination) -- resetting _hasFetched hides the now-stale
+    // reading until the next explicit Fetch, rather than leaving the new partition number next to
+    // the old partition's watermarks.
+    private void OnPartitionChanged(int value)
+    {
+        _partition = value;
+        _hasFetched = false;
+    }
+
+    private void OnStartChanged(PeekStart value)
+    {
+        _start = value;
+        _hasFetched = false;
+    }
 
     private async Task LoadAsync()
     {

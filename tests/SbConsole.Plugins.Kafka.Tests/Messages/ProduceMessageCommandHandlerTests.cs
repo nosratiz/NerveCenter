@@ -23,7 +23,7 @@ public class ProduceMessageCommandHandlerTests
 
         result.IsSuccess.Should().BeTrue();
         await operations.Received(1).ProduceMessageAsync("bootstrap.servers=real:9092", "orders", "my-key", "my-value", null, Arg.Any<CancellationToken>());
-        await audit.Received(1).RecordAsync("message.produce", "kafka-dev/orders", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.message.produce", "kafka-dev/orders", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -42,6 +42,6 @@ public class ProduceMessageCommandHandlerTests
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("unknown topic");
-        await audit.Received(1).RecordAsync("message.produce", "kafka-dev/orders", ActionRisk.Mutating, false, "unknown topic", Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.message.produce", "kafka-dev/orders", ActionRisk.Mutating, false, "unknown topic", Arg.Any<CancellationToken>());
     }
 }

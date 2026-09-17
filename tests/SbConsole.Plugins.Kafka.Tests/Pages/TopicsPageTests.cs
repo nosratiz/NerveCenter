@@ -200,4 +200,45 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
 
         await _dialogService.Received(1).ShowAsync<ProduceMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>());
     }
+
+    [Fact]
+    public async Task Producing_a_message_reloads_the_topic_list_so_the_row_reflects_the_new_message_count()
+    {
+        // Consistency guard: OpenCreate already reloads the topic list on success (so a newly
+        // created row appears); OpenProduce used to discard the dialog result entirely and never
+        // reload, leaving a stale message count after a successful produce.
+        _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 3, 1, 42) });
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(true)));
+        _dialogService.ShowAsync<ProduceMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.Kafka.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.produce-action").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(2).ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Cancelling_the_produce_dialog_does_not_reload_the_topic_list()
+    {
+        _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 3, 1, 42) });
+        var dialogReference = Substitute.For<IDialogReference>();
+        dialogReference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Cancel()));
+        _dialogService.ShowAsync<ProduceMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>())
+            .Returns(Task.FromResult(dialogReference));
+
+        var cut = Render<SbConsole.Plugins.Kafka.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find("button.produce-action").Click();
+        await Task.Delay(30);
+
+        await _operations.Received(1).ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>());
+    }
 }

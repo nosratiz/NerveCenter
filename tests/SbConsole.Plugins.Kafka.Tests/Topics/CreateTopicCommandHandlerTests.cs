@@ -23,7 +23,7 @@ public class CreateTopicCommandHandlerTests
 
         result.IsSuccess.Should().BeTrue();
         await operations.Received(1).CreateTopicAsync("bootstrap.servers=real:9092", Arg.Is<CreateTopicRequest>(r => r.Name == "orders" && r.PartitionCount == 3 && r.ReplicationFactor == 1), Arg.Any<CancellationToken>());
-        await audit.Received(1).RecordAsync("topic.create", "kafka-dev/orders", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.topic.create", "kafka-dev/orders", ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -42,6 +42,6 @@ public class CreateTopicCommandHandlerTests
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("already exists");
-        await audit.Received(1).RecordAsync("topic.create", "kafka-dev/orders", ActionRisk.Mutating, false, "already exists", Arg.Any<CancellationToken>());
+        await audit.Received(1).RecordAsync("kafka.topic.create", "kafka-dev/orders", ActionRisk.Mutating, false, "already exists", Arg.Any<CancellationToken>());
     }
 }
