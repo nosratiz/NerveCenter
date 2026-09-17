@@ -1,0 +1,138 @@
+@page "/p/kafka/consumer-groups"
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.ConsumerGroups
+@using SbConsole.Sdk
+@* KafkaPlugin lives in the parent namespace SbConsole.Plugins.Kafka -- this page's own generated
+   namespace (SbConsole.Plugins.Kafka.Pages) does not see it implicitly, so LagProblemThreshold
+   below needs this explicit @using even though _Imports.razor already covers MudBlazor/Authorize. *@
+@using SbConsole.Plugins.Kafka
+@inject IConnectionProvider Connections
+@inject ListConsumerGroupsQueryHandler ListHandler
+@inject ISnackbar Snackbar
+
+<PageTitle>Consumer Groups</PageTitle>
+<h1>Consumer Groups</h1>
+
+@if (_connections.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No connections yet. Add an Apache Kafka connection to get started.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Cluster</MudText>
+            <MudMenu Class="cluster-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Typo="Typo.subtitle1" Style="font-family:monospace">@SelectedConnection?.Name</MudText>
+                        @if (SelectedConnection?.IsProd == true)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+                        }
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var connection in _connections)
+                    {
+                        <MudMenuItem Class="cluster-option" OnClick="@(() => OnConnectionChanged(connection.Id))">@connection.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        <MudTextField T="string" Class="group-filter" Placeholder="Filter groups..." @bind-Value="_filterText" Immediate="true" Style="max-width:220px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        <MudSpacer />
+        @if (_loading)
+        {
+            <MudProgressCircular Class="groups-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+
+    <MudText Class="groups-summary mud-text-secondary mb-2" Typo="Typo.body2">@_groups.Count @(_groups.Count == 1 ? "group" : "groups")</MudText>
+
+    <MudTable Items="FilteredGroups">
+        <HeaderContent>
+            <MudTh>Group ID</MudTh>
+            <MudTh>State</MudTh>
+            <MudTh>Members</MudTh>
+            <MudTh>Total Lag</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace">@context.GroupId</MudTd>
+            <MudTd>@context.State</MudTd>
+            <MudTd>@context.MemberCount</MudTd>
+            <MudTd>
+                @context.TotalLag
+                @if (context.TotalLag > KafkaPlugin.LagProblemThreshold)
+                {
+                    <MudChip T="string" Color="Color.Warning" Size="Size.Small" Class="high-lag-badge ms-2">high lag</MudChip>
+                }
+            </MudTd>
+            <MudTd>
+                <MudButton Class="view-group" Href="@DetailUrl(context.GroupId)">View</MudButton>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<ConsumerGroupSummary> _groups = [];
+    private Guid _selectedConnectionId;
+    private bool _loading;
+    private string _filterText = "";
+
+    private ConnectionInfo? SelectedConnection => _connections.Single(c => c.Id == _selectedConnectionId);
+
+    private IEnumerable<ConsumerGroupSummary> FilteredGroups => string.IsNullOrWhiteSpace(_filterText)
+        ? _groups
+        : _groups.Where(g => g.GroupId.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("kafka");
+        if (_connections.Count > 0)
+        {
+            _selectedConnectionId = _connections[0].Id;
+            await LoadGroupsAsync();
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid connectionId)
+    {
+        _selectedConnectionId = connectionId;
+        await LoadGroupsAsync();
+    }
+
+    private async Task LoadGroupsAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            if (result.IsSuccess)
+            {
+                _groups = result.Value!;
+            }
+            else
+            {
+                _groups = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string DetailUrl(string groupId)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        return $"/p/kafka/consumer-groups/{Uri.EscapeDataString(groupId)}?connectionId={connection.Id}";
+    }
+}
