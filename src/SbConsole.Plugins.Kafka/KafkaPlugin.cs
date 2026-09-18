@@ -18,13 +18,14 @@ public sealed class KafkaPlugin : IPlugin
     [
         new("Topics", "/p/kafka/topics"),
         new("Consumer Groups", "/p/kafka/consumer-groups"),
+        new("Dead-letter", "/p/kafka/dead-letter"),
     ];
     public string ConnectionKind => "kafka";
     public string ConnectionKindDisplayName => "Apache Kafka";
 
     // Topics: Create/Delete topic, Peek, Produce, Reset offset (5).
-    // Pages: Topics, Peek, ConsumerGroups, ConsumerGroupDetail (4).
-    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 5);
+    // Pages: Topics, Peek, ConsumerGroups, ConsumerGroupDetail, DeadLetterOverview (5).
+    public PluginContribution Contribution => new(PageCount: 5, ActionCount: 5);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -38,6 +39,7 @@ public sealed class KafkaPlugin : IPlugin
         services.AddScoped<ConsumerGroups.ListConsumerGroupsQueryHandler>();
         services.AddScoped<ConsumerGroups.GetConsumerGroupDetailQueryHandler>();
         services.AddScoped<ConsumerGroups.ResetConsumerGroupOffsetCommandHandler>();
+        services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`
