@@ -10,9 +10,14 @@
 
 <div class="d-flex flex-wrap gap-4 align-center my-4">
     <MudSelect T="int" Label="Partition" Value="_partition" ValueChanged="OnPartitionChanged" Style="min-width:120px">
+        @* A MudSelectItem's label is a RenderFragment, invoked after this loop has already
+           finished. A `for` loop has a single shared variable, so capturing `i` directly labelled
+           every option with its final value (the partition count) while Value -- passed eagerly --
+           stayed correct. The per-iteration copy is the same fix SendMessageDialog.razor uses. *@
         @for (var i = 0; i < ClampedPartitionCount; i++)
         {
-            <MudSelectItem Value="@i">@i</MudSelectItem>
+            var partition = i;
+            <MudSelectItem Value="@partition">@partition</MudSelectItem>
         }
     </MudSelect>
     <MudSelect T="PeekStart" Label="Start from" Value="_start" ValueChanged="OnStartChanged" Style="min-width:160px">

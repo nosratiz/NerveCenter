@@ -12,3 +12,7 @@ obj/
 # OS
 .DS_Store
 .superpowers/
+
+# Docker / local env
+.env
+**/dataprotection-keys/

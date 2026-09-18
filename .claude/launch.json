@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sbconsole-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/SbConsole.Web", "--launch-profile", "http"],
+      "port": 5249
+    }
+  ]
+}

@@ -1,0 +1,140 @@
+# Local development stack
+
+Everything SbConsole talks to, in containers. The app itself normally runs on the host
+(`dotnet run --project src/SbConsole.Web --launch-profile http`, or the `sbconsole-web`
+entry in `.claude/launch.json`); this stack provides the brokers.
+
+## Quick start
+
+```bash
+docker compose up -d
+```
+
+That starts:
+
+| Service      | Host address             | What it is                                              |
+|--------------|--------------------------|---------------------------------------------------------|
+| `kafka`      | `localhost:9092`         | Apache Kafka 4.1, single-node KRaft, plaintext, no auth |
+| `kafka-init` | (one-shot)               | Creates sample topics and drops a few messages in them  |
+| `kafka-ui`   | http://localhost:8080    | Kafbat Kafka UI, for inspecting the broker directly     |
+
+Seeded topics: `orders` (3 partitions, 5 messages), `payments` (3, 3), `notifications` (1, 2),
+`orders.dlq` (1, 1). Auto-create is **off**, so the plugin's "Create topic" is meaningful and a
+mistyped topic name fails loudly.
+
+### Connect the app to it
+
+In SbConsole, **Connections → Add**, kind *Apache Kafka*, secret:
+
+```
+bootstrap.servers=localhost:9092
+```
+
+That is the whole secret for the local broker: no `security.protocol`, no SASL keys. The
+`Test` button should go green immediately, and the Topics page lists the four seeded topics.
+
+## Azure Service Bus emulator (opt-in)
+
+```bash
+docker compose --profile servicebus up -d
+```
+
+Adds SQL Server 2022 (the emulator's store) and the official emulator. Both images are
+Microsoft-licensed and the compose file sets `ACCEPT_EULA=Y` for them; read those licences
+before relying on this in anything but local development. SQL Server ships amd64-only, so on
+Apple Silicon it runs under Rosetta emulation: allow 30-60 s for the first healthy start.
+
+| Service               | Host address       |
+|-----------------------|--------------------|
+| `sqlserver`           | `localhost:1433` (not published; internal only) |
+| `servicebus-emulator` | `localhost:5672` (AMQP), `localhost:5300` (HTTP) |
+
+Entities are declared up front in [`servicebus/Config.json`](servicebus/Config.json): queues
+`orders` and `payments`; topic `events` with subscriptions `all-events` and `order-events`
+(the latter has a correlation rule on `Label = order`). Edit that file and
+`docker compose --profile servicebus restart servicebus-emulator` to change them.
+
+Connection string for the app (kind *Azure Service Bus*):
+
+```
+Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+```
+
+`SAS_KEY_VALUE` is literal: the emulator accepts exactly that key. Do **not** add a port to
+that endpoint, and see the note below for why the management API is published on port 80.
+
+Verified against this stack: connection test, list/create/delete queue, list topics, list
+subscriptions, list rules, send, peek, and the dead-letter overview all succeed.
+
+**One emulator limitation, and it is not a bug in this app.** Queue and subscription message
+counts always render as 0 against the emulator even when messages are there, while Peek returns
+them correctly. The cause is in the emulator's management API, not our code: its queue
+description responses carry `<MessageCount>0</MessageCount>` and no `<CountDetails>` element at
+all, which is the element the Azure SDK populates `ActiveMessageCount`, `DeadLetterMessageCount`
+and `ScheduledMessageCount` from. Adding `?enrich=true` changes nothing. The plugin already
+calls the correct API (`GetQueuesRuntimePropertiesAsync`, not `GetQueuesAsync`), so counts are
+real against an actual Service Bus namespace.
+
+Check it yourself:
+
+```bash
+curl -s 'http://localhost/$Resources/Queues' | grep -c CountDetails
+```
+
+Practical consequence: count-driven UI (the dead-letter overview, the wallboard backlog, the
+queue sparklines) cannot be exercised against the emulator. Use Kafka locally for that work --
+its partition watermarks are real, so the Kafka topic message counts are too.
+
+### Why the management API is on port 80
+
+The Azure SDK derives two endpoints from one connection string, and they disagree about ports:
+
+| Client                             | Protocol | Port it uses                       |
+|------------------------------------|----------|------------------------------------|
+| `ServiceBusClient`                 | AMQP     | the endpoint's port, else **5672** |
+| `ServiceBusAdministrationClient`   | HTTP     | the endpoint's port, else **80**   |
+
+So an endpoint naming a port breaks one client or the other: `sb://localhost:5300` gives
+working management pages and AMQP timeouts, while `sb://localhost` gives working send/peek and
+management calls refused on port 80. Publishing the emulator's 5300 as host port 80 is what
+lets a single unported endpoint drive both. If port 80 is taken on your machine, move it with
+`SERVICEBUS_HTTP_PORT` and accept that the plugin's management pages will fail.
+
+## SbConsole in a container (opt-in)
+
+```bash
+cp .env.example .env         # then fill in SBC_DATA_KEY / SBC_ADMIN_PASSWORD / SBC_API_KEY
+docker compose --profile app up -d --build
+```
+
+Builds [`../Dockerfile`](../Dockerfile) (multi-stage, .NET 10 SDK → ASP.NET runtime, runs as
+the non-root `app` user) and serves it on http://localhost:5249. SQLite database and
+data-protection keys live in the `sbconsole-data` volume at `/data`.
+
+Connections added from inside the container need different addresses than the host uses:
+
+| Broker           | From the host                | From the containerised app        |
+|------------------|------------------------------|-----------------------------------|
+| Kafka            | `bootstrap.servers=localhost:9092` | `bootstrap.servers=kafka:29092` |
+| Service Bus      | `Endpoint=sb://localhost;...`      | `Endpoint=sb://host.docker.internal;...` |
+
+Kafka is reached by its service name because the broker advertises an internal listener on
+`kafka:29092`. The emulator is reached back through the host instead, because its own container
+answers management calls on 5300 while the SDK's admin client insists on port 80 (above) --
+the host publishes the right ports, the container does not.
+
+## Ports and overrides
+
+Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
+`KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
+`SBC_HOST_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the broker advertises
+to host clients, so the secret you paste into the app must use the same port.
+
+## Reset
+
+```bash
+docker compose --profile servicebus --profile app down -v
+```
+
+`-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's
+SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.

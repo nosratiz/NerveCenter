@@ -118,6 +118,41 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Partition_select_labels_each_option_with_its_own_partition_index()
+    {
+        // PartitionCount rides the query string (Topics.razor's PeekUrl puts it there), so it has
+        // to be navigated in rather than passed as a render parameter -- same split as ConnectionId.
+        var navigationManager = Services.GetRequiredService<NavigationManager>();
+        navigationManager.NavigateTo(navigationManager.GetUriWithQueryParameters(
+            new Dictionary<string, object?> { ["ConnectionId"] = _connectionId, ["PartitionCount"] = 3 }));
+
+        // MudPopoverProvider for the same reason the start-mode test above needs it: a MudSelect's
+        // options are rendered by the provider, not inside <Peek/>'s own subtree.
+        RenderFragment fragment = builder =>
+        {
+            builder.OpenComponent<MudPopoverProvider>(0);
+            builder.CloseComponent();
+            builder.OpenComponent<SbConsole.Plugins.Kafka.Pages.Peek>(1);
+            builder.AddComponentParameter(2, nameof(SbConsole.Plugins.Kafka.Pages.Peek.TopicName), "orders");
+            builder.CloseComponent();
+        };
+        var cut = Render(fragment);
+
+        // Open the "Partition" select -- the first MudSelect on the page.
+        cut.FindAll("div.mud-input-control.mud-select")[0].MouseDown(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await Task.Delay(30);
+        cut.Render();
+
+        // Only the numeric options belong to this select; "Start from" contributes word labels.
+        var partitionLabels = cut.FindAll("div.mud-list-item")
+            .Select(item => item.TextContent.Trim())
+            .Where(text => text.Length > 0 && text.All(char.IsDigit))
+            .ToList();
+
+        partitionLabels.Should().Equal("0", "1", "2");
+    }
+
+    [Fact]
     public async Task A_failed_fetch_after_a_successful_one_keeps_the_previous_watermarks_displayed()
     {
         var successResult = new PeekResult(new List<KafkaMessageSummary> { new(0, 5, DateTimeOffset.UtcNow, "k1", "hello", false) }, 100, 205);
