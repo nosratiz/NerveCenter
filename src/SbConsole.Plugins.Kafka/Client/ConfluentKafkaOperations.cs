@@ -399,11 +399,18 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
     }
 
+    // Named constant (rather than the literal "-dlq" in one spot and a matching magic `4` in the
+    // other) so OriginalTopicName's substring length can never drift out of sync with the suffix
+    // IsDlqTopic checks for -- OriginalTopicName is internal, so a future caller reaching it
+    // directly (without going through IsDlqTopic first) would otherwise be one accidental edit away
+    // from an ArgumentOutOfRangeException on a short name.
+    private const string DlqSuffix = "-dlq";
+
     // Extracted as pure static functions, same reasoning as ComputeLag/IsEndOfPartition/Decode --
     // unit-testable without a real broker.
-    internal static bool IsDlqTopic(string name) => name.EndsWith("-dlq", StringComparison.Ordinal);
+    internal static bool IsDlqTopic(string name) => name.EndsWith(DlqSuffix, StringComparison.Ordinal);
 
-    internal static string OriginalTopicName(string dlqTopicName) => dlqTopicName[..^4];
+    internal static string OriginalTopicName(string dlqTopicName) => dlqTopicName[..^DlqSuffix.Length];
 
     public Task<IReadOnlyList<DeadLetterTopicSummary>> ListDeadLetterTopicsAsync(string config, CancellationToken ct = default) =>
         Task.Run<IReadOnlyList<DeadLetterTopicSummary>>(() =>
@@ -427,6 +434,13 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             var results = new List<DeadLetterTopicSummary>();
             foreach (var topic in dlqTopics)
             {
+                // Checked once per topic (not per partition) -- ct is otherwise never observed once
+                // this Task.Run body starts, so a caller that already gave up could tie up a
+                // thread-pool thread for up to AttemptTimeout per nonempty partition; per-topic
+                // granularity is enough to bound that without checking on every iteration of the
+                // inner partition loop.
+                ct.ThrowIfCancellationRequested();
+
                 long totalCount = 0;
                 DateTimeOffset? oldest = null;
                 foreach (var partition in topic.Partitions)

@@ -74,11 +74,13 @@ public class KafkaPluginTests
     // and the page renders "Connection not found"), and Kafka group IDs are nearly unconstrained so the
     // group ID segment must be escaped -- same shape as ConsumerGroups.razor's own DetailUrl. Exercises
     // BuildConsumerGroupProblemLink itself (the exact expression GetDashboardProblemsAsync's Select
-    // uses to build each problem's LinkHref), not a copy of its logic. Can no longer exercise
-    // GetDashboardProblemsAsync end-to-end for this: since Task 5 added an uncached dead-letter-topics
-    // fetch to that method (see KafkaPlugin.cs), pre-seeding only the ListConsumerGroups cache no
-    // longer shields a full call to it from a real broker -- same reason ServiceBusPluginTests has no
-    // end-to-end test of its own GetDashboardProblemsAsync either.
+    // uses to build each problem's LinkHref), not a copy of its logic. Not exercised end-to-end via
+    // GetDashboardProblemsAsync itself: even though both ListConsumerGroupsAsync and
+    // ListDeadLetterTopicsAsync now sit behind a short-lived cache (GetCachedConsumerGroupsAsync /
+    // GetCachedDeadLetterTopicsAsync in KafkaPlugin.cs), the public GetDashboardProblemsAsync entry
+    // point always seeds those caches via the real ConfluentKafkaOperations fetch delegates, which
+    // still hit a real broker -- same reason ServiceBusPluginTests has no end-to-end test of its own
+    // GetDashboardProblemsAsync either.
     [Fact]
     public void BuildConsumerGroupProblemLink_escapes_the_group_id_and_carries_connectionId()
     {
@@ -145,6 +147,66 @@ public class KafkaPluginTests
         var now = DateTimeOffset.UtcNow;
         await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionA, now, Fetch, CancellationToken.None);
         await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionB, now, Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_reuses_the_result_for_a_repeat_call_within_the_TTL()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        var topics = new List<DeadLetterTopicSummary> { new("orders-dlq", "orders", 1, 42, null) };
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>(topics);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var first = await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 30 seconds later, still within the ~60s TTL -- should reuse the cached result, not fetch again.
+        var second = await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now.AddSeconds(30), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(1);
+        first.Should().BeSameAs(topics);
+        second.Should().BeSameAs(topics);
+    }
+
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_fetches_again_once_the_TTL_has_expired()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>([new DeadLetterTopicSummary("a-dlq", "a", 1, callCount, null)]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 61 seconds later -- past the ~60s TTL -- should fetch a fresh result.
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now.AddSeconds(61), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_caches_independently_per_connection_string()
+    {
+        var connectionA = $"conn-a-{Guid.NewGuid()}";
+        var connectionB = $"conn-b-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>([]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionA, now, Fetch, CancellationToken.None);
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionB, now, Fetch, CancellationToken.None);
 
         callCount.Should().Be(2);
     }

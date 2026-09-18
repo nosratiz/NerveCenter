@@ -110,6 +110,48 @@ public sealed class KafkaPlugin : IPlugin
         return groups;
     }
 
+    // Short-lived cache for ListDeadLetterTopicsAsync's result, mirroring ConsumerGroupsCache above
+    // for the exact same reason: GetDashboardProblemsAsync, GetDeadLetterBadgeAsync, and
+    // GetOldestDeadLetterAsync each independently trigger the full dead-letter broker walk (metadata
+    // fetch, per-partition watermark queries, and a blocking Consume per nonempty partition -- the
+    // heaviest operation ConfluentKafkaOperations performs), and NavMenu.razor's badge poll plus the
+    // dashboard/wallboard refreshes mean an open console would otherwise repeat that walk up to three
+    // times over identical data every cycle. `static` for the same reason as ConsumerGroupsCache:
+    // KafkaPlugin instances are constructed fresh via new() on every call, so a static field is the
+    // only way to share the cached result across these call paths. Deliberately NOT used by
+    // ListDeadLetterOverviewQueryHandler (the Dead-letter overview page's user-initiated load) -- that
+    // page's explicit load should stay fresh, exactly like ListConsumerGroupsQueryHandler was
+    // deliberately left uncached for the identical reason.
+    private static readonly ConcurrentDictionary<string, (DateTimeOffset ExpiresAt, IReadOnlyList<DeadLetterTopicSummary> Topics)> DeadLetterTopicsCache = new();
+
+    private static readonly TimeSpan DeadLetterTopicsCacheTtl = TimeSpan.FromSeconds(60);
+
+    private static Task<IReadOnlyList<DeadLetterTopicSummary>> GetCachedDeadLetterTopicsAsync(string connectionString, CancellationToken ct) =>
+        GetCachedDeadLetterTopicsAsync(
+            connectionString,
+            DateTimeOffset.UtcNow,
+            static (cs, t) => new ConfluentKafkaOperations().ListDeadLetterTopicsAsync(cs, t),
+            ct);
+
+    // `now` and `fetch` are parameters for the same testability reason as
+    // GetCachedConsumerGroupsAsync's overload above: the cache's reuse/expiry behavior can then be
+    // unit-tested with a counting fake fetcher and a controlled clock, without a real broker.
+    internal static async Task<IReadOnlyList<DeadLetterTopicSummary>> GetCachedDeadLetterTopicsAsync(
+        string connectionString,
+        DateTimeOffset now,
+        Func<string, CancellationToken, Task<IReadOnlyList<DeadLetterTopicSummary>>> fetch,
+        CancellationToken ct)
+    {
+        if (DeadLetterTopicsCache.TryGetValue(connectionString, out var cached) && cached.ExpiresAt > now)
+        {
+            return cached.Topics;
+        }
+
+        var topics = await fetch(connectionString, ct);
+        DeadLetterTopicsCache[connectionString] = (now + DeadLetterTopicsCacheTtl, topics);
+        return topics;
+    }
+
     public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default)
     {
@@ -123,7 +165,7 @@ public sealed class KafkaPlugin : IPlugin
                 BuildConsumerGroupProblemLink(connectionId, g.GroupId)))
             .ToList();
 
-        var dlqTopics = await new ConfluentKafkaOperations().ListDeadLetterTopicsAsync(connectionString, ct);
+        var dlqTopics = await GetCachedDeadLetterTopicsAsync(connectionString, ct);
         problems.AddRange(dlqTopics
             .Where(HasDeadLetterMessages)
             .Select(t => new PluginDashboardProblem(
@@ -135,13 +177,9 @@ public sealed class KafkaPlugin : IPlugin
         return problems;
     }
 
-    // Extracted as a pure static function, same reasoning as HasHighLag/HasDeadLetterMessages --
-    // GetDashboardProblemsAsync's own broker round trip now also includes an uncached dead-letter-
-    // topics fetch (see ListDeadLetterTopicsAsync below, deliberately uncached to match
-    // ServiceBusPlugin's identical GetDashboardProblemsAsync/ListQueuesAsync shape), so pre-seeding
-    // only the consumer-groups cache (GetCachedConsumerGroupsAsync) no longer shields a call to the
-    // full method from a real broker. This link-building expression is pulled out so its escaping/
-    // connectionId behavior stays unit-testable without one.
+    // Extracted as a pure static function, same reasoning as HasHighLag/HasDeadLetterMessages. This
+    // link-building expression is pulled out so its escaping/connectionId behavior stays
+    // unit-testable without a real broker.
     internal static string BuildConsumerGroupProblemLink(Guid connectionId, string groupId) =>
         $"/p/kafka/consumer-groups/{Uri.EscapeDataString(groupId)}?connectionId={connectionId}";
 
@@ -178,7 +216,7 @@ public sealed class KafkaPlugin : IPlugin
 
     private static async Task<int?> GetDeadLetterBadgeAsync(string connectionString, CancellationToken ct)
     {
-        var topics = await new ConfluentKafkaOperations().ListDeadLetterTopicsAsync(connectionString, ct);
+        var topics = await GetCachedDeadLetterTopicsAsync(connectionString, ct);
         var total = topics.Sum(t => t.ApproximateMessageCount);
         // null (never 0) when nothing is flagged -- same NavMenu.razor rendering rule
         // GetConsumerGroupBadgeAsync already follows.
@@ -188,7 +226,7 @@ public sealed class KafkaPlugin : IPlugin
     public async Task<OldestDeadLetterEntry?> GetOldestDeadLetterAsync(
         Guid connectionId, string connectionString, CancellationToken ct = default)
     {
-        var topics = await new ConfluentKafkaOperations().ListDeadLetterTopicsAsync(connectionString, ct);
+        var topics = await GetCachedDeadLetterTopicsAsync(connectionString, ct);
         var oldest = PickOldestDeadLetterTopic(topics);
 
         // ResourceName/DeadLetterCount are the DLQ topic's own name and count -- matching how
