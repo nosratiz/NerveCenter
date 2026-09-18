@@ -349,9 +349,15 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
     }
 
     // Extracted as a pure static function, same reasoning as ComputeLag/IsEndOfPartition/Decode --
-    // unit-testable without a real broker.
-    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue) =>
-        offsetsForTimesResultValue == -1 ? Offset.End : new Offset(offsetsForTimesResultValue);
+    // unit-testable without a real broker. highWatermarkFallback (a real, resolved offset) is used
+    // instead of the Offset.End sentinel when no message exists at/after the timestamp, for the
+    // same reason Earliest/Latest below resolve to real watermark values rather than the
+    // Offset.Beginning/Offset.End sentinels: AlterConsumerGroupOffsetsAsync sets a literal
+    // committed offset and rejects a sentinel value with "offset must be >= 0" -- confirmed against
+    // a real broker, not assumed. (Sentinels ARE valid for consumer.Assign, which PeekMessagesAsync
+    // uses -- that's a different, more permissive API that resolves them internally.)
+    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue, long highWatermarkFallback) =>
+        offsetsForTimesResultValue == -1 ? new Offset(highWatermarkFallback) : new Offset(offsetsForTimesResultValue);
 
     public async Task ResetConsumerGroupOffsetAsync(
         string config, string groupId, string topicName, int partition, OffsetResetMode mode,
@@ -360,25 +366,31 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
         var topicPartition = new TopicPartition(topicName, new Partition(partition));
 
         Offset resolvedOffset;
-        if (mode == OffsetResetMode.Timestamp)
+        if (mode == OffsetResetMode.Offset)
         {
-            using var timestampConsumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
-            resolvedOffset = await Task.Run(() =>
-            {
-                var results = timestampConsumer.OffsetsForTimes(
-                    [new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout);
-                return ResolveTimestampLookupResult(results[0].Offset.Value);
-            }, ct);
+            resolvedOffset = new Offset(offset!.Value);
         }
         else
         {
-            resolvedOffset = mode switch
+            // Earliest/Latest/Timestamp all need a real, resolved offset -- see the comment on
+            // ResolveTimestampLookupResult above for why the sentinels can't be used here. Both
+            // QueryWatermarkOffsets and OffsetsForTimes are synchronous/blocking, so the whole
+            // resolution runs inside one Task.Run, same convention as every other blocking call in
+            // this class.
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            resolvedOffset = await Task.Run(() =>
             {
-                OffsetResetMode.Earliest => Offset.Beginning,
-                OffsetResetMode.Latest => Offset.End,
-                OffsetResetMode.Offset => new Offset(offset!.Value),
-                _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
-            };
+                var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
+                return mode switch
+                {
+                    OffsetResetMode.Earliest => watermarks.Low,
+                    OffsetResetMode.Latest => watermarks.High,
+                    OffsetResetMode.Timestamp => ResolveTimestampLookupResult(
+                        consumer.OffsetsForTimes([new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout)[0].Offset.Value,
+                        watermarks.High.Value),
+                    _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
+                };
+            }, ct);
         }
 
         using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
