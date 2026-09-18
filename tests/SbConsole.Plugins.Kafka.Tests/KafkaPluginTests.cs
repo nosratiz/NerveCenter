@@ -73,23 +73,20 @@ public class KafkaPluginTests
     // requires ?connectionId= to resolve the connection (without it, ConnectionId binds to Guid.Empty
     // and the page renders "Connection not found"), and Kafka group IDs are nearly unconstrained so the
     // group ID segment must be escaped -- same shape as ConsumerGroups.razor's own DetailUrl. Exercises
-    // GetDashboardProblemsAsync itself (not a copy of its logic) by pre-seeding the ListConsumerGroups
-    // cache for this connection string with a fake fetch, so GetDashboardProblemsAsync's own call to
-    // GetCachedConsumerGroupsAsync hits the cache instead of the real broker (which crashes the process
-    // on this environment -- see the comment above on GetDashboardProblemsAsync's missing smoke test).
+    // BuildConsumerGroupProblemLink itself (the exact expression GetDashboardProblemsAsync's Select
+    // uses to build each problem's LinkHref), not a copy of its logic. Can no longer exercise
+    // GetDashboardProblemsAsync end-to-end for this: since Task 5 added an uncached dead-letter-topics
+    // fetch to that method (see KafkaPlugin.cs), pre-seeding only the ListConsumerGroups cache no
+    // longer shields a full call to it from a real broker -- same reason ServiceBusPluginTests has no
+    // end-to-end test of its own GetDashboardProblemsAsync either.
     [Fact]
-    public async Task GetDashboardProblemsAsync_links_to_the_group_detail_page_with_an_escaped_group_id_and_connectionId()
+    public void BuildConsumerGroupProblemLink_escapes_the_group_id_and_carries_connectionId()
     {
-        var plugin = new KafkaPlugin();
         var connectionId = Guid.NewGuid();
-        var connectionString = $"conn-{connectionId}";
-        var fetch = FakeFetch([new ConsumerGroupSummary("orders/consumer group", "Stable", 1, KafkaPlugin.LagProblemThreshold + 1)]);
-        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, DateTimeOffset.UtcNow, fetch, CancellationToken.None);
 
-        var problems = await plugin.GetDashboardProblemsAsync(connectionId, connectionString, store: null!);
+        var link = KafkaPlugin.BuildConsumerGroupProblemLink(connectionId, "orders/consumer group");
 
-        problems.Should().ContainSingle().Which.LinkHref.Should().Be(
-            $"/p/kafka/consumer-groups/{Uri.EscapeDataString("orders/consumer group")}?connectionId={connectionId}");
+        link.Should().Be($"/p/kafka/consumer-groups/{Uri.EscapeDataString("orders/consumer group")}?connectionId={connectionId}");
     }
 
     [Fact]
@@ -152,6 +149,30 @@ public class KafkaPluginTests
         callCount.Should().Be(2);
     }
 
-    private static Func<string, CancellationToken, Task<IReadOnlyList<ConsumerGroupSummary>>> FakeFetch(IReadOnlyList<ConsumerGroupSummary> groups) =>
-        (_, _) => Task.FromResult(groups);
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void HasDeadLetterMessages_reflects_whether_the_topic_has_any_retained_messages(long count, bool expected)
+    {
+        var topic = new DeadLetterTopicSummary("orders-dlq", "orders", 1, count, null);
+
+        KafkaPlugin.HasDeadLetterMessages(topic).Should().Be(expected);
+    }
+
+    [Fact]
+    public void PickOldestDeadLetterTopic_returns_null_when_no_topic_has_a_timestamp()
+    {
+        var topics = new[] { new DeadLetterTopicSummary("a-dlq", "a", 1, 0, null) };
+
+        KafkaPlugin.PickOldestDeadLetterTopic(topics).Should().BeNull();
+    }
+
+    [Fact]
+    public void PickOldestDeadLetterTopic_returns_the_topic_with_the_earliest_timestamp()
+    {
+        var older = new DeadLetterTopicSummary("a-dlq", "a", 1, 3, DateTimeOffset.UtcNow.AddHours(-2));
+        var newer = new DeadLetterTopicSummary("b-dlq", "b", 1, 1, DateTimeOffset.UtcNow.AddHours(-1));
+
+        KafkaPlugin.PickOldestDeadLetterTopic([newer, older]).Should().Be(older);
+    }
 }
