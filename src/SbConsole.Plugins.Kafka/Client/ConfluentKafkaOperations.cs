@@ -398,4 +398,66 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             [new ConsumerGroupTopicPartitionOffsets(groupId, [new TopicPartitionOffset(topicPartition, resolvedOffset)])],
             new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
     }
+
+    // Extracted as pure static functions, same reasoning as ComputeLag/IsEndOfPartition/Decode --
+    // unit-testable without a real broker.
+    internal static bool IsDlqTopic(string name) => name.EndsWith("-dlq", StringComparison.Ordinal);
+
+    internal static string OriginalTopicName(string dlqTopicName) => dlqTopicName[..^4];
+
+    public Task<IReadOnlyList<DeadLetterTopicSummary>> ListDeadLetterTopicsAsync(string config, CancellationToken ct = default) =>
+        Task.Run<IReadOnlyList<DeadLetterTopicSummary>>(() =>
+        {
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            var metadata = admin.GetMetadata(AttemptTimeout);
+            var dlqTopics = metadata.Topics.Where(t => IsDlqTopic(t.Topic)).ToList();
+            if (dlqTopics.Count == 0)
+            {
+                return [];
+            }
+
+            // One throwaway consumer, reused sequentially across every DLQ topic's partitions below
+            // -- Assign/Consume/Unassign per nonempty partition, never committing. Same "fresh,
+            // never-reused group.id" convention every other read-only operation in this class uses;
+            // the repeated Assign/Unassign on one instance (rather than a fresh consumer per
+            // partition) is new to this method -- see this plan's Global Constraints for why Task 6
+            // exists to verify this against a real broker.
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+
+            var results = new List<DeadLetterTopicSummary>();
+            foreach (var topic in dlqTopics)
+            {
+                long totalCount = 0;
+                DateTimeOffset? oldest = null;
+                foreach (var partition in topic.Partitions)
+                {
+                    var topicPartition = new TopicPartition(topic.Topic, new Partition(partition.PartitionId));
+                    var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
+                    var count = watermarks.High.Value - watermarks.Low.Value;
+                    totalCount += count;
+
+                    if (count <= 0)
+                    {
+                        continue;
+                    }
+
+                    consumer.Assign(new TopicPartitionOffset(topicPartition, new Offset(watermarks.Low.Value)));
+                    var result = consumer.Consume(AttemptTimeout);
+                    consumer.Unassign();
+
+                    if (result is not null && !result.IsPartitionEOF)
+                    {
+                        var timestamp = result.Message.Timestamp.UtcDateTime;
+                        if (oldest is null || timestamp < oldest)
+                        {
+                            oldest = timestamp;
+                        }
+                    }
+                }
+
+                results.Add(new DeadLetterTopicSummary(topic.Topic, OriginalTopicName(topic.Topic), topic.Partitions.Count, totalCount, oldest));
+            }
+
+            return results;
+        }, ct);
 }

@@ -50,4 +50,6 @@ public interface IKafkaOperations
     Task ResetConsumerGroupOffsetAsync(
         string config, string groupId, string topicName, int partition, OffsetResetMode mode,
         long? offset, DateTimeOffset? timestamp, CancellationToken ct = default);
+
+    Task<IReadOnlyList<DeadLetterTopicSummary>> ListDeadLetterTopicsAsync(string config, CancellationToken ct = default);
 }

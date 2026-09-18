@@ -153,4 +153,22 @@ public class ConfluentKafkaOperationsTests
     {
         ConfluentKafkaOperations.ResolveTimestampLookupResult(4242, highWatermarkFallback: 777).Should().Be(new Offset(4242));
     }
+
+    [Theory]
+    [InlineData("orders-dlq", true)]
+    [InlineData("orders", false)]
+    [InlineData("orders-dlq-archive", false)]  // "-dlq" not at the end -- must not match
+    [InlineData("-dlq", true)]                  // degenerate but valid: empty original name
+    public void IsDlqTopic_matches_only_the_dash_dlq_suffix(string name, bool expected)
+    {
+        ConfluentKafkaOperations.IsDlqTopic(name).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("orders-dlq", "orders")]
+    [InlineData("-dlq", "")]
+    public void OriginalTopicName_strips_the_dash_dlq_suffix(string dlqTopicName, string expected)
+    {
+        ConfluentKafkaOperations.OriginalTopicName(dlqTopicName).Should().Be(expected);
+    }
 }
