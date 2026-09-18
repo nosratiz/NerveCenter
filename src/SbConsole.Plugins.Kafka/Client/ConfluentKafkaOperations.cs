@@ -222,4 +222,168 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
         var topicPartition = new TopicPartition(topicName, partition is { } p ? new Partition(p) : Partition.Any);
         await producer.ProduceAsync(topicPartition, message, ct);
     }
+
+    // Extracted as a pure static function so the "clamp to >= 0" rule (design spec §3 -- a
+    // committed offset can be momentarily ahead of a just-moved watermark) is unit-testable
+    // without a real broker, same reasoning as IsEndOfPartition/Decode above.
+    internal static long ComputeLag(long committedOffset, long highWatermark) => Math.Max(0, highWatermark - committedOffset);
+
+    // Shared by ListConsumerGroupsAsync (below) and GetConsumerGroupDetailAsync (Task 3). Passing
+    // null for topicPartitions is librdkafka's documented way to mean "every topic-partition this
+    // group has a committed offset for" -- see this plan's Global Constraints; not asserted by any
+    // .NET doc comment, so it isn't (and can't be) covered by a unit test.
+    internal static async Task<IReadOnlyList<TopicPartitionOffsetError>> GetCommittedOffsetsAsync(IAdminClient admin, string groupId)
+    {
+        var results = await admin.ListConsumerGroupOffsetsAsync(
+            [new ConsumerGroupTopicPartitions(groupId, null)],
+            new ListConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
+        return results[0].Partitions;
+    }
+
+    public async Task<IReadOnlyList<ConsumerGroupSummary>> ListConsumerGroupsAsync(string config, CancellationToken ct = default)
+    {
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+
+        var listResult = await admin.ListConsumerGroupsAsync(new ListConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        if (listResult.Valid.Count == 0)
+        {
+            return [];
+        }
+
+        var groupIds = listResult.Valid.Select(g => g.GroupId).ToList();
+        var describeResult = await admin.DescribeConsumerGroupsAsync(groupIds, new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        var memberCountByGroup = describeResult.ConsumerGroupDescriptions.ToDictionary(d => d.GroupId, d => d.Members.Count);
+
+        // One throwaway consumer group, reused across every group's watermark lookups below -- same
+        // "fresh, never-reused group.id, purely to ask the cluster for watermark offsets" convention
+        // ListTopicsAsync already uses.
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+
+        var summaries = new List<ConsumerGroupSummary>();
+        foreach (var listing in listResult.Valid)
+        {
+            var offsets = await GetCommittedOffsetsAsync(admin, listing.GroupId);
+            var totalLag = await Task.Run(() =>
+            {
+                long total = 0;
+                foreach (var partition in offsets)
+                {
+                    if (partition.Error.IsError)
+                    {
+                        continue;
+                    }
+
+                    if (partition.Offset == Offset.Unset)
+                    {
+                        continue;
+                    }
+
+                    var watermarks = consumer.QueryWatermarkOffsets(partition.TopicPartition, AttemptTimeout);
+                    total += ComputeLag(partition.Offset.Value, watermarks.High.Value);
+                }
+
+                return total;
+            }, ct);
+
+            summaries.Add(new ConsumerGroupSummary(listing.GroupId, listing.State.ToString(), memberCountByGroup.GetValueOrDefault(listing.GroupId, 0), totalLag));
+        }
+
+        return summaries;
+    }
+
+    public async Task<ConsumerGroupDetail> GetConsumerGroupDetailAsync(string config, string groupId, CancellationToken ct = default)
+    {
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+
+        var describeResult = await admin.DescribeConsumerGroupsAsync([groupId], new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
+        var description = describeResult.ConsumerGroupDescriptions[0];
+
+        // Maps each currently-assigned TopicPartition to the member holding it -- a partition with
+        // a committed offset but no entry here is idle (design spec §3).
+        var assignedTo = new Dictionary<TopicPartition, (string? ClientId, string? Host)>();
+        foreach (var member in description.Members)
+        {
+            foreach (var topicPartition in member.Assignment.TopicPartitions)
+            {
+                assignedTo[topicPartition] = (member.ClientId, member.Host);
+            }
+        }
+
+        var offsets = await GetCommittedOffsetsAsync(admin, groupId);
+
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+        var partitionLags = await Task.Run(() =>
+        {
+            var result = new List<ConsumerGroupPartitionLag>();
+            foreach (var partition in offsets)
+            {
+                if (partition.Error.IsError)
+                {
+                    continue;
+                }
+
+                if (partition.Offset == Offset.Unset)
+                {
+                    continue;
+                }
+
+                var watermarks = consumer.QueryWatermarkOffsets(partition.TopicPartition, AttemptTimeout);
+                assignedTo.TryGetValue(partition.TopicPartition, out var member);
+                result.Add(new ConsumerGroupPartitionLag(
+                    partition.Topic, partition.Partition.Value, partition.Offset.Value, watermarks.High.Value,
+                    ComputeLag(partition.Offset.Value, watermarks.High.Value), member.ClientId, member.Host));
+            }
+
+            return result;
+        }, ct);
+
+        var members = description.Members
+            .Select(m => new ConsumerGroupMember(
+                m.ClientId, m.Host,
+                (IReadOnlyList<TopicPartitionRef>)m.Assignment.TopicPartitions
+                    .Select(tp => new TopicPartitionRef(tp.Topic, tp.Partition.Value))
+                    .ToList()))
+            .ToList();
+
+        return new ConsumerGroupDetail(groupId, description.State.ToString(), partitionLags, members);
+    }
+
+    // Extracted as a pure static function, same reasoning as ComputeLag/IsEndOfPartition/Decode --
+    // unit-testable without a real broker.
+    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue) =>
+        offsetsForTimesResultValue == -1 ? Offset.End : new Offset(offsetsForTimesResultValue);
+
+    public async Task ResetConsumerGroupOffsetAsync(
+        string config, string groupId, string topicName, int partition, OffsetResetMode mode,
+        long? offset, DateTimeOffset? timestamp, CancellationToken ct = default)
+    {
+        var topicPartition = new TopicPartition(topicName, new Partition(partition));
+
+        Offset resolvedOffset;
+        if (mode == OffsetResetMode.Timestamp)
+        {
+            using var timestampConsumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            resolvedOffset = await Task.Run(() =>
+            {
+                var results = timestampConsumer.OffsetsForTimes(
+                    [new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout);
+                return ResolveTimestampLookupResult(results[0].Offset.Value);
+            }, ct);
+        }
+        else
+        {
+            resolvedOffset = mode switch
+            {
+                OffsetResetMode.Earliest => Offset.Beginning,
+                OffsetResetMode.Latest => Offset.End,
+                OffsetResetMode.Offset => new Offset(offset!.Value),
+                _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
+            };
+        }
+
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        await admin.AlterConsumerGroupOffsetsAsync(
+            [new ConsumerGroupTopicPartitionOffsets(groupId, [new TopicPartitionOffset(topicPartition, resolvedOffset)])],
+            new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
+    }
 }

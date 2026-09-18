@@ -25,6 +25,9 @@ public static class FriendlyKafkaError
         ErrorCode.Local_AllBrokersDown or ErrorCode.Local_Transport or ErrorCode.BrokerNotAvailable => "Broker(s) unreachable",
         ErrorCode.SaslAuthenticationFailed or ErrorCode.TopicAuthorizationFailed => "Authentication failed",
         ErrorCode.UnknownTopicOrPart => "Topic not found",
+        ErrorCode.GroupIdNotFound => "Consumer group not found",
+        ErrorCode.NonEmptyGroup or ErrorCode.UnknownMemberId or ErrorCode.RebalanceInProgress =>
+            "Consumer group has active members; wait until it is idle before resetting offsets",
         _ => FriendlyError.Truncate(ex.Error.Reason) is { Length: > 0 } reason ? reason : FriendlyError.From(ex),
     };
 }

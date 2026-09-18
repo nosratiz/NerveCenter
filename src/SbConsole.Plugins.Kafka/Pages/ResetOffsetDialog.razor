@@ -1,0 +1,90 @@
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.ConsumerGroups
+@using SbConsole.Sdk
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @GroupId / @TopicName-@Partition</MudText>
+        <MudSelect T="OffsetResetMode" Label="Reset to" @bind-Value="_mode" Style="min-width:200px">
+            <MudSelectItem Value="OffsetResetMode.Earliest">Earliest</MudSelectItem>
+            <MudSelectItem Value="OffsetResetMode.Latest">Latest</MudSelectItem>
+            <MudSelectItem Value="OffsetResetMode.Offset">Specific offset</MudSelectItem>
+            <MudSelectItem Value="OffsetResetMode.Timestamp">Specific timestamp</MudSelectItem>
+        </MudSelect>
+        @if (_mode == OffsetResetMode.Offset)
+        {
+            <MudNumericField T="long" Label="Offset" @bind-Value="_offset" />
+        }
+        else if (_mode == OffsetResetMode.Timestamp)
+        {
+            <MudDatePicker Label="Date" @bind-Date="_timestampDate" />
+            <MudTimePicker Label="Time (UTC)" @bind-Time="_timestampTime" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="reset-offset-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="confirm-reset" Color="Color.Error" Variant="Variant.Filled" Disabled="_busy" OnClick="Save">Reset</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public bool IsProd { get; set; }
+    [Parameter] public string GroupId { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public int Partition { get; set; }
+
+    [Inject] private ResetConsumerGroupOffsetCommandHandler ResetHandler { get; set; } = default!;
+
+    private OffsetResetMode _mode = OffsetResetMode.Latest;
+    private long _offset;
+    private DateTime? _timestampDate = DateTime.UtcNow.Date;
+    private TimeSpan? _timestampTime = DateTime.UtcNow.TimeOfDay;
+    private bool _busy;
+
+    private DateTimeOffset? ResolvedTimestamp => _timestampDate is { } date
+        ? new DateTimeOffset(date.Date + (_timestampTime ?? TimeSpan.Zero), TimeSpan.Zero)
+        : null;
+
+    private async Task Save()
+    {
+        var target = $"{TopicName}-{Partition}";
+        var confirmed = await Confirmation.ConfirmAsync("Reset offset for", target, IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await ResetHandler.HandleAsync(new ResetConsumerGroupOffsetCommand(
+                ConnectionId, ConnectionName, GroupId, TopicName, Partition, _mode,
+                _mode == OffsetResetMode.Offset ? _offset : null,
+                _mode == OffsetResetMode.Timestamp ? ResolvedTimestamp : null));
+
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

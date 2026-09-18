@@ -13,6 +13,10 @@ public class FriendlyKafkaErrorTests
     [InlineData(ErrorCode.SaslAuthenticationFailed, "Authentication failed")]
     [InlineData(ErrorCode.TopicAuthorizationFailed, "Authentication failed")]
     [InlineData(ErrorCode.UnknownTopicOrPart, "Topic not found")]
+    [InlineData(ErrorCode.GroupIdNotFound, "Consumer group not found")]
+    [InlineData(ErrorCode.NonEmptyGroup, "Consumer group has active members; wait until it is idle before resetting offsets")]
+    [InlineData(ErrorCode.UnknownMemberId, "Consumer group has active members; wait until it is idle before resetting offsets")]
+    [InlineData(ErrorCode.RebalanceInProgress, "Consumer group has active members; wait until it is idle before resetting offsets")]
     public void Known_error_codes_map_to_a_fixed_readable_message(ErrorCode code, string expected)
     {
         var ex = new KafkaException(new Error(code, "raw librdkafka reason text that must never reach the UI"));
