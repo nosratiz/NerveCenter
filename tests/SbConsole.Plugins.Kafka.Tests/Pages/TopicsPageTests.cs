@@ -183,6 +183,36 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_DLQ_suffixed_topic_shows_the_DLQ_badge()
+    {
+        // ReplicationFactor 3 (not <= 1) so only the DLQ-badge branch can possibly fire, not the
+        // low-replication one -- keeps this test unambiguous about which condition is being checked.
+        _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders-dlq", 3, 3, 5) });
+
+        var cut = Render<SbConsole.Plugins.Kafka.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("dlq-badge");
+    }
+
+    [Fact]
+    public async Task A_non_DLQ_topic_does_not_show_the_DLQ_badge()
+    {
+        // RF 3 (not <= 1) and not "-dlq"-suffixed, so neither the low-replication nor the DLQ-badge
+        // branch fires -- keeps this test unambiguous about which condition is being checked.
+        _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())
+            .Returns(new List<TopicSummary> { new("orders", 3, 3, 5) });
+
+        var cut = Render<SbConsole.Plugins.Kafka.Pages.Topics>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().NotContain("dlq-badge");
+    }
+
+    [Fact]
     public async Task Produce_button_opens_the_produce_dialog_for_the_rows_topic()
     {
         _operations.ListTopicsAsync("bootstrap.servers=real:9092", Arg.Any<CancellationToken>())

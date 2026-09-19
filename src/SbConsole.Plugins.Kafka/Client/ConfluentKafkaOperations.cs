@@ -349,9 +349,15 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
     }
 
     // Extracted as a pure static function, same reasoning as ComputeLag/IsEndOfPartition/Decode --
-    // unit-testable without a real broker.
-    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue) =>
-        offsetsForTimesResultValue == -1 ? Offset.End : new Offset(offsetsForTimesResultValue);
+    // unit-testable without a real broker. highWatermarkFallback (a real, resolved offset) is used
+    // instead of the Offset.End sentinel when no message exists at/after the timestamp, for the
+    // same reason Earliest/Latest below resolve to real watermark values rather than the
+    // Offset.Beginning/Offset.End sentinels: AlterConsumerGroupOffsetsAsync sets a literal
+    // committed offset and rejects a sentinel value with "offset must be >= 0" -- confirmed against
+    // a real broker, not assumed. (Sentinels ARE valid for consumer.Assign, which PeekMessagesAsync
+    // uses -- that's a different, more permissive API that resolves them internally.)
+    internal static Offset ResolveTimestampLookupResult(long offsetsForTimesResultValue, long highWatermarkFallback) =>
+        offsetsForTimesResultValue == -1 ? new Offset(highWatermarkFallback) : new Offset(offsetsForTimesResultValue);
 
     public async Task ResetConsumerGroupOffsetAsync(
         string config, string groupId, string topicName, int partition, OffsetResetMode mode,
@@ -360,25 +366,31 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
         var topicPartition = new TopicPartition(topicName, new Partition(partition));
 
         Offset resolvedOffset;
-        if (mode == OffsetResetMode.Timestamp)
+        if (mode == OffsetResetMode.Offset)
         {
-            using var timestampConsumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
-            resolvedOffset = await Task.Run(() =>
-            {
-                var results = timestampConsumer.OffsetsForTimes(
-                    [new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout);
-                return ResolveTimestampLookupResult(results[0].Offset.Value);
-            }, ct);
+            resolvedOffset = new Offset(offset!.Value);
         }
         else
         {
-            resolvedOffset = mode switch
+            // Earliest/Latest/Timestamp all need a real, resolved offset -- see the comment on
+            // ResolveTimestampLookupResult above for why the sentinels can't be used here. Both
+            // QueryWatermarkOffsets and OffsetsForTimes are synchronous/blocking, so the whole
+            // resolution runs inside one Task.Run, same convention as every other blocking call in
+            // this class.
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            resolvedOffset = await Task.Run(() =>
             {
-                OffsetResetMode.Earliest => Offset.Beginning,
-                OffsetResetMode.Latest => Offset.End,
-                OffsetResetMode.Offset => new Offset(offset!.Value),
-                _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
-            };
+                var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
+                return mode switch
+                {
+                    OffsetResetMode.Earliest => watermarks.Low,
+                    OffsetResetMode.Latest => watermarks.High,
+                    OffsetResetMode.Timestamp => ResolveTimestampLookupResult(
+                        consumer.OffsetsForTimes([new TopicPartitionTimestamp(topicPartition, new Timestamp(timestamp!.Value))], AttemptTimeout)[0].Offset.Value,
+                        watermarks.High.Value),
+                    _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unhandled OffsetResetMode."),
+                };
+            }, ct);
         }
 
         using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
@@ -386,4 +398,80 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations
             [new ConsumerGroupTopicPartitionOffsets(groupId, [new TopicPartitionOffset(topicPartition, resolvedOffset)])],
             new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
     }
+
+    // Named constant (rather than the literal "-dlq" in one spot and a matching magic `4` in the
+    // other) so OriginalTopicName's substring length can never drift out of sync with the suffix
+    // IsDlqTopic checks for -- OriginalTopicName is internal, so a future caller reaching it
+    // directly (without going through IsDlqTopic first) would otherwise be one accidental edit away
+    // from an ArgumentOutOfRangeException on a short name.
+    private const string DlqSuffix = "-dlq";
+
+    // Extracted as pure static functions, same reasoning as ComputeLag/IsEndOfPartition/Decode --
+    // unit-testable without a real broker.
+    internal static bool IsDlqTopic(string name) => name.EndsWith(DlqSuffix, StringComparison.Ordinal);
+
+    internal static string OriginalTopicName(string dlqTopicName) => dlqTopicName[..^DlqSuffix.Length];
+
+    public Task<IReadOnlyList<DeadLetterTopicSummary>> ListDeadLetterTopicsAsync(string config, CancellationToken ct = default) =>
+        Task.Run<IReadOnlyList<DeadLetterTopicSummary>>(() =>
+        {
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            var metadata = admin.GetMetadata(AttemptTimeout);
+            var dlqTopics = metadata.Topics.Where(t => IsDlqTopic(t.Topic)).ToList();
+            if (dlqTopics.Count == 0)
+            {
+                return [];
+            }
+
+            // One throwaway consumer, reused sequentially across every DLQ topic's partitions below
+            // -- Assign/Consume/Unassign per nonempty partition, never committing. Same "fresh,
+            // never-reused group.id" convention every other read-only operation in this class uses;
+            // the repeated Assign/Unassign on one instance (rather than a fresh consumer per
+            // partition) is new to this method -- see this plan's Global Constraints for why Task 6
+            // exists to verify this against a real broker.
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+
+            var results = new List<DeadLetterTopicSummary>();
+            foreach (var topic in dlqTopics)
+            {
+                // Checked once per topic (not per partition) -- ct is otherwise never observed once
+                // this Task.Run body starts, so a caller that already gave up could tie up a
+                // thread-pool thread for up to AttemptTimeout per nonempty partition; per-topic
+                // granularity is enough to bound that without checking on every iteration of the
+                // inner partition loop.
+                ct.ThrowIfCancellationRequested();
+
+                long totalCount = 0;
+                DateTimeOffset? oldest = null;
+                foreach (var partition in topic.Partitions)
+                {
+                    var topicPartition = new TopicPartition(topic.Topic, new Partition(partition.PartitionId));
+                    var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
+                    var count = watermarks.High.Value - watermarks.Low.Value;
+                    totalCount += count;
+
+                    if (count <= 0)
+                    {
+                        continue;
+                    }
+
+                    consumer.Assign(new TopicPartitionOffset(topicPartition, new Offset(watermarks.Low.Value)));
+                    var result = consumer.Consume(AttemptTimeout);
+                    consumer.Unassign();
+
+                    if (result is not null && !result.IsPartitionEOF)
+                    {
+                        var timestamp = result.Message.Timestamp.UtcDateTime;
+                        if (oldest is null || timestamp < oldest)
+                        {
+                            oldest = timestamp;
+                        }
+                    }
+                }
+
+                results.Add(new DeadLetterTopicSummary(topic.Topic, OriginalTopicName(topic.Topic), topic.Partitions.Count, totalCount, oldest));
+            }
+
+            return results;
+        }, ct);
 }

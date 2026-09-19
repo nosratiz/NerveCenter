@@ -73,6 +73,10 @@ else
                 {
                     <MudChip T="string" Size="Size.Small" Class="internal-badge ms-2">internal</MudChip>
                 }
+                else if (IsDlqTopic(context.Name))
+                {
+                    <MudChip T="string" Color="Color.Error" Size="Size.Small" Class="dlq-badge ms-2">DLQ</MudChip>
+                }
                 else if (context.ReplicationFactor <= 1)
                 {
                     <MudChip T="string" Color="Color.Warning" Size="Size.Small" Class="low-replication-badge ms-2">RF @context.ReplicationFactor</MudChip>
@@ -121,6 +125,10 @@ else
         : _topics.Where(t => t.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsInternal(string name) => name.StartsWith("__", StringComparison.Ordinal);
+
+    // Page-local, same as IsInternal above (not shared with ConfluentKafkaOperations.IsDlqTopic --
+    // this is a one-line predicate, not worth a cross-namespace dependency for).
+    private static bool IsDlqTopic(string name) => name.EndsWith("-dlq", StringComparison.Ordinal);
 
     protected override async Task OnInitializedAsync()
     {

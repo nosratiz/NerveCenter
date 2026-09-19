@@ -18,7 +18,8 @@ public class KafkaPluginTests
         plugin.ConnectionKindDisplayName.Should().Be("Apache Kafka");
         plugin.NavItems.Should().Contain(n => n.Title == "Topics" && n.Href == "/p/kafka/topics");
         plugin.NavItems.Should().Contain(n => n.Title == "Consumer Groups" && n.Href == "/p/kafka/consumer-groups");
-        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 5));
+        plugin.NavItems.Should().Contain(n => n.Title == "Dead-letter" && n.Href == "/p/kafka/dead-letter");
+        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 5, ActionCount: 5));
     }
 
     [Fact]
@@ -72,23 +73,22 @@ public class KafkaPluginTests
     // requires ?connectionId= to resolve the connection (without it, ConnectionId binds to Guid.Empty
     // and the page renders "Connection not found"), and Kafka group IDs are nearly unconstrained so the
     // group ID segment must be escaped -- same shape as ConsumerGroups.razor's own DetailUrl. Exercises
-    // GetDashboardProblemsAsync itself (not a copy of its logic) by pre-seeding the ListConsumerGroups
-    // cache for this connection string with a fake fetch, so GetDashboardProblemsAsync's own call to
-    // GetCachedConsumerGroupsAsync hits the cache instead of the real broker (which crashes the process
-    // on this environment -- see the comment above on GetDashboardProblemsAsync's missing smoke test).
+    // BuildConsumerGroupProblemLink itself (the exact expression GetDashboardProblemsAsync's Select
+    // uses to build each problem's LinkHref), not a copy of its logic. Not exercised end-to-end via
+    // GetDashboardProblemsAsync itself: even though both ListConsumerGroupsAsync and
+    // ListDeadLetterTopicsAsync now sit behind a short-lived cache (GetCachedConsumerGroupsAsync /
+    // GetCachedDeadLetterTopicsAsync in KafkaPlugin.cs), the public GetDashboardProblemsAsync entry
+    // point always seeds those caches via the real ConfluentKafkaOperations fetch delegates, which
+    // still hit a real broker -- same reason ServiceBusPluginTests has no end-to-end test of its own
+    // GetDashboardProblemsAsync either.
     [Fact]
-    public async Task GetDashboardProblemsAsync_links_to_the_group_detail_page_with_an_escaped_group_id_and_connectionId()
+    public void BuildConsumerGroupProblemLink_escapes_the_group_id_and_carries_connectionId()
     {
-        var plugin = new KafkaPlugin();
         var connectionId = Guid.NewGuid();
-        var connectionString = $"conn-{connectionId}";
-        var fetch = FakeFetch([new ConsumerGroupSummary("orders/consumer group", "Stable", 1, KafkaPlugin.LagProblemThreshold + 1)]);
-        await KafkaPlugin.GetCachedConsumerGroupsAsync(connectionString, DateTimeOffset.UtcNow, fetch, CancellationToken.None);
 
-        var problems = await plugin.GetDashboardProblemsAsync(connectionId, connectionString, store: null!);
+        var link = KafkaPlugin.BuildConsumerGroupProblemLink(connectionId, "orders/consumer group");
 
-        problems.Should().ContainSingle().Which.LinkHref.Should().Be(
-            $"/p/kafka/consumer-groups/{Uri.EscapeDataString("orders/consumer group")}?connectionId={connectionId}");
+        link.Should().Be($"/p/kafka/consumer-groups/{Uri.EscapeDataString("orders/consumer group")}?connectionId={connectionId}");
     }
 
     [Fact]
@@ -151,6 +151,90 @@ public class KafkaPluginTests
         callCount.Should().Be(2);
     }
 
-    private static Func<string, CancellationToken, Task<IReadOnlyList<ConsumerGroupSummary>>> FakeFetch(IReadOnlyList<ConsumerGroupSummary> groups) =>
-        (_, _) => Task.FromResult(groups);
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_reuses_the_result_for_a_repeat_call_within_the_TTL()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        var topics = new List<DeadLetterTopicSummary> { new("orders-dlq", "orders", 1, 42, null) };
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>(topics);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var first = await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 30 seconds later, still within the ~60s TTL -- should reuse the cached result, not fetch again.
+        var second = await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now.AddSeconds(30), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(1);
+        first.Should().BeSameAs(topics);
+        second.Should().BeSameAs(topics);
+    }
+
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_fetches_again_once_the_TTL_has_expired()
+    {
+        var connectionString = $"conn-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>([new DeadLetterTopicSummary("a-dlq", "a", 1, callCount, null)]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now, Fetch, CancellationToken.None);
+        // 61 seconds later -- past the ~60s TTL -- should fetch a fresh result.
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionString, now.AddSeconds(61), Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetCachedDeadLetterTopicsAsync_caches_independently_per_connection_string()
+    {
+        var connectionA = $"conn-a-{Guid.NewGuid()}";
+        var connectionB = $"conn-b-{Guid.NewGuid()}";
+        var callCount = 0;
+        Task<IReadOnlyList<DeadLetterTopicSummary>> Fetch(string cs, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult<IReadOnlyList<DeadLetterTopicSummary>>([]);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionA, now, Fetch, CancellationToken.None);
+        await KafkaPlugin.GetCachedDeadLetterTopicsAsync(connectionB, now, Fetch, CancellationToken.None);
+
+        callCount.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void HasDeadLetterMessages_reflects_whether_the_topic_has_any_retained_messages(long count, bool expected)
+    {
+        var topic = new DeadLetterTopicSummary("orders-dlq", "orders", 1, count, null);
+
+        KafkaPlugin.HasDeadLetterMessages(topic).Should().Be(expected);
+    }
+
+    [Fact]
+    public void PickOldestDeadLetterTopic_returns_null_when_no_topic_has_a_timestamp()
+    {
+        var topics = new[] { new DeadLetterTopicSummary("a-dlq", "a", 1, 0, null) };
+
+        KafkaPlugin.PickOldestDeadLetterTopic(topics).Should().BeNull();
+    }
+
+    [Fact]
+    public void PickOldestDeadLetterTopic_returns_the_topic_with_the_earliest_timestamp()
+    {
+        var older = new DeadLetterTopicSummary("a-dlq", "a", 1, 3, DateTimeOffset.UtcNow.AddHours(-2));
+        var newer = new DeadLetterTopicSummary("b-dlq", "b", 1, 1, DateTimeOffset.UtcNow.AddHours(-1));
+
+        KafkaPlugin.PickOldestDeadLetterTopic([newer, older]).Should().Be(older);
+    }
 }

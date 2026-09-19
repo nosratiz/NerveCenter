@@ -137,17 +137,38 @@ public class ConfluentKafkaOperationsTests
     }
 
     [Fact]
-    public void ResolveTimestampLookupResult_falls_back_to_Latest_when_no_message_exists_at_or_after_the_timestamp()
+    public void ResolveTimestampLookupResult_falls_back_to_the_high_watermark_when_no_message_exists_at_or_after_the_timestamp()
     {
         // Kafka's ListOffsets protocol returns -1 when no message exists at/after the requested
         // timestamp -- Kafka's own "not found" sentinel (distinct from, though numerically equal
-        // to, librdkafka's Offset.End constant). See design spec §4.
-        ConfluentKafkaOperations.ResolveTimestampLookupResult(-1).Should().Be(Offset.End);
+        // to, librdkafka's Offset.End constant). See design spec §4. The fallback must be a real,
+        // resolved offset (the high watermark), not the Offset.End sentinel itself --
+        // AlterConsumerGroupOffsetsAsync rejects sentinel values with "offset must be >= 0",
+        // confirmed against a real broker.
+        ConfluentKafkaOperations.ResolveTimestampLookupResult(-1, highWatermarkFallback: 777).Should().Be(new Offset(777));
     }
 
     [Fact]
     public void ResolveTimestampLookupResult_returns_the_resolved_offset_when_a_message_was_found()
     {
-        ConfluentKafkaOperations.ResolveTimestampLookupResult(4242).Should().Be(new Offset(4242));
+        ConfluentKafkaOperations.ResolveTimestampLookupResult(4242, highWatermarkFallback: 777).Should().Be(new Offset(4242));
+    }
+
+    [Theory]
+    [InlineData("orders-dlq", true)]
+    [InlineData("orders", false)]
+    [InlineData("orders-dlq-archive", false)]  // "-dlq" not at the end -- must not match
+    [InlineData("-dlq", true)]                  // degenerate but valid: empty original name
+    public void IsDlqTopic_matches_only_the_dash_dlq_suffix(string name, bool expected)
+    {
+        ConfluentKafkaOperations.IsDlqTopic(name).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("orders-dlq", "orders")]
+    [InlineData("-dlq", "")]
+    public void OriginalTopicName_strips_the_dash_dlq_suffix(string dlqTopicName, string expected)
+    {
+        ConfluentKafkaOperations.OriginalTopicName(dlqTopicName).Should().Be(expected);
     }
 }

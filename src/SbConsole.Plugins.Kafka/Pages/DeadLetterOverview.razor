@@ -1,0 +1,65 @@
+@page "/p/kafka/dead-letter"
+@using SbConsole.Plugins.Kafka.Client
+@using SbConsole.Plugins.Kafka.DeadLetter
+@using SbConsole.Sdk
+@inject ListDeadLetterOverviewQueryHandler ListHandler
+
+<PageTitle>Dead-letter</PageTitle>
+<h1>Dead-letter</h1>
+
+@if (_loading)
+{
+    <MudProgressCircular Class="dead-letter-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_entries.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No dead-letter topics found across your Kafka connections.</MudAlert>
+}
+else
+{
+    <MudText Class="dead-letter-summary mud-text-secondary mb-2" Typo="Typo.body2">@_entries.Count @(_entries.Count == 1 ? "topic" : "topics")</MudText>
+
+    <MudTable Items="_entries">
+        <HeaderContent>
+            <MudTh>Connection</MudTh>
+            <MudTh>DLQ Topic</MudTh>
+            <MudTh>Original Topic</MudTh>
+            <MudTh>Messages (approx)</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.ConnectionName</MudTd>
+            <MudTd Style="font-family:monospace">@context.DlqTopicName</MudTd>
+            <MudTd Style="font-family:monospace">@context.OriginalTopicName</MudTd>
+            <MudTd>@context.ApproximateMessageCount</MudTd>
+            <MudTd>
+                <MudButton Class="peek-dead-letter" Href="@PeekUrl(context)">Peek</MudButton>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<DeadLetterOverviewEntry> _entries = [];
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _entries = await ListHandler.HandleAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // Same PeekUrl shape Topics.razor's own PeekUrl builds -- a DLQ topic is peeked exactly like any
+    // other topic, nothing on Peek.razor needs to know it's a DLQ topic (design spec §4).
+    private static string PeekUrl(DeadLetterOverviewEntry entry) =>
+        $"/p/kafka/topics/{Uri.EscapeDataString(entry.DlqTopicName)}/peek?connectionId={entry.ConnectionId}&partitionCount={entry.PartitionCount}";
+}
