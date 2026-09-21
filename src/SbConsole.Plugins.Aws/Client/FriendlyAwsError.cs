@@ -18,6 +18,7 @@ public static class FriendlyAwsError
     public static string From(Exception ex) => ex switch
     {
         AmazonSecurityTokenServiceException { ErrorCode: "InvalidClientTokenId" } => "Credentials rejected",
+        AmazonSecurityTokenServiceException { ErrorCode: "UnrecognizedClientException" } => "Credentials rejected",
         AmazonSecurityTokenServiceException { ErrorCode: "AccessDenied" } => "Access denied — check IAM permissions",
         AmazonSQSException { ErrorCode: "AccessDenied" } => "Access denied — check IAM permissions",
         QueueDoesNotExistException => "Queue not found",

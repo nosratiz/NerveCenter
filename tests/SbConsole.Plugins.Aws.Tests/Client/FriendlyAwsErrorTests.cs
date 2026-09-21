@@ -49,6 +49,16 @@ public class FriendlyAwsErrorTests
     }
 
     [Fact]
+    public void UnrecognizedClientException_on_STS_maps_to_a_fixed_message()
+    {
+        // A distinct real STS ErrorCode for a bad/deleted access key, separate from
+        // InvalidClientTokenId (a malformed key).
+        var ex = new AmazonSecurityTokenServiceException("raw STS text") { ErrorCode = "UnrecognizedClientException" };
+
+        FriendlyAwsError.From(ex).Should().Be("Credentials rejected");
+    }
+
+    [Fact]
     public void AccessDenied_on_STS_maps_to_a_fixed_message()
     {
         var ex = new AmazonSecurityTokenServiceException("raw text") { ErrorCode = "AccessDenied" };

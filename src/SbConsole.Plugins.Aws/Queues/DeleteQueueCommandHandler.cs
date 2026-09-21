@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Queues;
 
-public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string QueueUrl, string QueueName);
+public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName);
 
 public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger)
 {

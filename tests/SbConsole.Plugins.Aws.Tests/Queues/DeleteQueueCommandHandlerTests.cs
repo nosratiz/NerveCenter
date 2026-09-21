@@ -19,7 +19,7 @@ public class DeleteQueueCommandHandlerTests
         var audit = Substitute.For<IAuditScope>();
 
         var result = await new DeleteQueueCommandHandler(operations, connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
-            .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", false, "https://sqs/orders", "orders"));
+            .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeTrue();
         await operations.Received(1).DeleteQueueAsync("mode=default-chain;region=eu-west-1", "https://sqs/orders", Arg.Any<CancellationToken>());
@@ -34,7 +34,7 @@ public class DeleteQueueCommandHandlerTests
         var audit = Substitute.For<IAuditScope>();
 
         var result = await new DeleteQueueCommandHandler(Substitute.For<ISqsOperations>(), connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
-            .HandleAsync(new DeleteQueueCommand(Guid.NewGuid(), "aws-dev", false, "https://sqs/orders", "orders"));
+            .HandleAsync(new DeleteQueueCommand(Guid.NewGuid(), "aws-dev", "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeFalse();
         await audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, ct: default);
@@ -52,7 +52,7 @@ public class DeleteQueueCommandHandlerTests
         var audit = Substitute.For<IAuditScope>();
 
         var result = await new DeleteQueueCommandHandler(operations, connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
-            .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", true, "https://sqs/orders", "orders"));
+            .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeFalse();
         await audit.Received(1).RecordAsync("aws.queue.delete", "aws-dev/orders", ActionRisk.Destructive, false, "queue not found", Arg.Any<CancellationToken>());

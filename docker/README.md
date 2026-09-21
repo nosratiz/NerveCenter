@@ -158,13 +158,13 @@ the host publishes the right ports, the container does not.
 
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
-`SBC_HOST_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the broker advertises
-to host clients, so the secret you paste into the app must use the same port.
+`SBC_HOST_PORT`, `LOCALSTACK_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the
+broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile app down -v
+docker compose --profile servicebus --profile aws --profile app down -v
 ```
 
 `-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's

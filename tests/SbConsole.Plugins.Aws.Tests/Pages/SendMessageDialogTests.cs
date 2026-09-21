@@ -107,6 +107,31 @@ public class SendMessageDialogTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public void Send_is_disabled_for_a_FIFO_queue_with_a_blank_deduplication_id_and_no_content_based_dedup()
+    {
+        // Deduplication ID is Required="true" and rendered whenever IsFifo && !ContentBasedDeduplication,
+        // but CanSend didn't actually require it to be filled -- a FIFO send with a blank dedup ID
+        // was submittable and would fail at AWS (SendMessage requires MessageDeduplicationId when
+        // the queue lacks content-based dedup).
+        var cut = RenderDialog(isFifo: true, contentBasedDeduplication: false);
+        cut.Find("#message-body").Input("hello world");
+        cut.Find(".message-group-id input").Input("group-1");
+
+        cut.Find("button.send-message").HasAttribute("disabled").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Send_is_enabled_once_a_deduplication_id_is_filled_in_for_a_FIFO_queue()
+    {
+        var cut = RenderDialog(isFifo: true, contentBasedDeduplication: false);
+        cut.Find("#message-body").Input("hello world");
+        cut.Find(".message-group-id input").Input("group-1");
+        cut.Find(".message-dedup-id input").Input("dedup-1");
+
+        cut.Find("button.send-message").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Send_calls_the_handler_and_closes_the_dialog_when_it_succeeds()
     {
         var cut = RenderDialog(isFifo: false);

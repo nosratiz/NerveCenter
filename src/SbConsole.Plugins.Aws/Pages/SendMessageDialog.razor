@@ -63,7 +63,8 @@
         public string Value { get; set; } = "";
     }
 
-    private bool CanSend => !string.IsNullOrWhiteSpace(_body) && (!IsFifo || !string.IsNullOrWhiteSpace(_messageGroupId));
+    private bool CanSend => !string.IsNullOrWhiteSpace(_body) && (!IsFifo || !string.IsNullOrWhiteSpace(_messageGroupId))
+        && (!IsFifo || ContentBasedDeduplication || !string.IsNullOrWhiteSpace(_messageDeduplicationId));
 
     private void AddAttribute() => _attributes.Add(new AttributeRow());
 
