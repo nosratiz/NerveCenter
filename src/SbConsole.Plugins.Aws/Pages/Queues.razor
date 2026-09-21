@@ -76,9 +76,9 @@ else
         <RowTemplate>
             <MudTd Style="font-family:monospace">@context.Name</MudTd>
             <MudTd>@(context.IsFifo ? "FIFO" : "Standard")</MudTd>
-            <MudTd Style="text-align:right;font-family:monospace">~@context.ApproxVisible</MudTd>
-            <MudTd Style="text-align:right;font-family:monospace">~@context.ApproxInFlight</MudTd>
-            <MudTd Style="text-align:right;font-family:monospace">~@context.ApproxDelayed</MudTd>
+            <MudTd Class="approx-visible" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxVisible}")</MudTd>
+            <MudTd Class="approx-in-flight" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxInFlight}")</MudTd>
+            <MudTd Class="approx-delayed" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxDelayed}")</MudTd>
             <MudTd>
                 @if (context.DeadLetterSourceCount > 0)
                 {

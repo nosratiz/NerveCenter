@@ -87,12 +87,25 @@ public sealed class SqsOperations : ISqsOperations
         // cache them, so the target-ARN counting pass below doesn't need a second round-trip per
         // queue -- ListQueuesAsync already fetches this data, DLQ-ness is purely a client-side
         // computation over it.
+        //
+        // Sequential, deliberately -- fan-out here is a separate (optional) performance concern.
+        // Each call is wrapped individually: a single queue's GetQueueAttributes failing (e.g. mid-
+        // load throttling) must leave that one row degraded, not blank the whole page (design spec
+        // §5's partial-failure resilience requirement).
         var attributesByUrl = new Dictionary<string, IDictionary<string, string>>();
         foreach (var queueUrl in queueUrls)
         {
-            var attributesResponse = await sqs.GetQueueAttributesAsync(
-                new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
-            attributesByUrl[queueUrl] = attributesResponse.Attributes;
+            try
+            {
+                var attributesResponse = await sqs.GetQueueAttributesAsync(
+                    new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
+                attributesByUrl[queueUrl] = attributesResponse.Attributes;
+            }
+            catch (Exception) when (ct.IsCancellationRequested is false)
+            {
+                // Left out of attributesByUrl -- the final loop below turns a missing entry into a
+                // QueueSummary.Unavailable row instead of losing the whole page.
+            }
         }
 
         // Count, per target ARN, how many queues' RedrivePolicy points at it -- that count is what
@@ -114,10 +127,16 @@ public sealed class SqsOperations : ISqsOperations
         var summaries = new List<QueueSummary>();
         foreach (var queueUrl in queueUrls)
         {
-            var attributes = attributesByUrl[queueUrl];
+            var name = QueueNameFromUrl(queueUrl);
+            if (!attributesByUrl.TryGetValue(queueUrl, out var attributes))
+            {
+                summaries.Add(QueueSummary.Unavailable(name, queueUrl));
+                continue;
+            }
+
             var queueArn = attributes.TryGetValue("QueueArn", out var arn) ? arn : "";
             var deadLetterSourceCount = deadLetterSourceCounts.GetValueOrDefault(queueArn);
-            summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributes, deadLetterSourceCount));
+            summaries.Add(ToQueueSummary(name, queueUrl, attributes, deadLetterSourceCount));
         }
 
         return summaries;

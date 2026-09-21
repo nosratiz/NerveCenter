@@ -186,6 +186,28 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task One_queues_unavailable_attributes_dont_blank_the_other_rows()
+    {
+        // SqsOperations.ListQueuesAsync degrades a single queue to QueueSummary.Unavailable rather
+        // than throwing when its GetQueueAttributes call fails (design spec §5's partial-failure
+        // resilience requirement) -- this test exercises the handler/page side of that contract via
+        // a substituted ISqsOperations, since SqsOperations itself can't be unit-tested without a
+        // real AWS account.
+        var degraded = SbConsole.Plugins.Aws.Client.QueueSummary.Unavailable("throttled-queue", "https://sqs/throttled-queue");
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("healthy-queue"), degraded });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("healthy-queue");
+        cut.Markup.Should().Contain("throttled-queue");
+        cut.FindAll(".approx-visible").Select(e => e.TextContent).Should().Contain("—");
+        cut.FindAll(".approx-visible").Select(e => e.TextContent).Should().Contain("~10");
+    }
+
+    [Fact]
     public async Task Delete_goes_through_confirmation_before_calling_the_handler()
     {
         _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
