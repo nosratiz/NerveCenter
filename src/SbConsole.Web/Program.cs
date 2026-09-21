@@ -68,6 +68,7 @@ builder.Services.AddScoped<SbConsole.Web.Wallboard.WallboardSnapshotLoader>();
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.ServiceBus.ServiceBusPlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Kafka.KafkaPlugin>();
+builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Aws.AwsPlugin>();
 builder.Services.AddHostedService<MetricsCollectorService>();
 
 var app = builder.Build();
