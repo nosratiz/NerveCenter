@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/SbConsole.Core/SbConsole.Core.csproj" />
+    <Project Path="src/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj" />
     <Project Path="src/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj" />
     <Project Path="src/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
     <Project Path="src/SbConsole.Sdk/SbConsole.Sdk.csproj" />
@@ -8,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SbConsole.Core.Tests/SbConsole.Core.Tests.csproj" />
+    <Project Path="tests/SbConsole.Plugins.Aws.Tests/SbConsole.Plugins.Aws.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.Kafka.Tests/SbConsole.Plugins.Kafka.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.ServiceBus.Tests/SbConsole.Plugins.ServiceBus.Tests.csproj" />
     <Project Path="tests/SbConsole.Web.Tests/SbConsole.Web.Tests.csproj" />
