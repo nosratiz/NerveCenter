@@ -555,7 +555,28 @@ against the installed `AWSSDK.SQS` 3.7.400.62 / `AWSSDK.SecurityToken` 3.7.401.1
 than assumed from the AWS SDK's general shape (a few plan-suggested names, e.g. an
 `AttributeNames` property on `ReceiveMessageRequest` and a `AssumeRoleAWSCredentials` type under
 `Amazon.SecurityToken`, didn't actually exist in these package versions and were corrected during
-implementation).
+implementation). Every command handler logs the caught exception via `ILogger<T>` before reducing
+it to a friendly message, matching `SbConsole.Sdk.FriendlyError`'s documented "never a diagnostics
+loss" contract and Kafka's own handlers — a gap the per-task reviews missed (none of the eight
+command handlers originally took a logger) and only the final whole-branch review caught.
+
+**A DLQ-semantics bug caught only by the final whole-branch review, not any single task's
+review:** a queue's own `RedrivePolicy` attribute means "I dead-letter *to* somewhere" (I am a
+source queue), not "I *am* a dead-letter queue" — but the first-shipped `Queues.razor` used exactly
+that flag to show the "DLQ" chip and to gate the Redrive button, which is backwards: AWS's
+`StartMessageMoveTask` requires `SourceArn` to actually be a queue other queues redrive *into*.
+Fixed by computing `QueueSummary.DeadLetterSourceCount` — how many other queues' `RedrivePolicy`
+targets this queue's ARN — purely by parsing every already-fetched queue's `RedrivePolicy` JSON in
+`ListQueuesAsync` and counting matches per target ARN (no extra AWS call), then gating the chip and
+Redrive button on `DeadLetterSourceCount > 0` instead. Regression tests pin the exact input shape
+the original bug got backwards. **Known follow-up, not yet fixed:** this count is computed only
+over the queues the current "Starts with" prefix filter returned, so filtering directly to a DLQ's
+name prefix (excluding its source queues) undercounts it to zero and hides both the chip and the
+Redrive button for the one queue you filtered to find — a `ListDeadLetterSourceQueuesAsync` call
+(or computing the count over an unfiltered list regardless of the display filter) would fix this
+properly; not done here since it wasn't the shape of the original bug. Also not yet covered: a
+page-level test for Purge's confirm-then-dialog wiring (Delete has one, Purge — also `Destructive`
+and prod-gated — doesn't).
 
 **One correction to the source UI mockup** (`~/Desktop/UI mockups for NerveCenter/SbConsole
 AWS.dc.html`) carried through from the design spec: its refresh-cost caption states `1 + 3n` API
@@ -573,8 +594,19 @@ read-only/degraded-connection capability set (`TestConnectionAsync` reports rich
 only — nothing hides a button); live redrive-progress polling (`ISqsOperations` has no
 `ListMessageMoveTasks`-backed status method — the move task is started and its start/failure
 result reported, with no polling method added since nothing in this plan's UI calls one yet);
-per-message manual "redrive to source" from inside Receive; the Queue detail page's SNS
-cross-reference panel; Access-policy/Tags tabs.
+per-message manual "redrive to source" from inside Receive.
+
+**Also not built, cut at planning time rather than during implementation** (the plan's own task
+breakdown never included these, so `PageCount` in `AwsPlugin.Contribution` is `2` — Queues and
+Receive — not the design spec's originally-stated `3`): a dedicated `QueueDetail.razor` page (ARN
+with copy, the four approximate-metric tiles, a redrive-out panel showing the queue's own
+`RedrivePolicy`, the full attribute list, tags, and — once SNS exists — the "subscribed to N SNS
+topics" cross-reference panel the design spec described for it); the auto-refresh picker
+(Off/15s/30s/60s) and its "counts read HH:MM" caption, so `Queues.razor` only refreshes on an
+explicit user action, never on a timer; a rendered `Created` column (`QueueSummary.CreatedAt` is
+fetched and stored on every row but never displayed); and an overflow menu for Delete/Purge — both
+sit inline on the row instead. None of these block the shipped functionality; they're straight
+scope cuts a future pass can pick up alongside the SNS plan or on their own.
 
 **Local dev**: `docker compose --profile aws up -d` runs LocalStack (`SERVICES=sqs,sns`, so the
 SNS plan needs no compose change) gated by a real `healthcheck` (`curl` against
@@ -608,6 +640,9 @@ a redrive policy already attached, mirroring Kafka's `kafka-init` pattern. See `
   cross-connection overview alike.
 - Kafka plugin (Topics, §6.5): same deferral, same reasoning — unit tests only against a
   substitute of `IKafkaOperations`, no Testcontainers, no real broker traffic.
+- AWS plugin (Queues, §6.7): same deferral, same reasoning — unit tests only against a substitute
+  of `ISqsOperations`, no Testcontainers, no real AWS/LocalStack traffic. LocalStack in
+  `docker-compose.yml` is for manual local dev only.
 - `NavMenu`'s badge-refresh loop (§5, §6.3) is tested by calling its refresh
   method directly, not by waiting out its real 60-second timer — the loop
   itself is a thin wrapper (`while` + `Task.Delay` + the same call) around a
