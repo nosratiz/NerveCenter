@@ -30,6 +30,12 @@ public sealed class SqsOperations : ISqsOperations
             RegionEndpoint = sqsConfig.RegionEndpoint,
             Timeout = sqsConfig.Timeout,
             MaxErrorRetry = sqsConfig.MaxErrorRetry,
+            // LocalStack emulates STS too, so a custom endpoint (design spec §2) must redirect the
+            // GetCallerIdentity pre-check the same way it redirects SQS calls -- otherwise a
+            // connection test against an emulator falls through to real AWS STS and fails there
+            // instead of succeeding against the emulator.
+            ServiceURL = sqsConfig.ServiceURL,
+            UseHttp = sqsConfig.UseHttp,
         };
         var credentials = AwsCredentialsFactory.BuildCredentials(parsed);
         return credentials is null ? new AmazonSecurityTokenServiceClient(stsConfig) : new AmazonSecurityTokenServiceClient(credentials, stsConfig);
