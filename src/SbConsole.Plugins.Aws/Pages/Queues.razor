@@ -197,7 +197,29 @@ else
         }
     }
 
-    private Task OpenSend(string queueUrl) => Task.CompletedTask; // wired in Task 12
+    private async Task OpenSend(string queueUrl)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var queue = _queues.Single(q => q.QueueUrl == queueUrl);
+        // ContentBasedDeduplication isn't part of QueueSummary (design spec §5's list columns) --
+        // left at its default `false`, so the Deduplication ID field always shows for a FIFO queue
+        // even when the queue itself has content-based dedup on. Harmless: the field can be left
+        // blank if the queue computes one from the body.
+        var parameters = new DialogParameters<SendMessageDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.QueueUrl, queue.QueueUrl },
+            { x => x.QueueName, queue.Name },
+            { x => x.IsFifo, queue.IsFifo },
+        };
+        var dialog = await DialogService.ShowAsync<SendMessageDialog>("Send message", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
 
     private Task OpenRedrive(string queueUrl, string queueArn) => Task.CompletedTask; // wired in Task 13
 

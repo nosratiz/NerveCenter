@@ -1,0 +1,100 @@
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Messages
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @QueueName</MudText>
+        <MudTextField id="message-body" @bind-Value="_body" Label="Body" Lines="8" Immediate="true" />
+        <MudNumericField Class="delay-seconds" @bind-Value="_delaySeconds" Label="Delay (sec, optional)" Min="0" Max="900" />
+
+        @if (IsFifo)
+        {
+            <MudTextField Class="message-group-id" @bind-Value="_messageGroupId" Label="Message group ID" Required="true" Immediate="true" />
+            @if (!ContentBasedDeduplication)
+            {
+                <MudTextField Class="message-dedup-id" @bind-Value="_messageDeduplicationId" Label="Deduplication ID" Required="true" Immediate="true" />
+            }
+        }
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Message attributes</MudText>
+        @for (var i = 0; i < _attributes.Count; i++)
+        {
+            var index = i;
+            <div class="d-flex gap-2 align-center mb-1">
+                <MudTextField Class="attribute-key" @bind-Value="_attributes[index].Key" Placeholder="Key" />
+                <MudTextField Class="attribute-value" @bind-Value="_attributes[index].Value" Placeholder="Value" />
+                <MudIconButton Class="remove-attribute" Icon="@Icons.Material.Filled.Close" OnClick="@(() => RemoveAttribute(index))" />
+            </div>
+        }
+        <MudButton Class="add-attribute" OnClick="AddAttribute">+ Add attribute</MudButton>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="send-message-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="send-message" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSend || _busy)" OnClick="Send">Send</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string QueueUrl { get; set; } = "";
+    [Parameter] public string QueueName { get; set; } = "";
+    [Parameter] public bool IsFifo { get; set; }
+    [Parameter] public bool ContentBasedDeduplication { get; set; }
+
+    [Inject] private SendMessageCommandHandler SendHandler { get; set; } = default!;
+
+    private string _body = "";
+    private int? _delaySeconds;
+    private string _messageGroupId = "";
+    private string _messageDeduplicationId = "";
+    private readonly List<AttributeRow> _attributes = [];
+    private bool _busy;
+
+    private sealed class AttributeRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private bool CanSend => !string.IsNullOrWhiteSpace(_body) && (!IsFifo || !string.IsNullOrWhiteSpace(_messageGroupId));
+
+    private void AddAttribute() => _attributes.Add(new AttributeRow());
+
+    private void RemoveAttribute(int index) => _attributes.RemoveAt(index);
+
+    private async Task Send()
+    {
+        _busy = true;
+        try
+        {
+            var attributes = _attributes.Where(a => !string.IsNullOrWhiteSpace(a.Key)).ToDictionary(a => a.Key, a => a.Value);
+            var request = new SendMessageRequest(
+                _body, attributes.Count > 0 ? attributes : null, _delaySeconds,
+                IsFifo ? _messageGroupId : null,
+                IsFifo && !ContentBasedDeduplication ? _messageDeduplicationId : null);
+
+            var result = await SendHandler.HandleAsync(new SendMessageCommand(ConnectionId, ConnectionName, QueueUrl, QueueName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

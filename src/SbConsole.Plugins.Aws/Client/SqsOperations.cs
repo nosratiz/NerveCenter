@@ -225,8 +225,34 @@ public sealed class SqsOperations : ISqsOperations
         await sqs.ChangeMessageVisibilityAsync(queueUrl, receiptHandle, visibilityTimeoutSeconds, ct);
     }
 
-    public Task SendMessageAsync(string secret, string queueUrl, SendMessageRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 12.");
+    public async Task SendMessageAsync(string secret, string queueUrl, SendMessageRequest request, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var sqsRequest = new Amazon.SQS.Model.SendMessageRequest { QueueUrl = queueUrl, MessageBody = request.Body };
+        if (request.DelaySeconds is { } delay)
+        {
+            sqsRequest.DelaySeconds = delay;
+        }
+
+        if (request.MessageAttributes is { Count: > 0 } attributes)
+        {
+            sqsRequest.MessageAttributes = attributes.ToDictionary(
+                kv => kv.Key,
+                kv => new Amazon.SQS.Model.MessageAttributeValue { DataType = "String", StringValue = kv.Value });
+        }
+
+        if (request.MessageGroupId is { } groupId)
+        {
+            sqsRequest.MessageGroupId = groupId;
+        }
+
+        if (request.MessageDeduplicationId is { } dedupId)
+        {
+            sqsRequest.MessageDeduplicationId = dedupId;
+        }
+
+        await sqs.SendMessageAsync(sqsRequest, ct);
+    }
 
     public Task<string> StartRedriveTaskAsync(string secret, string sourceQueueArn, string destinationQueueArn, int? maxMessagesPerSecond, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 13.");
