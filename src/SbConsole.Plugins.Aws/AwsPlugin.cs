@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.Aws.Client;
+using SbConsole.Plugins.Aws.Queues;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws;
@@ -28,6 +29,8 @@ public sealed class AwsPlugin : IPlugin
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<ISqsOperations, SqsOperations>();
+        services.AddScoped<ListQueuesQueryHandler>();
+        services.AddScoped<GetConnectionEchoQueryHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

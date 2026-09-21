@@ -69,7 +69,55 @@ public sealed class SqsOperations : ISqsOperations
     }
 
     public Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string secret, string? namePrefix, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 4.");
+        Task.Run<IReadOnlyList<QueueSummary>>(async () =>
+        {
+            using var sqs = BuildSqsClient(secret);
+            var listRequest = new ListQueuesRequest { QueueNamePrefix = namePrefix };
+            var queueUrls = new List<string>();
+            string? nextToken = null;
+            do
+            {
+                listRequest.NextToken = nextToken;
+                var page = await sqs.ListQueuesAsync(listRequest, ct);
+                queueUrls.AddRange(page.QueueUrls);
+                nextToken = page.NextToken;
+            } while (!string.IsNullOrEmpty(nextToken));
+
+            var summaries = new List<QueueSummary>();
+            foreach (var queueUrl in queueUrls)
+            {
+                var attributesResponse = await sqs.GetQueueAttributesAsync(
+                    new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
+                summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributesResponse.Attributes));
+            }
+
+            return summaries;
+        }, ct);
+
+    // Extracted as a pure static function so the attribute-dictionary-to-QueueSummary mapping is
+    // unit-testable without a real AWS account, same reasoning as
+    // ConfluentKafkaOperations.Decode/IsEndOfPartition. Internal (not private) so
+    // SqsOperationsTests can assert it directly -- InternalsVisibleTo already covers the test
+    // project (Task 1's csproj).
+    internal static QueueSummary ToQueueSummary(string name, string queueUrl, IDictionary<string, string> attributes)
+    {
+        long GetLong(string key) => attributes.TryGetValue(key, out var value) && long.TryParse(value, out var parsed) ? parsed : 0;
+        bool GetBool(string key) => attributes.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) && parsed;
+
+        return new QueueSummary(
+            Name: name,
+            QueueUrl: queueUrl,
+            QueueArn: attributes.TryGetValue("QueueArn", out var queueArn) ? queueArn : "",
+            IsFifo: GetBool("FifoQueue"),
+            ApproxVisible: GetLong("ApproximateNumberOfMessages"),
+            ApproxInFlight: GetLong("ApproximateNumberOfMessagesNotVisible"),
+            ApproxDelayed: GetLong("ApproximateNumberOfMessagesDelayed"),
+            HasDeadLetterTarget: attributes.ContainsKey("RedrivePolicy"),
+            IsKmsEncrypted: attributes.ContainsKey("KmsMasterKeyId"),
+            CreatedAt: DateTimeOffset.FromUnixTimeSeconds(GetLong("CreatedTimestamp")));
+    }
+
+    internal static string QueueNameFromUrl(string queueUrl) => queueUrl[(queueUrl.LastIndexOf('/') + 1)..];
 
     public Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 6.");
