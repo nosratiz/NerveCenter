@@ -94,7 +94,7 @@ else
                 }
             </MudTd>
             <MudTd>
-                <MudButton Class="receive-action" Href="@ReceiveUrl(context.QueueUrl)">Receive</MudButton>
+                <MudButton Class="receive-action" Href="@ReceiveUrl(context.QueueUrl, context.Name)">Receive</MudButton>
                 <MudButton Class="send-message-action" OnClick="@(() => OpenSend(context.QueueUrl))">Send</MudButton>
                 @if (context.HasDeadLetterTarget)
                 {
@@ -175,10 +175,10 @@ else
         _connectionEcho = result.IsSuccess ? result.Value! : "";
     }
 
-    private string ReceiveUrl(string queueUrl)
+    private string ReceiveUrl(string queueUrl, string queueName)
     {
         var connection = _connections.Single(c => c.Id == _selectedConnectionId);
-        return $"/p/aws/queues/receive?connectionId={connection.Id}&queueUrl={Uri.EscapeDataString(queueUrl)}";
+        return $"/p/aws/queues/receive?connectionId={connection.Id}&queueUrl={Uri.EscapeDataString(queueUrl)}&queueName={Uri.EscapeDataString(queueName)}";
     }
 
     private async Task OpenCreate()

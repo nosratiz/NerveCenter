@@ -1,0 +1,198 @@
+@page "/p/aws/queues/receive"
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Messages
+@inject ReceiveMessagesCommandHandler ReceiveHandler
+@inject DeleteMessageCommandHandler DeleteHandler
+@inject ReleaseMessageCommandHandler ReleaseHandler
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<PageTitle>Receive — @QueueName</PageTitle>
+<h1>Receive: @QueueName</h1>
+
+<MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">SQS has no peek — receiving is the only way to read a message, and it hides what you received from other consumers for the visibility timeout.</MudText>
+
+@if (_messages.Count > 0)
+{
+    <MudAlert Severity="Severity.Warning" Class="hold-banner mb-3">
+        @_messages.Count message(s) are hidden from other consumers.
+        <MudButton Class="release-now ml-2" Color="Color.Inherit" Variant="Variant.Outlined" Size="Size.Small" OnClick="ReleaseAllAsync">Release now</MudButton>
+    </MudAlert>
+}
+
+<div class="d-flex gap-3 align-end mb-3">
+    <MudNumericField Class="max-messages" @bind-Value="_maxMessages" Label="Max" Min="1" Max="10" Style="max-width:100px" />
+    <MudNumericField Class="hide-for" @bind-Value="_visibilityTimeoutSeconds" Label="Hide for (sec)" Min="0" Max="43200" Style="max-width:140px" />
+    <MudButton Class="receive-action" Color="Color.Primary" Variant="Variant.Filled" Disabled="_busy" OnClick="ReceiveAsync">Receive</MudButton>
+    @if (_busy)
+    {
+        <MudProgressCircular Class="receive-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+    @if (_selectedHandles.Count > 0)
+    {
+        <MudButton Class="delete-selected" Color="Color.Error" OnClick="DeleteSelectedAsync">Delete selected (@_selectedHandles.Count)</MudButton>
+        <MudButton Class="release-selected" OnClick="ReleaseSelectedAsync">Release selected (@_selectedHandles.Count)</MudButton>
+    }
+</div>
+
+<div class="d-flex gap-4" style="min-width:0">
+    <div style="flex:1;min-width:0">
+        @foreach (var message in _messages)
+        {
+            <div class="message-row d-flex align-center gap-2 pa-2" style="cursor:pointer;border-bottom:1px solid var(--mud-palette-divider)" @onclick="@(() => _selected = message)">
+                <MudCheckBox Class="select-message" T="bool" Value="@_selectedHandles.Contains(message.ReceiptHandle)" ValueChanged="@(v => ToggleSelection(message.ReceiptHandle, v))" />
+                <span style="font-family:monospace">@message.MessageId</span>
+                <MudChip T="string" Size="Size.Small" Class="@ReceiveCountBadgeClass(message.ApproxReceiveCount)" Color="@ReceiveCountBadgeColor(message.ApproxReceiveCount)">@message.ApproxReceiveCount</MudChip>
+            </div>
+        }
+    </div>
+    @if (_selected is not null)
+    {
+        <div style="width:360px;flex:none">
+            <MudText Typo="Typo.subtitle2">Body</MudText>
+            <pre style="white-space:pre-wrap;font-size:12px">@_selected.Body</pre>
+            <MudText Typo="Typo.subtitle2" Class="mt-2">System attributes</MudText>
+            <div style="font-size:12px">
+                <div>ApproximateReceiveCount: @_selected.ApproxReceiveCount</div>
+                <div>SentTimestamp: @_selected.SentTimestamp</div>
+                <div>SenderId: @_selected.SenderId</div>
+                <div>MD5OfBody: @_selected.Md5OfBody</div>
+            </div>
+            @if (_selected.MessageAttributes.Count > 0)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-2">Message attributes</MudText>
+                @foreach (var attribute in _selected.MessageAttributes)
+                {
+                    <div style="font-size:12px">@(attribute.Key) = @(attribute.Value)</div>
+                }
+            }
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Receipt handle — valid only while hidden. Delete needs this handle, not the message ID.</MudText>
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+    [SupplyParameterFromQuery] public string QueueUrl { get; set; } = "";
+    [SupplyParameterFromQuery] public string QueueName { get; set; } = "";
+
+    [Inject] private SbConsole.Sdk.IConnectionProvider Connections { get; set; } = default!;
+
+    private List<ReceivedMessage> _messages = [];
+    private ReceivedMessage? _selected;
+    private readonly HashSet<string> _selectedHandles = [];
+    private int _maxMessages = 10;
+    private int _visibilityTimeoutSeconds = 30;
+    private bool _busy;
+    private string? _connectionName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Only used to resolve ConnectionName for the audit target the handlers build --
+        // ConnectionId/QueueUrl/QueueName themselves are not security-relevant here (this page has
+        // no destructive, prod-gated action to protect, unlike Service Bus's Peek.razor).
+        var connections = await Connections.ListAsync("aws");
+        _connectionName = connections.FirstOrDefault(c => c.Id == ConnectionId)?.Name ?? "";
+    }
+
+    private static string ReceiveCountBadgeClass(int count) => count switch
+    {
+        <= 2 => "receive-count-ok",
+        <= 5 => "receive-count-warn",
+        _ => "receive-count-bad",
+    };
+
+    private static Color ReceiveCountBadgeColor(int count) => count switch
+    {
+        <= 2 => Color.Default,
+        <= 5 => Color.Warning,
+        _ => Color.Error,
+    };
+
+    private void ToggleSelection(string receiptHandle, bool selected)
+    {
+        if (selected)
+        {
+            _selectedHandles.Add(receiptHandle);
+        }
+        else
+        {
+            _selectedHandles.Remove(receiptHandle);
+        }
+    }
+
+    private async Task ReceiveAsync()
+    {
+        _busy = true;
+        try
+        {
+            var result = await ReceiveHandler.HandleAsync(new ReceiveMessagesCommand(
+                ConnectionId, _connectionName ?? "", QueueUrl, QueueName, _maxMessages, _visibilityTimeoutSeconds, WaitTimeSeconds: 0));
+            if (result.IsSuccess)
+            {
+                _messages = [.. result.Value!];
+                _selectedHandles.Clear();
+                _selected = _messages.FirstOrDefault();
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        var handles = _selectedHandles.ToList();
+        foreach (var handle in handles)
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteMessageCommand(ConnectionId, _connectionName ?? "", QueueUrl, QueueName, handle));
+            if (result.IsSuccess)
+            {
+                _messages.RemoveAll(m => m.ReceiptHandle == handle);
+                _selectedHandles.Remove(handle);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+
+        if (_selected is not null && !_messages.Contains(_selected))
+        {
+            _selected = _messages.FirstOrDefault();
+        }
+    }
+
+    private async Task ReleaseSelectedAsync() => await ReleaseHandlesAsync(_selectedHandles.ToList());
+
+    private async Task ReleaseAllAsync() => await ReleaseHandlesAsync(_messages.Select(m => m.ReceiptHandle).ToList());
+
+    private async Task ReleaseHandlesAsync(List<string> handles)
+    {
+        foreach (var handle in handles)
+        {
+            var result = await ReleaseHandler.HandleAsync(new ReleaseMessageCommand(ConnectionId, _connectionName ?? "", QueueUrl, QueueName, handle));
+            if (result.IsSuccess)
+            {
+                _messages.RemoveAll(m => m.ReceiptHandle == handle);
+                _selectedHandles.Remove(handle);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+
+        if (_selected is not null && !_messages.Contains(_selected))
+        {
+            _selected = _messages.FirstOrDefault();
+        }
+    }
+
+    public void Dispose() { }
+}
