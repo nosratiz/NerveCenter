@@ -213,11 +213,17 @@ public sealed class SqsOperations : ISqsOperations
             sentTimestamp, senderId, message.MD5OfBody, messageAttributes);
     }
 
-    public Task DeleteMessageAsync(string secret, string queueUrl, string receiptHandle, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 10.");
+    public async Task DeleteMessageAsync(string secret, string queueUrl, string receiptHandle, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        await sqs.DeleteMessageAsync(queueUrl, receiptHandle, ct);
+    }
 
-    public Task ChangeMessageVisibilityAsync(string secret, string queueUrl, string receiptHandle, int visibilityTimeoutSeconds, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 10.");
+    public async Task ChangeMessageVisibilityAsync(string secret, string queueUrl, string receiptHandle, int visibilityTimeoutSeconds, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        await sqs.ChangeMessageVisibilityAsync(queueUrl, receiptHandle, visibilityTimeoutSeconds, ct);
+    }
 
     public Task SendMessageAsync(string secret, string queueUrl, SendMessageRequest request, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 12.");
