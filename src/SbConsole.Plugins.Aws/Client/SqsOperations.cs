@@ -254,6 +254,20 @@ public sealed class SqsOperations : ISqsOperations
         await sqs.SendMessageAsync(sqsRequest, ct);
     }
 
-    public Task<string> StartRedriveTaskAsync(string secret, string sourceQueueArn, string destinationQueueArn, int? maxMessagesPerSecond, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 13.");
+    public async Task<string> StartRedriveTaskAsync(string secret, string sourceQueueArn, string destinationQueueArn, int? maxMessagesPerSecond, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var request = new Amazon.SQS.Model.StartMessageMoveTaskRequest
+        {
+            SourceArn = sourceQueueArn,
+            DestinationArn = destinationQueueArn,
+        };
+        if (maxMessagesPerSecond is { } rate)
+        {
+            request.MaxNumberOfMessagesPerSecond = rate;
+        }
+
+        var response = await sqs.StartMessageMoveTaskAsync(request, ct);
+        return response.TaskHandle;
+    }
 }

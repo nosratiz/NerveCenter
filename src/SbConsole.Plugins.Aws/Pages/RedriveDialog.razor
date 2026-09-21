@@ -1,0 +1,59 @@
+@using SbConsole.Plugins.Aws.Redrive
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">Source (DLQ): @SourceQueueName</MudText>
+        <MudTextField Class="destination-queue-arn" @bind-Value="_destinationQueueArn" Label="Destination queue ARN" Required="true" Immediate="true" />
+        <MudNumericField Class="rate-limit" @bind-Value="_maxMessagesPerSecond" Label="Rate (msgs/sec, optional)" Min="1" Max="500" />
+        <MudAlert Severity="Severity.Warning" Class="mt-2">
+            Already-failed messages may dead-letter again — their receive count resets, so they look "new" on the next arrival.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="redrive-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="start-redrive" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_destinationQueueArn) || _busy)" OnClick="Start">Redrive</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string SourceQueueArn { get; set; } = "";
+    [Parameter] public string SourceQueueName { get; set; } = "";
+
+    [Inject] private StartRedriveCommandHandler RedriveHandler { get; set; } = default!;
+
+    private string _destinationQueueArn = "";
+    private int? _maxMessagesPerSecond;
+    private bool _busy;
+
+    private async Task Start()
+    {
+        _busy = true;
+        try
+        {
+            var result = await RedriveHandler.HandleAsync(new StartRedriveCommand(
+                ConnectionId, ConnectionName, SourceQueueArn, SourceQueueName, _destinationQueueArn, _maxMessagesPerSecond));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

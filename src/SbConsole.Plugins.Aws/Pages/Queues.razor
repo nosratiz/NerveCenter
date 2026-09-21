@@ -221,7 +221,30 @@ else
         }
     }
 
-    private Task OpenRedrive(string queueUrl, string queueArn) => Task.CompletedTask; // wired in Task 13
+    private async Task OpenRedrive(string queueUrl, string queueArn)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var queue = _queues.Single(q => q.QueueUrl == queueUrl);
+        var confirmed = await Confirmation.ConfirmAsync("Redrive", queue.Name, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<RedriveDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.SourceQueueArn, queueArn },
+            { x => x.SourceQueueName, queue.Name },
+        };
+        var dialog = await DialogService.ShowAsync<RedriveDialog>("Redrive from DLQ", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
 
     private async Task OpenPurge(string queueUrl)
     {
