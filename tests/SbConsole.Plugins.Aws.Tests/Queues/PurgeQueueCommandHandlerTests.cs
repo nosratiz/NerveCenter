@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Queues;
@@ -17,7 +18,7 @@ public class PurgeQueueCommandHandlerTests
         var operations = Substitute.For<ISqsOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new PurgeQueueCommandHandler(operations, connections, audit)
+        var result = await new PurgeQueueCommandHandler(operations, connections, audit, NullLogger<PurgeQueueCommandHandler>.Instance)
             .HandleAsync(new PurgeQueueCommand(connectionId, "aws-dev", "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeTrue();
@@ -36,7 +37,7 @@ public class PurgeQueueCommandHandlerTests
             .Returns(Task.FromException(new InvalidOperationException("purge already in progress")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new PurgeQueueCommandHandler(operations, connections, audit)
+        var result = await new PurgeQueueCommandHandler(operations, connections, audit, NullLogger<PurgeQueueCommandHandler>.Instance)
             .HandleAsync(new PurgeQueueCommand(connectionId, "aws-dev", "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeFalse();

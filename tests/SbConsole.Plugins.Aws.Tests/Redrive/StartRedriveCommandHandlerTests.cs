@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Redrive;
@@ -19,7 +20,7 @@ public class StartRedriveCommandHandlerTests
             .Returns("task-handle-1");
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new StartRedriveCommandHandler(operations, connections, audit)
+        var result = await new StartRedriveCommandHandler(operations, connections, audit, NullLogger<StartRedriveCommandHandler>.Instance)
             .HandleAsync(new StartRedriveCommand(connectionId, "aws-dev", "arn:aws:sqs:eu-west-1:123456789012:orders-dlq", "orders-dlq", "arn:aws:sqs:eu-west-1:123456789012:orders", 10));
 
         result.IsSuccess.Should().BeTrue();
@@ -37,7 +38,7 @@ public class StartRedriveCommandHandlerTests
             .Returns(Task.FromException<string>(new InvalidOperationException("a move task is already running for this queue")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new StartRedriveCommandHandler(operations, connections, audit)
+        var result = await new StartRedriveCommandHandler(operations, connections, audit, NullLogger<StartRedriveCommandHandler>.Instance)
             .HandleAsync(new StartRedriveCommand(connectionId, "aws-dev", "arn:aws:sqs:eu-west-1:123456789012:orders-dlq", "orders-dlq", "arn:aws:sqs:eu-west-1:123456789012:orders", null));
 
         result.IsSuccess.Should().BeFalse();

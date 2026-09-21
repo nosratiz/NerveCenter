@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Sdk;
 
@@ -5,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Messages;
 
 public sealed record ReleaseMessageCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName, string ReceiptHandle);
 
-public sealed class ReleaseMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class ReleaseMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReleaseMessageCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(ReleaseMessageCommand cmd, CancellationToken ct = default)
     {
@@ -24,6 +25,7 @@ public sealed class ReleaseMessageCommandHandler(ISqsOperations operations, ICon
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Releasing message on {Target} failed.", target);
             var friendly = FriendlyAwsError.From(ex);
             await audit.RecordAsync("aws.message.release", target, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
             return PluginResult.Fail(friendly);

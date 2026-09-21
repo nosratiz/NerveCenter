@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Messages;
@@ -17,7 +18,7 @@ public class DeleteMessageCommandHandlerTests
         var operations = Substitute.For<ISqsOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteMessageCommandHandler(operations, connections, audit)
+        var result = await new DeleteMessageCommandHandler(operations, connections, audit, NullLogger<DeleteMessageCommandHandler>.Instance)
             .HandleAsync(new DeleteMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", "handle-1"));
 
         result.IsSuccess.Should().BeTrue();
@@ -36,7 +37,7 @@ public class DeleteMessageCommandHandlerTests
             .Returns(Task.FromException(new Amazon.SQS.Model.ReceiptHandleIsInvalidException("expired")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteMessageCommandHandler(operations, connections, audit)
+        var result = await new DeleteMessageCommandHandler(operations, connections, audit, NullLogger<DeleteMessageCommandHandler>.Instance)
             .HandleAsync(new DeleteMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", "handle-1"));
 
         result.IsSuccess.Should().BeFalse();

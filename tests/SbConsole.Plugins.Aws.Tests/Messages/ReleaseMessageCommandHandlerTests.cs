@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Messages;
@@ -17,7 +18,7 @@ public class ReleaseMessageCommandHandlerTests
         var operations = Substitute.For<ISqsOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new ReleaseMessageCommandHandler(operations, connections, audit)
+        var result = await new ReleaseMessageCommandHandler(operations, connections, audit, NullLogger<ReleaseMessageCommandHandler>.Instance)
             .HandleAsync(new ReleaseMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", "handle-1"));
 
         result.IsSuccess.Should().BeTrue();
@@ -36,7 +37,7 @@ public class ReleaseMessageCommandHandlerTests
             .Returns(Task.FromException(new InvalidOperationException("handle expired")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new ReleaseMessageCommandHandler(operations, connections, audit)
+        var result = await new ReleaseMessageCommandHandler(operations, connections, audit, NullLogger<ReleaseMessageCommandHandler>.Instance)
             .HandleAsync(new ReleaseMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", "handle-1"));
 
         result.IsSuccess.Should().BeFalse();

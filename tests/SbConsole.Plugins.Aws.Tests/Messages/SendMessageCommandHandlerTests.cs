@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Messages;
@@ -18,7 +19,7 @@ public class SendMessageCommandHandlerTests
         var request = new SendMessageRequest("hello", null, null, null, null);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new SendMessageCommandHandler(operations, connections, audit)
+        var result = await new SendMessageCommandHandler(operations, connections, audit, NullLogger<SendMessageCommandHandler>.Instance)
             .HandleAsync(new SendMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", request));
 
         result.IsSuccess.Should().BeTrue();
@@ -38,7 +39,7 @@ public class SendMessageCommandHandlerTests
             .Returns(Task.FromException(new InvalidOperationException("message too large")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new SendMessageCommandHandler(operations, connections, audit)
+        var result = await new SendMessageCommandHandler(operations, connections, audit, NullLogger<SendMessageCommandHandler>.Instance)
             .HandleAsync(new SendMessageCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", request));
 
         result.IsSuccess.Should().BeFalse();

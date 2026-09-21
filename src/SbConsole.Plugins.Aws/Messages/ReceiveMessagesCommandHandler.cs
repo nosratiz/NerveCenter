@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Sdk;
 
@@ -7,7 +8,7 @@ public sealed record ReceiveMessagesCommand(
     Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName,
     int MaxMessages, int? VisibilityTimeoutSeconds, int WaitTimeSeconds);
 
-public sealed class ReceiveMessagesCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class ReceiveMessagesCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReceiveMessagesCommandHandler> logger)
 {
     public async Task<PluginResult<IReadOnlyList<ReceivedMessage>>> HandleAsync(ReceiveMessagesCommand cmd, CancellationToken ct = default)
     {
@@ -26,6 +27,7 @@ public sealed class ReceiveMessagesCommandHandler(ISqsOperations operations, ICo
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Receiving messages from {Target} failed.", target);
             var friendly = FriendlyAwsError.From(ex);
             await audit.RecordAsync("aws.queue.receive", target, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
             return PluginResult<IReadOnlyList<ReceivedMessage>>.Fail(friendly);

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Queues;
@@ -17,7 +18,7 @@ public class DeleteQueueCommandHandlerTests
         var operations = Substitute.For<ISqsOperations>();
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteQueueCommandHandler(operations, connections, audit)
+        var result = await new DeleteQueueCommandHandler(operations, connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
             .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", false, "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeTrue();
@@ -32,7 +33,7 @@ public class DeleteQueueCommandHandlerTests
         connections.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((string?)null);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteQueueCommandHandler(Substitute.For<ISqsOperations>(), connections, audit)
+        var result = await new DeleteQueueCommandHandler(Substitute.For<ISqsOperations>(), connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
             .HandleAsync(new DeleteQueueCommand(Guid.NewGuid(), "aws-dev", false, "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeFalse();
@@ -50,7 +51,7 @@ public class DeleteQueueCommandHandlerTests
             .Returns(Task.FromException(new InvalidOperationException("queue not found")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new DeleteQueueCommandHandler(operations, connections, audit)
+        var result = await new DeleteQueueCommandHandler(operations, connections, audit, NullLogger<DeleteQueueCommandHandler>.Instance)
             .HandleAsync(new DeleteQueueCommand(connectionId, "aws-dev", true, "https://sqs/orders", "orders"));
 
         result.IsSuccess.Should().BeFalse();

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Queues;
@@ -23,7 +24,7 @@ public class CreateQueueCommandHandlerTests
             .Returns("https://sqs.eu-west-1.amazonaws.com/123456789012/orders");
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+        var result = await new CreateQueueCommandHandler(operations, connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(connectionId, "aws-dev", request));
 
         result.IsSuccess.Should().BeTrue();
@@ -43,7 +44,7 @@ public class CreateQueueCommandHandlerTests
             .Returns("https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo");
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+        var result = await new CreateQueueCommandHandler(operations, connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(connectionId, "aws-dev", request));
 
         result.IsSuccess.Should().BeTrue();
@@ -60,7 +61,7 @@ public class CreateQueueCommandHandlerTests
         connections.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((string?)null);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(Substitute.For<ISqsOperations>(), connections, audit)
+        var result = await new CreateQueueCommandHandler(Substitute.For<ISqsOperations>(), connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(Guid.NewGuid(), "aws-dev", StandardRequest("orders")));
 
         result.IsSuccess.Should().BeFalse();
@@ -79,7 +80,7 @@ public class CreateQueueCommandHandlerTests
             .Returns(Task.FromException<string>(new InvalidOperationException("region unreachable")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+        var result = await new CreateQueueCommandHandler(operations, connections, audit, NullLogger<CreateQueueCommandHandler>.Instance)
             .HandleAsync(new CreateQueueCommand(connectionId, "aws-dev", request));
 
         result.IsSuccess.Should().BeFalse();

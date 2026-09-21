@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Sdk;
 
@@ -5,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Queues;
 
 public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string QueueUrl, string QueueName);
 
-public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(DeleteQueueCommand cmd, CancellationToken ct = default)
     {
@@ -24,6 +25,7 @@ public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnec
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Deleting queue {Target} failed.", target);
             var friendly = FriendlyAwsError.From(ex);
             await audit.RecordAsync("aws.queue.delete", target, ActionRisk.Destructive, succeeded: false, detail: friendly, ct: ct);
             return PluginResult.Fail(friendly);

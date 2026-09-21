@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Sdk;
 
@@ -7,7 +8,7 @@ public sealed record StartRedriveCommand(
     Guid ConnectionId, string ConnectionName, string SourceQueueArn, string SourceQueueName,
     string DestinationQueueArn, int? MaxMessagesPerSecond);
 
-public sealed class StartRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class StartRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<StartRedriveCommandHandler> logger)
 {
     public async Task<PluginResult> HandleAsync(StartRedriveCommand cmd, CancellationToken ct = default)
     {
@@ -26,6 +27,7 @@ public sealed class StartRedriveCommandHandler(ISqsOperations operations, IConne
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Starting redrive for {Target} failed.", target);
             var friendly = FriendlyAwsError.From(ex);
             await audit.RecordAsync("aws.queue.redrive", target, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
             return PluginResult.Fail(friendly);

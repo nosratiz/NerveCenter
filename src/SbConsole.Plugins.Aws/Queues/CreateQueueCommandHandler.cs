@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Sdk;
 
@@ -5,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Queues;
 
 public sealed record CreateQueueCommand(Guid ConnectionId, string ConnectionName, CreateQueueRequest Request);
 
-public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit)
+public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger)
 {
     public async Task<PluginResult<string>> HandleAsync(CreateQueueCommand cmd, CancellationToken ct = default)
     {
@@ -28,6 +29,7 @@ public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnec
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Creating queue {Target} failed.", requestedTarget);
             var friendly = FriendlyAwsError.From(ex);
             await audit.RecordAsync("aws.queue.create", requestedTarget, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
             return PluginResult<string>.Fail(friendly);

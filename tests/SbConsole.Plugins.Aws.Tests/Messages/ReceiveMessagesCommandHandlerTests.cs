@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Messages;
@@ -20,7 +21,7 @@ public class ReceiveMessagesCommandHandlerTests
             .Returns(received);
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new ReceiveMessagesCommandHandler(operations, connections, audit)
+        var result = await new ReceiveMessagesCommandHandler(operations, connections, audit, NullLogger<ReceiveMessagesCommandHandler>.Instance)
             .HandleAsync(new ReceiveMessagesCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", 10, 30, 20));
 
         result.IsSuccess.Should().BeTrue();
@@ -39,7 +40,7 @@ public class ReceiveMessagesCommandHandlerTests
             .Returns(Task.FromException<IReadOnlyList<ReceivedMessage>>(new InvalidOperationException("queue not found")));
         var audit = Substitute.For<IAuditScope>();
 
-        var result = await new ReceiveMessagesCommandHandler(operations, connections, audit)
+        var result = await new ReceiveMessagesCommandHandler(operations, connections, audit, NullLogger<ReceiveMessagesCommandHandler>.Instance)
             .HandleAsync(new ReceiveMessagesCommand(connectionId, "aws-dev", "https://sqs/orders", "orders", 10, null, 0));
 
         result.IsSuccess.Should().BeFalse();
