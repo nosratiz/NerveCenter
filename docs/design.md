@@ -543,7 +543,7 @@ non-destructive peek, SQS receiving has a real broker side effect: messages beco
 other consumers for the visibility timeout), delete/release a received message (release =
 `ChangeMessageVisibility` to 0), send (FIFO-conditional Message Group ID / Deduplication ID
 fields), and DLQ redrive via AWS's native `StartMessageMoveTask` API (not a hand-rolled
-receive-then-send loop — see the design spec §1's decision record). All eight operations sit
+receive-then-send loop — see the design spec §1's decision record). Every operation sits
 behind `ISqsOperations`, the plugin's thin wrapper interface between pages/handlers and the real
 `AWSSDK.SQS`/`AWSSDK.SecurityToken` clients (`SqsOperations`); handler and plugin unit tests
 substitute it directly, no network or LocalStack involved. `FriendlyAwsError.From` maps the small
@@ -565,7 +565,10 @@ number.
 
 Deferred past this plan, matching the design spec's explicit scope cuts: SNS entirely (topics,
 subscriptions, publish — separate plan); Dashboard/nav-badge/dead-letter-overview integration
-(`AwsPlugin` uses every `IPlugin.Get*` SDK default, including `GetNavBadgeAsync`); a persisted
+(`AwsPlugin` explicitly overrides `GetNavBadgeAsync` with a trivial no-op returning `null` —
+required because C#'s default-interface-member dispatch isn't reachable through a concrete-typed
+reference — and relies on the SDK default for `GetDashboardMetricsAsync`/
+`GetDashboardProblemsAsync`/`GetOldestDeadLetterAsync`/`GetResourceMetricsAsync`); a persisted
 read-only/degraded-connection capability set (`TestConnectionAsync` reports richer diagnostic text
 only — nothing hides a button); live redrive-progress polling (`ISqsOperations` has no
 `ListMessageMoveTasks`-backed status method — the move task is started and its start/failure
