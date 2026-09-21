@@ -83,6 +83,11 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
 
         cut.FindAll(".hold-banner").Should().ContainSingle();
         cut.Find("button.release-now").Should().NotBeNull();
+        // The banner's text includes an actual (numeric) countdown, not just a static message --
+        // decrementing over real wall-clock time isn't practically assertable in a component test,
+        // so this only checks the number is present right after a successful receive. The pure
+        // remaining-seconds calculation itself is covered by ReceiveCountdownTests.
+        cut.Find(".hold-banner-countdown").TextContent.Should().MatchRegex(@"~\d+ more second");
     }
 
     [Fact]

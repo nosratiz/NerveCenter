@@ -15,7 +15,7 @@
 @if (_messages.Count > 0)
 {
     <MudAlert Severity="Severity.Warning" Class="hold-banner mb-3">
-        @_messages.Count message(s) are hidden from other consumers.
+        <span class="hold-banner-countdown">@_messages.Count message(s) are hidden from your consumers for ~@RemainingSeconds more second(s).</span>
         <MudButton Class="release-now ml-2" Color="Color.Inherit" Variant="Variant.Outlined" Size="Size.Small" OnClick="ReleaseAllAsync">Release now</MudButton>
     </MudAlert>
 }
@@ -86,6 +86,21 @@
     private bool _busy;
     private string? _connectionName;
 
+    // Countdown state for the hold banner -- purely a client-side estimate of when the visibility
+    // timeout set on the most recent successful receive expires, not a server round-trip. Real AWS
+    // timing can differ (e.g. clock skew, a message re-held by a later receive), which is why
+    // reaching zero only stops the timer rather than clearing _messages.
+    private DateTimeOffset? _visibilityExpiresAt;
+    private PeriodicTimer? _countdownTimer;
+    private CancellationTokenSource? _countdownCts;
+
+    private int RemainingSeconds => _visibilityExpiresAt is { } expiresAt ? SecondsRemaining(expiresAt, DateTimeOffset.UtcNow) : 0;
+
+    // Pure so it's unit-testable without driving a real timer through wall-clock time in a
+    // component test (bUnit can't fast-forward PeriodicTimer ticks).
+    internal static int SecondsRemaining(DateTimeOffset expiresAt, DateTimeOffset now) =>
+        (int)Math.Max(0, Math.Ceiling((expiresAt - now).TotalSeconds));
+
     protected override async Task OnInitializedAsync()
     {
         // Only used to resolve ConnectionName for the audit target the handlers build --
@@ -93,6 +108,44 @@
         // no destructive, prod-gated action to protect, unlike Service Bus's Peek.razor).
         var connections = await Connections.ListAsync("aws");
         _connectionName = connections.FirstOrDefault(c => c.Id == ConnectionId)?.Name ?? "";
+    }
+
+    private void StartCountdown()
+    {
+        StopCountdown();
+        _visibilityExpiresAt = DateTimeOffset.UtcNow.AddSeconds(_visibilityTimeoutSeconds);
+        _countdownCts = new CancellationTokenSource();
+        _countdownTimer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = RunCountdownAsync(_countdownTimer, _countdownCts.Token);
+    }
+
+    private void StopCountdown()
+    {
+        _countdownCts?.Cancel();
+        _countdownCts?.Dispose();
+        _countdownCts = null;
+        _countdownTimer?.Dispose();
+        _countdownTimer = null;
+    }
+
+    private async Task RunCountdownAsync(PeriodicTimer timer, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && await timer.WaitForNextTickAsync(ct))
+            {
+                if (_messages.Count == 0 || RemainingSeconds <= 0)
+                {
+                    break;
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when a new receive restarts the countdown or the component is disposed.
+        }
     }
 
     private static string ReceiveCountBadgeClass(int count) => count switch
@@ -127,12 +180,16 @@
         try
         {
             var result = await ReceiveHandler.HandleAsync(new ReceiveMessagesCommand(
-                ConnectionId, _connectionName ?? "", QueueUrl, QueueName, _maxMessages, _visibilityTimeoutSeconds, WaitTimeSeconds: 0));
+                ConnectionId, _connectionName ?? "", QueueUrl, QueueName, _maxMessages, _visibilityTimeoutSeconds, WaitTimeSeconds: 2));
             if (result.IsSuccess)
             {
                 _messages = [.. result.Value!];
                 _selectedHandles.Clear();
                 _selected = _messages.FirstOrDefault();
+                if (_messages.Count > 0)
+                {
+                    StartCountdown();
+                }
             }
             else
             {
@@ -194,5 +251,5 @@
         }
     }
 
-    public void Dispose() { }
+    public void Dispose() => StopCountdown();
 }
