@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Amazon.SecurityToken;
 using Amazon.SecurityToken.Model;
 using Amazon.SQS;
@@ -82,12 +83,41 @@ public sealed class SqsOperations : ISqsOperations
             nextToken = page.NextToken;
         } while (!string.IsNullOrEmpty(nextToken));
 
-        var summaries = new List<QueueSummary>();
+        // First pass: fetch every queue's attributes in one call each (AttributeNames=[All]) and
+        // cache them, so the target-ARN counting pass below doesn't need a second round-trip per
+        // queue -- ListQueuesAsync already fetches this data, DLQ-ness is purely a client-side
+        // computation over it.
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>>();
         foreach (var queueUrl in queueUrls)
         {
             var attributesResponse = await sqs.GetQueueAttributesAsync(
                 new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
-            summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributesResponse.Attributes));
+            attributesByUrl[queueUrl] = attributesResponse.Attributes;
+        }
+
+        // Count, per target ARN, how many queues' RedrivePolicy points at it -- that count is what
+        // makes a queue an actual dead-letter target (AWS's StartMessageMoveTask requires SourceArn
+        // to be a queue that other queues redrive into), not merely having a RedrivePolicy of its
+        // own (that just means it dead-letters TO somewhere else).
+        var deadLetterSourceCounts = new Dictionary<string, int>();
+        foreach (var attributes in attributesByUrl.Values)
+        {
+            var targetArn = attributes.TryGetValue("RedrivePolicy", out var redrivePolicy)
+                ? ExtractDeadLetterTargetArn(redrivePolicy)
+                : null;
+            if (targetArn is not null)
+            {
+                deadLetterSourceCounts[targetArn] = deadLetterSourceCounts.GetValueOrDefault(targetArn) + 1;
+            }
+        }
+
+        var summaries = new List<QueueSummary>();
+        foreach (var queueUrl in queueUrls)
+        {
+            var attributes = attributesByUrl[queueUrl];
+            var queueArn = attributes.TryGetValue("QueueArn", out var arn) ? arn : "";
+            var deadLetterSourceCount = deadLetterSourceCounts.GetValueOrDefault(queueArn);
+            summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributes, deadLetterSourceCount));
         }
 
         return summaries;
@@ -98,7 +128,7 @@ public sealed class SqsOperations : ISqsOperations
     // ConfluentKafkaOperations.Decode/IsEndOfPartition. Internal (not private) so
     // SqsOperationsTests can assert it directly -- InternalsVisibleTo already covers the test
     // project (Task 1's csproj).
-    internal static QueueSummary ToQueueSummary(string name, string queueUrl, IDictionary<string, string> attributes)
+    internal static QueueSummary ToQueueSummary(string name, string queueUrl, IDictionary<string, string> attributes, int deadLetterSourceCount)
     {
         long GetLong(string key) => attributes.TryGetValue(key, out var value) && long.TryParse(value, out var parsed) ? parsed : 0;
         bool GetBool(string key) => attributes.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) && parsed;
@@ -113,10 +143,36 @@ public sealed class SqsOperations : ISqsOperations
             ApproxDelayed: GetLong("ApproximateNumberOfMessagesDelayed"),
             HasDeadLetterTarget: attributes.ContainsKey("RedrivePolicy"),
             IsKmsEncrypted: attributes.ContainsKey("KmsMasterKeyId"),
-            CreatedAt: DateTimeOffset.FromUnixTimeSeconds(GetLong("CreatedTimestamp")));
+            CreatedAt: DateTimeOffset.FromUnixTimeSeconds(GetLong("CreatedTimestamp")),
+            DeadLetterSourceCount: deadLetterSourceCount);
     }
 
     internal static string QueueNameFromUrl(string queueUrl) => queueUrl[(queueUrl.LastIndexOf('/') + 1)..];
+
+    // Pure static so it's unit-testable without a real AWS account. RedrivePolicy is a JSON string
+    // attribute (not a nested SQS structure) shaped {"deadLetterTargetArn":"arn:...",
+    // "maxReceiveCount":N} -- never throws on null/empty/malformed input, since a queue with no
+    // redrive policy, or one AWS shapes differently than expected, should just look like "no DLQ
+    // target here" rather than blow up queue listing.
+    internal static string? ExtractDeadLetterTargetArn(string? redrivePolicyJson)
+    {
+        if (string.IsNullOrEmpty(redrivePolicyJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(redrivePolicyJson);
+            return document.RootElement.TryGetProperty("deadLetterTargetArn", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     public async Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default)
     {
@@ -151,7 +207,9 @@ public sealed class SqsOperations : ISqsOperations
 
         if (request.DeadLetterTargetArn is { } dlqArn && request.MaxReceiveCount is { } maxReceives)
         {
-            attributes["RedrivePolicy"] = $"{{\"deadLetterTargetArn\":\"{dlqArn}\",\"maxReceiveCount\":{maxReceives}}}";
+            // Serialized via JsonSerializer, not raw string interpolation -- a quote or backslash
+            // in a user-typed ARN would otherwise produce malformed JSON.
+            attributes["RedrivePolicy"] = JsonSerializer.Serialize(new { deadLetterTargetArn = dlqArn, maxReceiveCount = maxReceives });
         }
 
         if (request.KmsKeyId is { } kmsKeyId)

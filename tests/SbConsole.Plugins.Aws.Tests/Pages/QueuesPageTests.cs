@@ -38,16 +38,13 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<GetConnectionEchoQueryHandler>();
         Services.AddSingleton<DeleteQueueCommandHandler>();
         Services.AddSingleton<CreateQueueCommandHandler>();
-        // Not yet built -- Tasks 8, 12, 13 respectively. Queues.razor's OpenPurge/OpenSend/
-        // OpenRedrive stay no-op stubs until those tasks wire real dialogs, so this test file has
-        // no need for these handlers yet either. Re-enable each as its task lands.
-        // Services.AddSingleton<PurgeQueueCommandHandler>();
-        // Services.AddSingleton<Messages.SendMessageCommandHandler>();
-        // Services.AddSingleton<Redrive.StartRedriveCommandHandler>();
+        Services.AddSingleton<PurgeQueueCommandHandler>();
+        Services.AddSingleton<SbConsole.Plugins.Aws.Messages.SendMessageCommandHandler>();
+        Services.AddSingleton<SbConsole.Plugins.Aws.Redrive.StartRedriveCommandHandler>();
     }
 
-    private static QueueSummary Queue(string name, bool hasDlqTarget = false, bool isFifo = false) =>
-        new(name, $"https://sqs/{name}", $"arn:aws:sqs:eu-west-1:123456789012:{name}", isFifo, 10, 2, 0, hasDlqTarget, false, DateTimeOffset.UtcNow);
+    private static QueueSummary Queue(string name, int deadLetterSourceCount = 0, bool isFifo = false) =>
+        new(name, $"https://sqs/{name}", $"arn:aws:sqs:eu-west-1:123456789012:{name}", isFifo, 10, 2, 0, false, false, DateTimeOffset.UtcNow, deadLetterSourceCount);
 
     [Fact]
     public async Task Lists_queues_for_the_first_available_connection()
@@ -109,7 +106,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
         cut.Render();
 
-        cut.Find(".refresh-cost-caption").TextContent.Should().Contain("1 + 3 = 4 calls");
+        cut.Find(".refresh-cost-caption").TextContent.Should().Contain("1 + 3 = 4");
     }
 
     [Fact]
@@ -133,13 +130,46 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     public async Task A_queue_with_a_dead_letter_target_shows_the_DLQ_flag()
     {
         _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
-            .Returns(new List<QueueSummary> { Queue("order-events-dlq", hasDlqTarget: true) });
+            .Returns(new List<QueueSummary> { Queue("order-events-dlq", deadLetterSourceCount: 1) });
 
         var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
         await Task.Delay(30);
         cut.Render();
 
         cut.FindAll(".dlq-flag").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_source_queue_with_a_configured_redrive_policy_but_no_incoming_redrives_does_NOT_show_the_DLQ_chip_or_Redrive_button()
+    {
+        // "order-events" has its own RedrivePolicy (it dead-letters TO order-events-dlq), which
+        // made it look like a DLQ under the old (inverted) HasDeadLetterTarget-based logic. It is
+        // not itself a redrive target -- DeadLetterSourceCount is 0 -- so neither the chip nor the
+        // Redrive button should render for it.
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events", deadLetterSourceCount: 0) });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.FindAll(".dlq-flag").Should().BeEmpty();
+        cut.FindAll(".redrive-action").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_queue_that_is_a_redrive_target_for_other_queues_shows_the_DLQ_chip_and_Redrive_button()
+    {
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events-dlq", deadLetterSourceCount: 2) });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.FindAll(".dlq-flag").Should().ContainSingle();
+        cut.Find(".dlq-flag").TextContent.Should().Contain("2");
+        cut.FindAll(".redrive-action").Should().ContainSingle();
     }
 
     [Fact]

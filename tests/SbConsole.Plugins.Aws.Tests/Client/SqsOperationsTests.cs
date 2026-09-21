@@ -21,7 +21,7 @@ public class SqsOperationsTests
     [Fact]
     public void ToQueueSummary_maps_every_attribute()
     {
-        var summary = SqsOperations.ToQueueSummary("orders", "https://sqs.eu-west-1.amazonaws.com/123456789012/orders", FullAttributes());
+        var summary = SqsOperations.ToQueueSummary("orders", "https://sqs.eu-west-1.amazonaws.com/123456789012/orders", FullAttributes(), deadLetterSourceCount: 0);
 
         summary.Name.Should().Be("orders");
         summary.QueueArn.Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders");
@@ -29,7 +29,13 @@ public class SqsOperationsTests
         summary.ApproxVisible.Should().Be(1204);
         summary.ApproxInFlight.Should().Be(18);
         summary.ApproxDelayed.Should().Be(0);
+        // "orders" has its own RedrivePolicy (it sends failed messages elsewhere) -- that makes it
+        // a source queue, not a DLQ, so HasDeadLetterTarget stays true (harmless, kept for a future
+        // "redrive-out" panel) while DeadLetterSourceCount -- the field the UI actually keys off of
+        // -- reflects how many *other* queues redrive into "orders" (zero here; see the
+        // redrive-target test below).
         summary.HasDeadLetterTarget.Should().BeTrue();
+        summary.DeadLetterSourceCount.Should().Be(0);
         summary.IsKmsEncrypted.Should().BeTrue();
         summary.CreatedAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1700000000));
     }
@@ -46,9 +52,10 @@ public class SqsOperationsTests
             ["CreatedTimestamp"] = "1700000000",
         };
 
-        var summary = SqsOperations.ToQueueSummary("plain", "https://sqs.eu-west-1.amazonaws.com/123456789012/plain", attributes);
+        var summary = SqsOperations.ToQueueSummary("plain", "https://sqs.eu-west-1.amazonaws.com/123456789012/plain", attributes, deadLetterSourceCount: 0);
 
         summary.HasDeadLetterTarget.Should().BeFalse();
+        summary.DeadLetterSourceCount.Should().Be(0);
         summary.IsKmsEncrypted.Should().BeFalse();
         summary.IsFifo.Should().BeFalse();
     }
@@ -59,14 +66,54 @@ public class SqsOperationsTests
         var attributes = FullAttributes();
         attributes["FifoQueue"] = "true";
 
-        SqsOperations.ToQueueSummary("orders.fifo", "https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo", attributes)
+        SqsOperations.ToQueueSummary("orders.fifo", "https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo", attributes, deadLetterSourceCount: 0)
             .IsFifo.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ToQueueSummary_reports_the_actual_dead_letter_source_count_passed_in()
+    {
+        // "orders-dlq" has no RedrivePolicy of its own (it IS the dead-letter target, not a
+        // source), but two other queues' RedrivePolicy point at it -- this is the actual DLQ
+        // signal the UI's chip/Redrive button should key off of, computed by the caller
+        // (ListQueuesAsync) and passed straight through here.
+        var attributes = new Dictionary<string, string>
+        {
+            ["QueueArn"] = "arn:aws:sqs:eu-west-1:123456789012:orders-dlq",
+            ["ApproximateNumberOfMessages"] = "3",
+            ["ApproximateNumberOfMessagesNotVisible"] = "0",
+            ["ApproximateNumberOfMessagesDelayed"] = "0",
+            ["CreatedTimestamp"] = "1700000000",
+        };
+
+        var summary = SqsOperations.ToQueueSummary("orders-dlq", "https://sqs.eu-west-1.amazonaws.com/123456789012/orders-dlq", attributes, deadLetterSourceCount: 2);
+
+        summary.HasDeadLetterTarget.Should().BeFalse();
+        summary.DeadLetterSourceCount.Should().Be(2);
     }
 
     [Fact]
     public void QueueNameFromUrl_extracts_the_last_path_segment()
     {
         SqsOperations.QueueNameFromUrl("https://sqs.eu-west-1.amazonaws.com/123456789012/order-events").Should().Be("order-events");
+    }
+
+    [Fact]
+    public void ExtractDeadLetterTargetArn_parses_the_target_arn_out_of_a_well_formed_RedrivePolicy()
+    {
+        var json = "{\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-1:123456789012:orders-dlq\",\"maxReceiveCount\":5}";
+
+        SqsOperations.ExtractDeadLetterTargetArn(json).Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders-dlq");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("{\"maxReceiveCount\":5}")]
+    public void ExtractDeadLetterTargetArn_returns_null_for_missing_or_malformed_input(string? redrivePolicyJson)
+    {
+        SqsOperations.ExtractDeadLetterTargetArn(redrivePolicyJson).Should().BeNull();
     }
 
     [Fact]

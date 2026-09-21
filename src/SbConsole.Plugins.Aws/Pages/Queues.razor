@@ -60,7 +60,7 @@ else
     <MudText Class="queues-summary mud-text-secondary mt-1" Typo="Typo.body2">@_queues.Count @(_queues.Count == 1 ? "queue" : "queues")</MudText>
     <MudText Typo="Typo.caption" Class="refresh-cost-caption mud-text-secondary mb-2">
         <span style="font-family:monospace">ListQueues</span> filters by prefix only — no substring or regex.
-        Each refresh is 1 + @_queues.Count calls (1 + @_queues.Count = @(1 + _queues.Count) calls).
+        Each refresh is 1 + @_queues.Count = @(1 + _queues.Count) calls.
     </MudText>
 
     <MudTable Items="_queues">
@@ -80,9 +80,9 @@ else
             <MudTd Style="text-align:right;font-family:monospace">~@context.ApproxInFlight</MudTd>
             <MudTd Style="text-align:right;font-family:monospace">~@context.ApproxDelayed</MudTd>
             <MudTd>
-                @if (context.HasDeadLetterTarget)
+                @if (context.DeadLetterSourceCount > 0)
                 {
-                    <MudChip T="string" Class="dlq-flag" Color="Color.Error" Size="Size.Small">DLQ</MudChip>
+                    <MudChip T="string" Class="dlq-flag" Color="Color.Error" Size="Size.Small">DLQ &times;@context.DeadLetterSourceCount</MudChip>
                 }
                 @if (context.IsFifo)
                 {
@@ -96,7 +96,7 @@ else
             <MudTd>
                 <MudButton Class="receive-action" Href="@ReceiveUrl(context.QueueUrl, context.Name)">Receive</MudButton>
                 <MudButton Class="send-message-action" OnClick="@(() => OpenSend(context.QueueUrl))">Send</MudButton>
-                @if (context.HasDeadLetterTarget)
+                @if (context.DeadLetterSourceCount > 0)
                 {
                     <MudButton Class="redrive-action" OnClick="@(() => OpenRedrive(context.QueueUrl, context.QueueArn))">Redrive</MudButton>
                 }
