@@ -163,8 +163,11 @@ public sealed class SqsOperations : ISqsOperations
         return response.QueueUrl;
     }
 
-    public Task DeleteQueueAsync(string secret, string queueUrl, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 7.");
+    public async Task DeleteQueueAsync(string secret, string queueUrl, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        await sqs.DeleteQueueAsync(queueUrl, ct);
+    }
 
     public Task PurgeQueueAsync(string secret, string queueUrl, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 8.");
