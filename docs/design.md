@@ -8,7 +8,8 @@ now §6.1). Extended 2026-09-13 (Service Bus plugin, Topics & Subscriptions:
 mockups (`~/Desktop/UI mockups for NerveCenter`) after the first pass was
 drafted without consulting them, §6.3 new Dead-letter overview, §8 updated).
 Extended 2026-09-14 (Glass shell: §10 rewritten for the app-bar/drawer
-gradient-glass treatment).
+gradient-glass treatment). Extended 2026-09-21 (AWS plugin, Queues: §6.7 new
+plugin section).
 SDK version: `SbConsole.Sdk` 1.3.0 — see §3 for the 2026-09-10 additions
 (`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
 `IConfirmationService`), the 2026-09-12 additions/removal
@@ -511,6 +512,72 @@ Deferred past this plan, each its own future plan: consumer group management (li
 offset reset); dead-letter handling via the DLQ-topic convention (Kafka has no native DLQ);
 Schema Registry integration; topic configuration beyond partition count/replication factor;
 integration tests against a real/emulated broker.
+
+## 6.7 AWS plugin (`SbConsole.Plugins.Aws`) — Queues (2026-09-21)
+
+SbConsole's third plugin, built the same way Service Bus's Queues plan and Kafka's Topics plan
+proved the architecture out for their systems: `AwsPlugin : IPlugin`, `Id`/`ConnectionKind` =
+`"aws"`, `DisplayName`/`ConnectionKindDisplayName` = `"AWS SQS/SNS"` (named for the plugin's full
+eventual scope from the start, so SNS can join later with no rename). Registered via
+`AddSbConsolePlugin<AwsPlugin>()` in `Program.cs`, right after Kafka. Full design:
+`docs/superpowers/specs/2026-09-21-aws-sqs-plugin-design.md`.
+
+Connection secret model differs from both existing plugins in field *variance* (though not in
+convention — it's still one flat `key=value;` string, `AwsConfigParser`, mirroring
+`KafkaConfigParser`'s parse/`SafeEcho` shape exactly, including skipping malformed segments rather
+than throwing): three structurally different auth modes (`access-keys`, `assume-role`,
+`default-chain`), each with its own field set, plus mode-independent `region`/`endpoint`/
+`pathStyle` fields for LocalStack. `AwsConfigParser.SafeEcho` allowlists only `region`/`mode`/
+`endpoint` for display, excluding every credential-shaped key so decrypted secrets never reach the
+browser even indirectly. **No custom connection-form UI was built** — verified against
+`AddEditConnectionDialog.razor` that no per-plugin custom-field hook exists for any plugin; AWS
+follows Kafka's own precedent exactly, typing the flat secret by hand into the existing generic
+textbox.
+
+**Queues (shipped):** list (prefix-only filter, matching `ListQueues`' real `QueueNamePrefix`
+constraint — labelled "Starts with," not "Search"), create (Standard and FIFO, with FIFO's forced
+`.fifo` suffix and content-based-dedup/high-throughput options), delete (`Destructive`), purge
+(`Destructive`, typed-confirm-on-prod, async/eventually-consistent completion caveat surfaced in
+the dialog copy), receive (modelled as a **command**, not a query — unlike Service Bus/Kafka's
+non-destructive peek, SQS receiving has a real broker side effect: messages become invisible to
+other consumers for the visibility timeout), delete/release a received message (release =
+`ChangeMessageVisibility` to 0), send (FIFO-conditional Message Group ID / Deduplication ID
+fields), and DLQ redrive via AWS's native `StartMessageMoveTask` API (not a hand-rolled
+receive-then-send loop — see the design spec §1's decision record). All eight operations sit
+behind `ISqsOperations`, the plugin's thin wrapper interface between pages/handlers and the real
+`AWSSDK.SQS`/`AWSSDK.SecurityToken` clients (`SqsOperations`); handler and plugin unit tests
+substitute it directly, no network or LocalStack involved. `FriendlyAwsError.From` maps the small
+set of exceptions these operations can actually raise (`AmazonSecurityTokenServiceException` and
+`AmazonSQSException`, pattern-matched on `ErrorCode`, plus a few typed SQS exceptions like
+`QueueDoesNotExistException`) to short fixed messages, falling back to `SbConsole.Sdk`'s shared
+`FriendlyError.From` for anything unmapped — every mapped exception type was confirmed to exist
+against the installed `AWSSDK.SQS` 3.7.400.62 / `AWSSDK.SecurityToken` 3.7.401.13 packages rather
+than assumed from the AWS SDK's general shape (a few plan-suggested names, e.g. an
+`AttributeNames` property on `ReceiveMessageRequest` and a `AssumeRoleAWSCredentials` type under
+`Amazon.SecurityToken`, didn't actually exist in these package versions and were corrected during
+implementation).
+
+**One correction to the source UI mockup** (`~/Desktop/UI mockups for NerveCenter/SbConsole
+AWS.dc.html`) carried through from the design spec: its refresh-cost caption states `1 + 3n` API
+calls per refresh; the real API is `1 + n` (`GetQueueAttributes` with `AttributeNames=[All]`
+returns every attribute in one call per queue). `Queues.razor`'s shipped caption states the real
+number.
+
+Deferred past this plan, matching the design spec's explicit scope cuts: SNS entirely (topics,
+subscriptions, publish — separate plan); Dashboard/nav-badge/dead-letter-overview integration
+(`AwsPlugin` uses every `IPlugin.Get*` SDK default, including `GetNavBadgeAsync`); a persisted
+read-only/degraded-connection capability set (`TestConnectionAsync` reports richer diagnostic text
+only — nothing hides a button); live redrive-progress polling (`ISqsOperations` has no
+`ListMessageMoveTasks`-backed status method — the move task is started and its start/failure
+result reported, with no polling method added since nothing in this plan's UI calls one yet);
+per-message manual "redrive to source" from inside Receive; the Queue detail page's SNS
+cross-reference panel; Access-policy/Tags tabs.
+
+**Local dev**: `docker compose --profile aws up -d` runs LocalStack (`SERVICES=sqs,sns`, so the
+SNS plan needs no compose change) gated by a real `healthcheck` (`curl` against
+`/_localstack/health`, `condition: service_healthy`) rather than a fixed startup delay, plus a
+one-shot `aws-init` seed script — depending on that healthcheck — that creates sample queues with
+a redrive policy already attached, mirroring Kafka's `kafka-init` pattern. See `docker/README.md`.
 
 ## 7. Error handling
 
