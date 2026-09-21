@@ -32,6 +32,28 @@ public class CreateQueueCommandHandlerTests
     }
 
     [Fact]
+    public async Task FIFO_create_audits_the_actual_created_name_with_the_fifo_suffix()
+    {
+        var connectionId = Guid.NewGuid();
+        var connections = Substitute.For<IConnectionProvider>();
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("mode=default-chain;region=eu-west-1");
+        var operations = Substitute.For<ISqsOperations>();
+        var request = new CreateQueueRequest("orders", true, 30, 345600, 0, 262144, 20, null, null, null, null, null);
+        operations.CreateQueueAsync("mode=default-chain;region=eu-west-1", request, Arg.Any<CancellationToken>())
+            .Returns("https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo");
+        var audit = Substitute.For<IAuditScope>();
+
+        var result = await new CreateQueueCommandHandler(operations, connections, audit)
+            .HandleAsync(new CreateQueueCommand(connectionId, "aws-dev", request));
+
+        result.IsSuccess.Should().BeTrue();
+        // The request named "orders", but the queue is actually created (and audited) as
+        // "orders.fifo" -- SqsOperations.CreateQueueAsync appends the suffix for FIFO queues, and
+        // the audit target must reflect the real resource, not the pre-suffix requested name.
+        await audit.Received(1).RecordAsync("aws.queue.create", "aws-dev/orders.fifo", ActionRisk.Mutating, true, null, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Unknown_connection_returns_a_failure_and_records_no_audit_entry()
     {
         var connections = Substitute.For<IConnectionProvider>();

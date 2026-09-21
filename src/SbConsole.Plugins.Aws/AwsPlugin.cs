@@ -22,7 +22,7 @@ public sealed class AwsPlugin : IPlugin
     public PluginContribution Contribution => new(PageCount: 2, ActionCount: 8);
 
     // The Queues/Messages/Redrive command and query handlers are added to this project one at a
-    // time by Tasks 4, 6, 7, 8, 9, 10, 12, 13 -- registering them here in Task 3 (as the plan's
+    // time by Tasks 4, 7, 8, 9, 10, 12, 13 -- registering them here in Task 3 (as the plan's
     // AwsPlugin.cs listing does) would reference types that don't exist yet and fail the build.
     // Each of those later tasks adds its own `services.AddScoped<...>()` line here as it creates
     // the corresponding handler class.

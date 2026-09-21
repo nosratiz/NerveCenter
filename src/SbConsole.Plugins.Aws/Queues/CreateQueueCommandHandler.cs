@@ -9,7 +9,7 @@ public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnec
 {
     public async Task<PluginResult<string>> HandleAsync(CreateQueueCommand cmd, CancellationToken ct = default)
     {
-        var target = $"{cmd.ConnectionName}/{cmd.Request.Name}";
+        var requestedTarget = $"{cmd.ConnectionName}/{cmd.Request.Name}";
         var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
         if (secret is null)
         {
@@ -19,13 +19,17 @@ public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnec
         try
         {
             var queueUrl = await operations.CreateQueueAsync(secret, cmd.Request, ct);
-            await audit.RecordAsync("aws.queue.create", target, ActionRisk.Mutating, succeeded: true, ct: ct);
+            // A FIFO request's name gets a .fifo suffix appended during creation (SqsOperations.
+            // CreateQueueAsync) -- audit the actual created name (derived from the returned URL),
+            // not the pre-suffix requested one, so the audit trail names the real resource.
+            var actualTarget = $"{cmd.ConnectionName}/{SqsOperations.QueueNameFromUrl(queueUrl)}";
+            await audit.RecordAsync("aws.queue.create", actualTarget, ActionRisk.Mutating, succeeded: true, ct: ct);
             return PluginResult<string>.Ok(queueUrl);
         }
         catch (Exception ex)
         {
             var friendly = FriendlyAwsError.From(ex);
-            await audit.RecordAsync("aws.queue.create", target, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
+            await audit.RecordAsync("aws.queue.create", requestedTarget, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
             return PluginResult<string>.Fail(friendly);
         }
     }
