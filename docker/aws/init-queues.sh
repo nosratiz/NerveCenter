@@ -16,19 +16,13 @@ create_queue order-events
 create_queue order-events-dlq
 create_queue payments
 
-# Wait for queues to be available before attaching redrive policy
-i=0
-while [ $i -lt 10 ]; do
-  if aws --endpoint-url "$ENDPOINT" sqs get-queue-url --queue-name order-events >/dev/null 2>&1; then
-    break
-  fi
-  i=$((i + 1))
-  sleep 1
-done
-
 echo "==> attaching order-events' redrive policy to order-events-dlq"
 ORDER_QUEUE_URL=$(aws --endpoint-url "$ENDPOINT" sqs get-queue-url --queue-name order-events --query 'QueueUrl' --output text)
-DLQ_URL=$(aws --endpoint-url "$ENDPOINT" sqs get-queue-url --queue-name order-events-dlq --query 'QueueUrl' --output text)
+DLQ_URL=$(aws --endpoint-url "$ENDPOINT" sqs get-queue-url --queue-name order-events-dlq --query 'QueueUrl' --output text 2>/dev/null) || {
+  echo "    (DLQ queue not immediately available, retrying...)"
+  sleep 2
+  DLQ_URL=$(aws --endpoint-url "$ENDPOINT" sqs get-queue-url --queue-name order-events-dlq --query 'QueueUrl' --output text)
+}
 DLQ_ARN=$(aws --endpoint-url "$ENDPOINT" sqs get-queue-attributes \
   --queue-url "$DLQ_URL" --attribute-names QueueArn \
   --query 'Attributes.QueueArn' --output text)
