@@ -176,7 +176,6 @@ public interface ISqsOperations
 
     /// <summary>Native AWS move task (StartMessageMoveTask) -- destination defaults to the queue the source dead-lettered from.</summary>
     Task<string> StartRedriveTaskAsync(string secret, string sourceQueueArn, string destinationQueueArn, int? maxMessagesPerSecond, CancellationToken ct = default);
-    Task<RedriveTaskStatus> GetRedriveTaskStatusAsync(string secret, string taskHandle, CancellationToken ct = default);
 }
 
 public sealed record QueueSummary(
@@ -199,8 +198,6 @@ public sealed record ReceivedMessage(
     string MessageId, string ReceiptHandle, string Body, int ApproxReceiveCount,
     DateTimeOffset SentTimestamp, string SenderId, string Md5OfBody,
     IReadOnlyDictionary<string, string> MessageAttributes);
-
-public sealed record RedriveTaskStatus(string Status, long ApproximateNumberOfMessagesMoved, string? FailureReason);
 ```
 
 One real implementation, `Client/SqsOperations.cs`, built against
@@ -459,11 +456,12 @@ out across this plan and the SNS plan alike, same trigger condition
   diagnostic text (§4) but nothing is persisted, and every action stays
   visible everywhere, failing gracefully via `FriendlyAwsError` if IAM
   denies it at call time — the same posture every other plugin already has.
-- **Live redrive progress** — `GetRedriveTaskStatusAsync` exists on
-  `ISqsOperations` for a future progress view, but `RedriveDialog.razor`
-  does not poll it in this plan; the dialog starts the move task and reports
-  only success/failure. A live rate/duration/progress-bar view (the
-  mockup's "Est. duration ~21s") is a follow-up.
+- **Live redrive progress** — `ISqsOperations` has no status-polling method
+  (e.g. wrapping `ListMessageMoveTasks`); `RedriveDialog.razor` starts the
+  move task (`StartRedriveTaskAsync`) and reports only success/failure. A
+  live rate/duration/progress-bar view (the mockup's "Est. duration ~21s")
+  is a follow-up, and the polling method is added to `ISqsOperations` then —
+  not built speculatively now with nothing to call it.
 - **Per-message manual "redrive to source queue"** from inside `Receive.razor`
   — only the queue-level DLQ→source `RedriveDialog` (native move-task API)
   ships in this plan.
