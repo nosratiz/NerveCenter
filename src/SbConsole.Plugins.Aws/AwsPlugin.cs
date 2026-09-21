@@ -32,6 +32,7 @@ public sealed class AwsPlugin : IPlugin
         services.AddScoped<ListQueuesQueryHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
+        services.AddScoped<Queues.CreateQueueCommandHandler>();
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

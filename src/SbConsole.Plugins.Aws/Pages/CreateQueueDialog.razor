@@ -1,0 +1,90 @@
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Queues
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="queue-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_isFifo ? $"{_name}.fifo" : _name) — SQS requires the .fifo suffix on a FIFO queue; it is added for you.</MudText>
+        <MudSwitch T="bool" Class="fifo-toggle" @bind-Value="_isFifo" Label="FIFO" Color="Color.Primary" />
+
+        @if (_isFifo)
+        {
+            <MudSwitch T="bool" Class="content-based-dedup-toggle" @bind-Value="_contentBasedDeduplication" Label="Content-based deduplication" Color="Color.Primary" />
+            <MudSwitch T="bool" Class="high-throughput-toggle" @bind-Value="_highThroughput" Label="High throughput" Color="Color.Primary" />
+        }
+
+        <MudNumericField Class="visibility-timeout" @bind-Value="_visibilityTimeoutSeconds" Label="Visibility timeout (sec)" Min="0" Max="43200" />
+        <MudNumericField Class="retention-period" @bind-Value="_retentionPeriodDays" Label="Retention (days)" Min="1" Max="14" />
+        <MudNumericField Class="delay-seconds" @bind-Value="_delaySeconds" Label="Delivery delay (sec)" Min="0" Max="900" />
+        <MudNumericField Class="max-message-size" @bind-Value="_maxMessageSizeBytes" Label="Max message size (bytes)" Min="1024" Max="262144" />
+        <MudNumericField Class="receive-wait-time" @bind-Value="_receiveWaitTimeSeconds" Label="Receive wait time (sec)" Min="0" Max="20" />
+
+        <MudSwitch T="bool" Class="dlq-toggle" @bind-Value="_deadLetterEnabled" Label="Dead-letter queue" Color="Color.Primary" />
+        @if (_deadLetterEnabled)
+        {
+            <MudTextField Class="dlq-target-arn" @bind-Value="_deadLetterTargetArn" Label="Target queue ARN" Immediate="true" />
+            <MudNumericField Class="max-receive-count" @bind-Value="_maxReceiveCount" Label="Max receives" Min="1" Max="1000" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-queue-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-queue" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || _busy)" OnClick="Save">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+
+    [Inject] private CreateQueueCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private bool _isFifo;
+    private bool _contentBasedDeduplication;
+    private bool _highThroughput;
+    private int _visibilityTimeoutSeconds = 30;
+    private int _retentionPeriodDays = 4;
+    private int _delaySeconds;
+    private int _maxMessageSizeBytes = 262144;
+    private int _receiveWaitTimeSeconds = 20;
+    private bool _deadLetterEnabled;
+    private string _deadLetterTargetArn = "";
+    private int _maxReceiveCount = 5;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var request = new CreateQueueRequest(
+                _name, _isFifo,
+                _visibilityTimeoutSeconds, _retentionPeriodDays * 86400, _delaySeconds, _maxMessageSizeBytes, _receiveWaitTimeSeconds,
+                _deadLetterEnabled ? _deadLetterTargetArn : null, _deadLetterEnabled ? _maxReceiveCount : null,
+                null,
+                _isFifo ? _contentBasedDeduplication : null, _isFifo ? _highThroughput : null);
+
+            var result = await CreateHandler.HandleAsync(new CreateQueueCommand(ConnectionId, ConnectionName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

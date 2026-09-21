@@ -118,8 +118,50 @@ public sealed class SqsOperations : ISqsOperations
 
     internal static string QueueNameFromUrl(string queueUrl) => queueUrl[(queueUrl.LastIndexOf('/') + 1)..];
 
-    public Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 6.");
+    public async Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var name = request.IsFifo && !request.Name.EndsWith(".fifo", StringComparison.Ordinal)
+            ? $"{request.Name}.fifo"
+            : request.Name;
+
+        var attributes = new Dictionary<string, string>
+        {
+            ["VisibilityTimeout"] = request.VisibilityTimeoutSeconds.ToString(),
+            ["MessageRetentionPeriod"] = request.RetentionPeriodSeconds.ToString(),
+            ["DelaySeconds"] = request.DelaySeconds.ToString(),
+            ["MaximumMessageSize"] = request.MaxMessageSizeBytes.ToString(),
+            ["ReceiveMessageWaitTimeSeconds"] = request.ReceiveWaitTimeSeconds.ToString(),
+        };
+
+        if (request.IsFifo)
+        {
+            attributes["FifoQueue"] = "true";
+            if (request.ContentBasedDeduplication is { } dedup)
+            {
+                attributes["ContentBasedDeduplication"] = dedup.ToString().ToLowerInvariant();
+            }
+
+            if (request.HighThroughputFifo is true)
+            {
+                attributes["DeduplicationScope"] = "messageGroup";
+                attributes["FifoThroughputLimit"] = "perMessageGroupId";
+            }
+        }
+
+        if (request.DeadLetterTargetArn is { } dlqArn && request.MaxReceiveCount is { } maxReceives)
+        {
+            attributes["RedrivePolicy"] = $"{{\"deadLetterTargetArn\":\"{dlqArn}\",\"maxReceiveCount\":{maxReceives}}}";
+        }
+
+        if (request.KmsKeyId is { } kmsKeyId)
+        {
+            attributes["KmsMasterKeyId"] = kmsKeyId;
+        }
+
+        var response = await sqs.CreateQueueAsync(new Amazon.SQS.Model.CreateQueueRequest { QueueName = name, Attributes = attributes }, ct);
+        return response.QueueUrl;
+    }
 
     public Task DeleteQueueAsync(string secret, string queueUrl, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 7.");

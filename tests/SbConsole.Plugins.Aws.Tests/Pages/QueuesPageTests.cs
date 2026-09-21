@@ -37,10 +37,10 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<ListQueuesQueryHandler>();
         Services.AddSingleton<GetConnectionEchoQueryHandler>();
         Services.AddSingleton<DeleteQueueCommandHandler>();
-        // Not yet built -- Tasks 6, 8, 12, 13 respectively. Queues.razor's OpenCreate/OpenPurge/
-        // OpenSend/OpenRedrive stay no-op stubs until those tasks wire real dialogs, so this test
-        // file has no need for these handlers yet either. Re-enable each as its task lands.
-        // Services.AddSingleton<CreateQueueCommandHandler>();
+        Services.AddSingleton<CreateQueueCommandHandler>();
+        // Not yet built -- Tasks 8, 12, 13 respectively. Queues.razor's OpenPurge/OpenSend/
+        // OpenRedrive stay no-op stubs until those tasks wire real dialogs, so this test file has
+        // no need for these handlers yet either. Re-enable each as its task lands.
         // Services.AddSingleton<PurgeQueueCommandHandler>();
         // Services.AddSingleton<Messages.SendMessageCommandHandler>();
         // Services.AddSingleton<Redrive.StartRedriveCommandHandler>();

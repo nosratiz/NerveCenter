@@ -181,7 +181,21 @@ else
         return $"/p/aws/queues/receive?connectionId={connection.Id}&queueUrl={Uri.EscapeDataString(queueUrl)}";
     }
 
-    private Task OpenCreate() => Task.CompletedTask; // wired in Task 6
+    private async Task OpenCreate()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateQueueDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateQueueDialog>("Create queue", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
 
     private Task OpenSend(string queueUrl) => Task.CompletedTask; // wired in Task 12
 
