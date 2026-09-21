@@ -1,0 +1,55 @@
+@using SbConsole.Plugins.Aws.Queues
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Class="mb-3">
+            This will purge approximately @ApproxVisibleCount message(s) from <b>@QueueName</b>. There is no undo.
+            AWS purges asynchronously — it can take up to 60 seconds, and messages sent during that window may also be deleted.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="purge-queue-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="confirm-purge" Color="Color.Error" Variant="Variant.Filled" Disabled="_busy" OnClick="Purge">Purge</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string QueueUrl { get; set; } = "";
+    [Parameter] public string QueueName { get; set; } = "";
+    [Parameter] public long ApproxVisibleCount { get; set; }
+
+    [Inject] private PurgeQueueCommandHandler PurgeHandler { get; set; } = default!;
+
+    private bool _busy;
+
+    private async Task Purge()
+    {
+        _busy = true;
+        try
+        {
+            var result = await PurgeHandler.HandleAsync(new PurgeQueueCommand(ConnectionId, ConnectionName, QueueUrl, QueueName));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

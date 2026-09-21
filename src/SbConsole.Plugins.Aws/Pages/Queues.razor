@@ -201,7 +201,31 @@ else
 
     private Task OpenRedrive(string queueUrl, string queueArn) => Task.CompletedTask; // wired in Task 13
 
-    private Task OpenPurge(string queueUrl) => Task.CompletedTask; // wired in Task 8
+    private async Task OpenPurge(string queueUrl)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var queue = _queues.Single(q => q.QueueUrl == queueUrl);
+        var confirmed = await Confirmation.ConfirmAsync("Purge", queue.Name, connection.IsProd, count: (int)queue.ApproxVisible);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<PurgeQueueDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.QueueUrl, queue.QueueUrl },
+            { x => x.QueueName, queue.Name },
+            { x => x.ApproxVisibleCount, queue.ApproxVisible },
+        };
+        var dialog = await DialogService.ShowAsync<PurgeQueueDialog>("Purge queue", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadQueuesAsync();
+        }
+    }
 
     private async Task DeleteAsync(string queueUrl, string queueName)
     {

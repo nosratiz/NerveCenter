@@ -169,8 +169,11 @@ public sealed class SqsOperations : ISqsOperations
         await sqs.DeleteQueueAsync(queueUrl, ct);
     }
 
-    public Task PurgeQueueAsync(string secret, string queueUrl, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 8.");
+    public async Task PurgeQueueAsync(string secret, string queueUrl, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        await sqs.PurgeQueueAsync(queueUrl, ct);
+    }
 
     public Task<IReadOnlyList<ReceivedMessage>> ReceiveMessagesAsync(
         string secret, string queueUrl, int maxMessages, int? visibilityTimeoutSeconds, int waitTimeSeconds, CancellationToken ct = default) =>
