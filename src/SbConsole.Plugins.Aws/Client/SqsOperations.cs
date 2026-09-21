@@ -175,9 +175,43 @@ public sealed class SqsOperations : ISqsOperations
         await sqs.PurgeQueueAsync(queueUrl, ct);
     }
 
-    public Task<IReadOnlyList<ReceivedMessage>> ReceiveMessagesAsync(
-        string secret, string queueUrl, int maxMessages, int? visibilityTimeoutSeconds, int waitTimeSeconds, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 9.");
+    public async Task<IReadOnlyList<ReceivedMessage>> ReceiveMessagesAsync(
+        string secret, string queueUrl, int maxMessages, int? visibilityTimeoutSeconds, int waitTimeSeconds, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var request = new Amazon.SQS.Model.ReceiveMessageRequest
+        {
+            QueueUrl = queueUrl,
+            MaxNumberOfMessages = maxMessages,
+            WaitTimeSeconds = waitTimeSeconds,
+            MessageAttributeNames = ["All"],
+            MessageSystemAttributeNames = [Amazon.SQS.MessageSystemAttributeName.All],
+        };
+        if (visibilityTimeoutSeconds is { } timeout)
+        {
+            request.VisibilityTimeout = timeout;
+        }
+
+        var response = await sqs.ReceiveMessageAsync(request, ct);
+        return response.Messages.Select(ToReceivedMessage).ToList();
+    }
+
+    // Extracted as a pure static function, same reasoning as ToQueueSummary above -- unit-testable
+    // without a real AWS account. Internal so SqsOperationsTests can assert it directly.
+    internal static ReceivedMessage ToReceivedMessage(Amazon.SQS.Model.Message message)
+    {
+        var attributes = message.Attributes;
+        var receiveCount = attributes.TryGetValue("ApproximateReceiveCount", out var countText) && int.TryParse(countText, out var count) ? count : 0;
+        var sentTimestamp = attributes.TryGetValue("SentTimestamp", out var sentText) && long.TryParse(sentText, out var sentMillis)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(sentMillis)
+            : DateTimeOffset.MinValue;
+        var senderId = attributes.GetValueOrDefault("SenderId", "");
+        var messageAttributes = message.MessageAttributes.ToDictionary(kv => kv.Key, kv => kv.Value.StringValue ?? "");
+
+        return new ReceivedMessage(
+            message.MessageId, message.ReceiptHandle, message.Body, receiveCount,
+            sentTimestamp, senderId, message.MD5OfBody, messageAttributes);
+    }
 
     public Task DeleteMessageAsync(string secret, string queueUrl, string receiptHandle, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 10.");

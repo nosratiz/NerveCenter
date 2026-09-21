@@ -68,4 +68,36 @@ public class SqsOperationsTests
     {
         SqsOperations.QueueNameFromUrl("https://sqs.eu-west-1.amazonaws.com/123456789012/order-events").Should().Be("order-events");
     }
+
+    [Fact]
+    public void ToReceivedMessage_maps_system_attributes_and_custom_attributes()
+    {
+        var message = new Amazon.SQS.Model.Message
+        {
+            MessageId = "msg-1",
+            ReceiptHandle = "handle-1",
+            Body = "{\"orderId\":\"1001\"}",
+            MD5OfBody = "abc123",
+            Attributes = new Dictionary<string, string>
+            {
+                ["ApproximateReceiveCount"] = "3",
+                ["SentTimestamp"] = "1700000000000",
+                ["SenderId"] = "AIDAEXAMPLE",
+            },
+            MessageAttributes = new Dictionary<string, Amazon.SQS.Model.MessageAttributeValue>
+            {
+                ["source"] = new() { StringValue = "checkout", DataType = "String" },
+            },
+        };
+
+        var received = SqsOperations.ToReceivedMessage(message);
+
+        received.MessageId.Should().Be("msg-1");
+        received.ReceiptHandle.Should().Be("handle-1");
+        received.ApproxReceiveCount.Should().Be(3);
+        received.SentTimestamp.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1700000000000));
+        received.SenderId.Should().Be("AIDAEXAMPLE");
+        received.Md5OfBody.Should().Be("abc123");
+        received.MessageAttributes.Should().Equal(new Dictionary<string, string> { ["source"] = "checkout" });
+    }
 }
