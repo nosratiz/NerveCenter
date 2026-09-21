@@ -81,6 +81,39 @@ services:
       DYNAMIC_CONFIG_ENABLED: "true"
 
   # ---------------------------------------------------------------------------------------
+  # LocalStack (profile: aws) -- SQS + SNS emulator for manual testing of the AWS plugin.
+  # SNS is enabled now (not just SQS) so the SNS plan (docs/superpowers/specs/
+  # 2026-09-21-aws-sqs-plugin-design.md §1) needs no compose change later.
+  # ---------------------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:3
+    container_name: nervecenter-localstack
+    profiles: ["aws"]
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    environment:
+      SERVICES: sqs,sns
+      DEBUG: 0
+
+  # One-shot: creates a couple of sample queues so the Queues page has something to show.
+  # Idempotent; re-runs are harmless.
+  aws-init:
+    image: amazon/aws-cli:2.17.62
+    container_name: nervecenter-aws-init
+    profiles: ["aws"]
+    depends_on:
+      - localstack
+    entrypoint: ["/bin/sh", "/init-queues.sh"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      ENDPOINT_URL: http://localstack:4566
+    volumes:
+      - ./docker/aws/init-queues.sh:/init-queues.sh:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------
   # Azure Service Bus emulator (profile: servicebus). Needs SQL Server as its store.
   # SQL Server 2022 ships amd64 only, so on Apple Silicon it runs under emulation --
   # slower to start (~30-60s) but works. Both images require ACCEPT_EULA=Y.

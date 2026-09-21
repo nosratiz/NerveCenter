@@ -123,6 +123,33 @@ Kafka is reached by its service name because the broker advertises an internal l
 answers management calls on 5300 while the SDK's admin client insists on port 80 (above) --
 the host publishes the right ports, the container does not.
 
+## LocalStack — AWS SQS/SNS emulator (opt-in)
+
+```bash
+docker compose --profile aws up -d
+```
+
+| Service      | Host address          |
+|--------------|------------------------|
+| `localstack` | `localhost:4566`       |
+| `aws-init`   | (one-shot)             |
+
+Seeded queues: `order-events`, `order-events-dlq` (redrive policy already attached, max receives
+5), `payments`.
+
+### Connect the app to it
+
+In SbConsole, **Connections → Add**, kind *AWS SQS/SNS*, secret:
+
+```
+mode=access-keys;region=us-east-1;accessKeyId=test;secretAccessKey=test;endpoint=http://localstack:4566;pathStyle=true
+```
+
+`test`/`test` is LocalStack's own convention — it accepts any non-empty access key/secret pair
+under the community edition. `us-east-1` matches the queues seeded above (LocalStack's default
+region unless overridden). From the host (not from inside the `sbconsole` container), use
+`http://localhost:4566` instead of `http://localstack:4566`.
+
 ## Ports and overrides
 
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
