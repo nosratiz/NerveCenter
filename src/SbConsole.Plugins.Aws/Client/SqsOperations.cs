@@ -68,31 +68,30 @@ public sealed class SqsOperations : ISqsOperations
         }
     }
 
-    public Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string secret, string? namePrefix, CancellationToken ct = default) =>
-        Task.Run<IReadOnlyList<QueueSummary>>(async () =>
+    public async Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string secret, string? namePrefix, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var listRequest = new ListQueuesRequest { QueueNamePrefix = namePrefix };
+        var queueUrls = new List<string>();
+        string? nextToken = null;
+        do
         {
-            using var sqs = BuildSqsClient(secret);
-            var listRequest = new ListQueuesRequest { QueueNamePrefix = namePrefix };
-            var queueUrls = new List<string>();
-            string? nextToken = null;
-            do
-            {
-                listRequest.NextToken = nextToken;
-                var page = await sqs.ListQueuesAsync(listRequest, ct);
-                queueUrls.AddRange(page.QueueUrls);
-                nextToken = page.NextToken;
-            } while (!string.IsNullOrEmpty(nextToken));
+            listRequest.NextToken = nextToken;
+            var page = await sqs.ListQueuesAsync(listRequest, ct);
+            queueUrls.AddRange(page.QueueUrls);
+            nextToken = page.NextToken;
+        } while (!string.IsNullOrEmpty(nextToken));
 
-            var summaries = new List<QueueSummary>();
-            foreach (var queueUrl in queueUrls)
-            {
-                var attributesResponse = await sqs.GetQueueAttributesAsync(
-                    new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
-                summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributesResponse.Attributes));
-            }
+        var summaries = new List<QueueSummary>();
+        foreach (var queueUrl in queueUrls)
+        {
+            var attributesResponse = await sqs.GetQueueAttributesAsync(
+                new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
+            summaries.Add(ToQueueSummary(QueueNameFromUrl(queueUrl), queueUrl, attributesResponse.Attributes));
+        }
 
-            return summaries;
-        }, ct);
+        return summaries;
+    }
 
     // Extracted as a pure static function so the attribute-dictionary-to-QueueSummary mapping is
     // unit-testable without a real AWS account, same reasoning as
