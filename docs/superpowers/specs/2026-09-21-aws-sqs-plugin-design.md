@@ -94,6 +94,24 @@ endpoint shape differs from S3's virtual-hosted-vs-path-style distinction the
 "path-style addressing" label is borrowed from; the concrete mapping is an
 implementation detail, not a spec assumption).
 
+**No custom connection-form UI is built.** `AddEditConnectionDialog.razor`
+(`src/SbConsole.Web/Components/Connections/`) is a single generic host
+dialog shared by every plugin — one plain "Connection string" textbox, no
+per-plugin field hook, no Test-connection UI inside the dialog itself (Test
+is the Connections table's existing "Test" row action, `docs/design.md`
+§5.1). Kafka's own connection secret — a comparably multi-field librdkafka
+config string — never got a custom form either; Kafka users type the flat
+string by hand. AWS follows the identical precedent: users type
+`mode=access-keys;region=eu-west-1;accessKeyId=...;secretAccessKey=...`
+(etc.) directly into the existing textbox. The mockup's rich drawer (region
+dropdown, auth-mode segmented control, Advanced disclosure, inline
+account-ID/ARN/latency Test-result panel) is **not** built this slice — it
+would require a new per-plugin custom-connection-form host/SDK capability
+that doesn't exist for any plugin today and is out of scope here (see §9).
+The field format is documented in `docker/README.md` (§8) and echoed back
+via `AwsConfigParser.SafeEcho` on `Queues.razor` (above) so a user can
+confirm what they typed without re-opening the dialog.
+
 ## 3. Plugin shell
 
 New project `src/SbConsole.Plugins.AWS`, referencing `SbConsole.Sdk` only.
@@ -456,4 +474,10 @@ out across this plan and the SNS plan alike, same trigger condition
 - **Host-level Region column** on the shared Connections table — region is
   visible only inside the AWS plugin's own pages (§2); `ConnectionInfo`
   gains no new field.
+- **A custom AWS connection-form UI** (region dropdown, auth-mode segmented
+  control, Advanced disclosure, inline rich Test-result panel) — no
+  per-plugin custom-connection-form host/SDK capability exists today (§2);
+  building one is a materially larger, separately-scoped change, not an
+  AWS-plugin-internal one. Users type the flat secret string by hand into
+  the existing generic dialog, matching Kafka's precedent exactly.
 - Integration tests against LocalStack (§8).
