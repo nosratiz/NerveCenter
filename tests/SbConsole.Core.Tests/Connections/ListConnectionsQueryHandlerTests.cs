@@ -3,6 +3,7 @@ using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using SbConsole.Core.Audit;
 using SbConsole.Core.Connections;
+using SbConsole.Core.Data.Entities;
 using SbConsole.Core.Security;
 
 namespace SbConsole.Core.Tests.Connections;
@@ -23,5 +24,27 @@ public class ListConnectionsQueryHandlerTests
 
         all.Should().HaveCount(2);
         buses.Should().ContainSingle(c => c.Name == "bus-prod" && c.IsProd);
+    }
+
+    [Fact]
+    public async Task Includes_the_stored_summary()
+    {
+        using var testDb = new TestDb();
+        await using (var db = testDb.CreateDbContext())
+        {
+            db.Connections.Add(new Connection
+            {
+                Id = Guid.NewGuid(),
+                Name = "bus",
+                Kind = "azure-servicebus",
+                SecretCiphertext = [],
+                SummaryJson = """{"Region":"eu-west-1"}""",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var listed = await new ListConnectionsQueryHandler(testDb).HandleAsync();
+
+        listed.Should().ContainSingle(c => c.Summary.GetValueOrDefault("Region") == "eu-west-1");
     }
 }
