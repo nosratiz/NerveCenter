@@ -1,0 +1,165 @@
+@* src/Plugins/SbConsole.Plugins.Aws/Client/AwsConnectionFields.razor *@
+@using Amazon
+@using MudBlazor
+
+<MudAutocomplete T="string" Label="Region" Value="_region" ValueChanged="OnRegionChanged"
+                 SearchFunc="SearchRegions" ToStringFunc="RegionDisplay" Immediate="true" CoerceText="false" />
+
+@* MudToggleGroup<T> has no "Fixed" parameter (that's "FixedContent", which only affects
+   CheckMark icon layout -- unused here) -- confirmed via ilspycmd against the installed
+   MudBlazor 9.9.0 DLL, so it's omitted rather than guessed. Each MudToggleItem also gets an
+   explicit "data-value" splat attribute: MudToggleItem<T> renders as a MudButton (an actual
+   <button>, not a <div>) and exposes no built-in attribute reflecting its Value, so tests need
+   a stable hook to target a specific item. *@
+<MudToggleGroup T="string" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
+    <MudToggleItem Value="@("access-keys")" data-value="access-keys">Access keys</MudToggleItem>
+    <MudToggleItem Value="@("assume-role")" data-value="assume-role">Assume role</MudToggleItem>
+    <MudToggleItem Value="@("default-chain")" data-value="default-chain">Default chain</MudToggleItem>
+</MudToggleGroup>
+
+@if (_mode == "access-keys")
+{
+    <MudTextField T="string" id="aws-access-key-id" Label="Access key ID" Value="_accessKeyId" ValueChanged="@(v => OnFieldChanged(v, x => _accessKeyId = x))" Immediate="true" Class="mt-3" />
+    <MudTextField T="string" id="aws-secret-access-key" Label="Secret access key" InputType="InputType.Password" Value="_secretAccessKey" ValueChanged="@(v => OnFieldChanged(v, x => _secretAccessKey = x))" Immediate="true" Class="mt-3" />
+    <MudTextField T="string" id="aws-session-token" Label="Session token (optional)" Value="_sessionToken" ValueChanged="@(v => OnFieldChanged(v, x => _sessionToken = x))" Immediate="true" Class="mt-3" />
+}
+else if (_mode == "assume-role")
+{
+    <MudTextField T="string" id="aws-role-arn" Label="Role ARN" Value="_roleArn" ValueChanged="@(v => OnFieldChanged(v, x => _roleArn = x))" Immediate="true" Class="mt-3" />
+    <MudTextField T="string" id="aws-external-id" Label="External ID (optional)" Value="_externalId" ValueChanged="@(v => OnFieldChanged(v, x => _externalId = x))" Immediate="true" Class="mt-3" />
+    <MudTextField T="string" id="aws-session-name" Label="Session name (optional)" Value="_sessionName" ValueChanged="@(v => OnFieldChanged(v, x => _sessionName = x))" Immediate="true" Class="mt-3" />
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">The base credentials for the sts:AssumeRole call come from the default chain.</MudText>
+}
+else
+{
+    <MudText Typo="Typo.body2" Class="mt-3">No credentials stored. SbConsole uses the role of the machine it runs on (environment variables, shared config/credentials file, or container/instance metadata).</MudText>
+}
+
+<MudButton Class="mt-3" OnClick="@(() => _advancedExpanded = !_advancedExpanded)">Advanced</MudButton>
+@if (_advancedExpanded)
+{
+    <MudTextField T="string" id="aws-endpoint" Label="Custom endpoint URL (optional)" Value="_endpoint" ValueChanged="@(v => OnFieldChanged(v, x => _endpoint = x))" Immediate="true" Class="mt-2" />
+    <MudSwitch T="bool" Label="Path-style addressing" Value="_pathStyle" ValueChanged="OnPathStyleChanged" Class="mt-2" />
+    @if (IsProd && !string.IsNullOrWhiteSpace(_endpoint))
+    {
+        <MudAlert Severity="Severity.Warning" Class="mt-2">A custom endpoint with a prod tag is almost always a mistake.</MudAlert>
+    }
+}
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    [Parameter] public bool IsProd { get; set; }
+
+    private string _mode = "access-keys";
+    private string _region = "";
+    private string _accessKeyId = "";
+    private string _secretAccessKey = "";
+    private string _sessionToken = "";
+    private string _roleArn = "";
+    private string _externalId = "";
+    private string _sessionName = "";
+    private string _endpoint = "";
+    private bool _pathStyle;
+    private bool _advancedExpanded;
+
+    private static readonly List<(string SystemName, string DisplayName)> AllRegions =
+        [.. RegionEndpoint.EnumerableAllRegions.Select(r => (r.SystemName, r.DisplayName)).OrderBy(r => r.SystemName)];
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment (SbConsole.Sdk) and
+    // docs/superpowers/plans/2026-09-22-connections-page-redesign.md's Global Constraints for why:
+    // the host round-trips whatever this component last emitted back into InitialSecret on every
+    // parent render, and re-parsing on OnParametersSet (instead of just once here) would fight the
+    // user's in-progress typing in a field this component doesn't (yet) hold state for consistently.
+    protected override void OnInitialized()
+    {
+        var parsed = AwsConfigParser.Parse(InitialSecret ?? "");
+        _mode = parsed.GetValueOrDefault("mode", "access-keys");
+        _region = parsed.GetValueOrDefault("region", "");
+        _accessKeyId = parsed.GetValueOrDefault("accessKeyId", "");
+        _secretAccessKey = parsed.GetValueOrDefault("secretAccessKey", "");
+        _sessionToken = parsed.GetValueOrDefault("sessionToken", "");
+        _roleArn = parsed.GetValueOrDefault("roleArn", "");
+        _externalId = parsed.GetValueOrDefault("externalId", "");
+        _sessionName = parsed.GetValueOrDefault("sessionName", "");
+        _endpoint = parsed.GetValueOrDefault("endpoint", "");
+        _pathStyle = bool.TryParse(parsed.GetValueOrDefault("pathStyle"), out var pathStyle) && pathStyle;
+        _advancedExpanded = _endpoint.Length > 0;
+    }
+
+    private Task<IEnumerable<string>> SearchRegions(string text, CancellationToken ct)
+    {
+        var matches = string.IsNullOrWhiteSpace(text)
+            ? AllRegions
+            : AllRegions.Where(r =>
+                r.SystemName.Contains(text, StringComparison.OrdinalIgnoreCase) ||
+                r.DisplayName.Contains(text, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(matches.Select(r => r.SystemName));
+    }
+
+    private static string RegionDisplay(string? systemName)
+    {
+        if (string.IsNullOrEmpty(systemName))
+        {
+            return "";
+        }
+
+        var match = AllRegions.FirstOrDefault(r => r.SystemName == systemName);
+        return match.SystemName is null ? systemName : $"{match.SystemName} · {match.DisplayName}";
+    }
+
+    private Task OnRegionChanged(string value)
+    {
+        _region = value;
+        return NotifyChangedAsync();
+    }
+
+    private Task OnModeChanged(string value)
+    {
+        _mode = value;
+        return NotifyChangedAsync();
+    }
+
+    private Task OnPathStyleChanged(bool value)
+    {
+        _pathStyle = value;
+        return NotifyChangedAsync();
+    }
+
+    private Task OnFieldChanged(string value, Action<string> assign)
+    {
+        assign(value);
+        return NotifyChangedAsync();
+    }
+
+    private Task NotifyChangedAsync()
+    {
+        var fields = new Dictionary<string, string> { ["mode"] = _mode };
+        if (_region.Length > 0)
+        {
+            fields["region"] = _region;
+        }
+
+        switch (_mode)
+        {
+            case "access-keys":
+                if (_accessKeyId.Length > 0) fields["accessKeyId"] = _accessKeyId;
+                if (_secretAccessKey.Length > 0) fields["secretAccessKey"] = _secretAccessKey;
+                if (_sessionToken.Length > 0) fields["sessionToken"] = _sessionToken;
+                break;
+            case "assume-role":
+                if (_roleArn.Length > 0) fields["roleArn"] = _roleArn;
+                if (_externalId.Length > 0) fields["externalId"] = _externalId;
+                if (_sessionName.Length > 0) fields["sessionName"] = _sessionName;
+                break;
+        }
+
+        if (_endpoint.Length > 0)
+        {
+            fields["endpoint"] = _endpoint;
+            fields["pathStyle"] = _pathStyle.ToString();
+        }
+
+        return SecretChanged.InvokeAsync(AwsConfigParser.Serialize(fields));
+    }
+}
