@@ -1,3 +1,4 @@
+using Amazon.CloudWatch;
 using Amazon.SecurityToken;
 using Amazon.SimpleNotificationService;
 using Amazon.SQS;
@@ -28,6 +29,7 @@ public static class FriendlyAwsError
         RequestThrottledException => "AWS is throttling this connection — try again shortly",
         AmazonSimpleNotificationServiceException { ErrorCode: "AuthorizationError" } => "Access denied — check IAM permissions",
         AmazonSimpleNotificationServiceException { ErrorCode: "NotFound" } => "Topic or subscription not found",
+        AmazonCloudWatchException { ErrorCode: "AccessDenied" } => "Access denied — check IAM permissions for cloudwatch:GetMetricStatistics",
         _ => FriendlyError.From(ex),
     };
 }

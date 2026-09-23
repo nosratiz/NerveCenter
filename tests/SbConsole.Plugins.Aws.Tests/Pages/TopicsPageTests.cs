@@ -33,6 +33,7 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<CreateTopicCommandHandler>();
         Services.AddSingleton<DeleteTopicCommandHandler>();
         Services.AddSingleton<GetConnectionEchoQueryHandler>();
+        Services.AddSingleton<GetTopicDeliveryFailureCountQueryHandler>();
         Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddSingleton(Substitute.For<IConfirmationService>());
         Services.AddLogging();
@@ -75,5 +76,35 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(50);
 
         await _snsOperations.Received(1).DeleteTopicAsync("mode=access-keys;region=us-east-1", "arn:aws:sns:us-east-1:1:order-events-topic", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Shows_the_failure_count_once_it_loads()
+    {
+        _snsOperations.ListTopicsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns([new TopicSummary("shipment-updates-topic", "arn:aws:sns:us-east-1:1:shipment-updates-topic", false, 5, 2, false)]);
+        _snsOperations.GetDeliveryFailureCountAsync("mode=access-keys;region=us-east-1", "shipment-updates-topic", Arg.Any<CancellationToken>())
+            .Returns(1204L);
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Topics>();
+        await Task.Delay(50);
+        cut.Render();
+
+        cut.Find("td.failed-24h").TextContent.Should().Be("1204");
+    }
+
+    [Fact]
+    public async Task Shows_unavailable_when_the_metrics_call_is_denied()
+    {
+        _snsOperations.ListTopicsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns([new TopicSummary("shipment-updates-topic", "arn:aws:sns:us-east-1:1:shipment-updates-topic", false, 5, 2, false)]);
+        _snsOperations.GetDeliveryFailureCountAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<long>(new InvalidOperationException("AccessDenied")));
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Topics>();
+        await Task.Delay(50);
+        cut.Render();
+
+        cut.Find("td.failed-24h").TextContent.Should().Be("—");
     }
 }

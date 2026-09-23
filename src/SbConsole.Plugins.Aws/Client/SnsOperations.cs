@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Amazon.CloudWatch;
+using Amazon.CloudWatch.Model;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using CreateTopicRequest_ = Amazon.SimpleNotificationService.Model.CreateTopicRequest;
@@ -27,6 +29,22 @@ public sealed class SnsOperations : ISnsOperations
         };
         var credentials = AwsCredentialsFactory.BuildCredentials(parsed);
         return credentials is null ? new AmazonSimpleNotificationServiceClient(snsConfig) : new AmazonSimpleNotificationServiceClient(credentials, snsConfig);
+    }
+
+    private static AmazonCloudWatchClient BuildCloudWatchClient(string secret)
+    {
+        var parsed = AwsConfigParser.Parse(secret);
+        var sqsConfig = AwsCredentialsFactory.BuildConfig(parsed);
+        var cwConfig = new AmazonCloudWatchConfig
+        {
+            RegionEndpoint = sqsConfig.RegionEndpoint,
+            Timeout = sqsConfig.Timeout,
+            MaxErrorRetry = sqsConfig.MaxErrorRetry,
+            ServiceURL = sqsConfig.ServiceURL,
+            UseHttp = sqsConfig.UseHttp,
+        };
+        var credentials = AwsCredentialsFactory.BuildCredentials(parsed);
+        return credentials is null ? new AmazonCloudWatchClient(cwConfig) : new AmazonCloudWatchClient(credentials, cwConfig);
     }
 
     internal static string TopicNameFromArn(string topicArn) => topicArn[(topicArn.LastIndexOf(':') + 1)..];
@@ -255,6 +273,23 @@ public sealed class SnsOperations : ISnsOperations
         }
     }
 
-    public Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 7.");
+    public async Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default)
+    {
+        using var cloudWatch = BuildCloudWatchClient(secret);
+        var now = DateTime.UtcNow;
+        var response = await cloudWatch.GetMetricStatisticsAsync(new GetMetricStatisticsRequest
+        {
+            Namespace = "AWS/SNS",
+            MetricName = "NumberOfNotificationsFailed",
+            Dimensions = [new Dimension { Name = "TopicName", Value = topicName }],
+            StartTimeUtc = now.AddHours(-24),
+            EndTimeUtc = now,
+            Period = 86400,
+            Statistics = ["Sum"],
+        }, ct);
+
+        // No datapoints means no failures were reported in the window, not an error -- CloudWatch
+        // simply has nothing to return when a metric never fired.
+        return response.Datapoints.Count == 0 ? 0 : (long)response.Datapoints.Sum(d => d.Sum);
+    }
 }
