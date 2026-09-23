@@ -66,23 +66,21 @@ public sealed class SnsOperations : ISnsOperations
         {
             var name = TopicNameFromArn(topicArn);
             var isFifo = name.EndsWith(".fifo", StringComparison.Ordinal);
-            var subCount = 0;
-            var pendingCount = 0;
-            var isKms = false;
             try
             {
                 var attrs = await sns.GetTopicAttributesAsync(new GetTopicAttributesRequest { TopicArn = topicArn }, ct);
-                subCount = int.TryParse(attrs.Attributes.GetValueOrDefault("SubscriptionsConfirmed"), out var confirmed) ? confirmed : 0;
-                pendingCount = int.TryParse(attrs.Attributes.GetValueOrDefault("SubscriptionsPending"), out var pending) ? pending : 0;
-                isKms = attrs.Attributes.ContainsKey("KmsMasterKeyId");
+                var subCount = int.TryParse(attrs.Attributes.GetValueOrDefault("SubscriptionsConfirmed"), out var confirmed) ? confirmed : 0;
+                var pendingCount = int.TryParse(attrs.Attributes.GetValueOrDefault("SubscriptionsPending"), out var pending) ? pending : 0;
+                var isKms = attrs.Attributes.ContainsKey("KmsMasterKeyId");
+                summaries.Add(new TopicSummary(name, topicArn, isFifo, subCount, pendingCount, isKms));
             }
             catch (Exception) when (ct.IsCancellationRequested is false)
             {
-                // Left at zero/false -- the caller renders this row's counts as unavailable rather
-                // than blanking the whole page (design spec §2's partial-failure rule).
+                // AttributesUnavailable: true -- the caller renders this row's counts as unavailable
+                // (dashed) rather than a misleading real-looking zero (design spec §2's
+                // partial-failure rule).
+                summaries.Add(new TopicSummary(name, topicArn, isFifo, 0, 0, false, AttributesUnavailable: true));
             }
-
-            summaries.Add(new TopicSummary(name, topicArn, isFifo, subCount, pendingCount, isKms));
         }
 
         return summaries;

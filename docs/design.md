@@ -634,33 +634,46 @@ secret format or parser changes.
 - **Topics list** (`/p/aws/topics`) — a new nav item registered in `AwsPlugin.NavItems`, second after
   Queues. Table columns: Topic name, Type (`Standard`/`FIFO`), Subscription count, Pending confirmation
   count, Failed-24h (CloudWatch delivery-failure sum, see below), Flags (KMS encryption, zero-subscribers
-  warning), Actions. The Subscriptions and Failed-24h counts are populated via per-topic `ListSubscriptionsByTopic`
-  and `GetMetricStatistics` calls — matching the Queues page's own per-row partial-failure pattern, a topic
-  whose call fails renders that count unavailable (dashed) rather than blanking the entire page.
-  `PluginContribution` page count increases from 2 to 4 (`Queues`, `Receive`, `Topics`, `TopicDetail`);
-  action count increases from 8 to 13 (`CreateQueue`/`DeleteQueue`/`PurgeQueue`/`Receive`/`DeleteMessage`/
-  `ReleaseMessage`/`SendMessage`/`StartRedrive`, plus `CreateTopic`/`DeleteTopic`/`Subscribe`/`Unsubscribe`/
-  `Publish`).
+  warning), Actions. The Subscription and Pending counts are populated via a per-topic `GetTopicAttributes`
+  call (`SubscriptionsConfirmed`/`SubscriptionsPending` attributes; `KmsMasterKeyId`'s presence drives the
+  KMS flag), and Failed-24h via `GetMetricStatistics` (see below) — matching the Queues page's own per-row
+  partial-failure pattern. When a topic's `GetTopicAttributes` call fails, `TopicSummary.AttributesUnavailable`
+  is set and the row renders "—" for Subs/Pending (and never shows the KMS flag or the "no subscriptions"
+  warning chip, since neither is known) instead of a misleading real-looking zero; Failed-24h degrades the
+  same way, independently, when the CloudWatch call fails. `PluginContribution` page count increases from
+  2 to 4 (`Queues`, `Receive`, `Topics`, `TopicDetail`); action count increases from 8 to 13
+  (`CreateQueue`/`DeleteQueue`/`PurgeQueue`/`Receive`/`DeleteMessage`/`ReleaseMessage`/`SendMessage`/
+  `StartRedrive`, plus `CreateTopic`/`DeleteTopic`/`Subscribe`/`Unsubscribe`/`Publish`).
 
 - **Topic detail** (`/p/aws/topics/{topicArn}`) — two-tab design mirroring `Queues.razor` only with tabs,
-  not a single-page layout. **Subscriptions tab** (default): ARN header with copy button; table showing
-  Protocol, Endpoint, Filter policy (read-only, no editing), Raw message delivery flag, State
-  (`Confirmed`/`Pending` with elapsed time / `Failing` based on subscription attributes), and Actions;
-  Pending subscriptions show a **Resend** action (calls `SubscribeAsync` again with the same parameters,
-  triggering SNS's idempotent re-delivery of the confirmation), confirmed/failing show **Remove**
-  (`UnsubscribeAsync`, `ActionRisk.Mutating`, plain confirm — not Destructive, since re-subscribing
-  fully reverses it); "+ Subscribe" opens `SubscribeDialog.razor` with Protocol selector (sqs, https,
-  email, lambda), Endpoint field, and Raw message delivery toggle. **Attributes tab**: ARN, encryption
-  (KMS key ID or "unencrypted"), FIFO yes/no, created-at if available.
+  not a single-page layout. **Subscriptions tab** (default): ARN header (no copy button — noted as a UI
+  polish item, not built); table showing Protocol, Endpoint, Filter policy (read-only, no editing), Raw
+  message delivery flag, State, and Actions. State is one of only two values, `Confirmed`/`Pending` — there
+  is no "Failing" subscription state and no elapsed-time display; a subscription's `SubscriptionArn` is
+  either the literal string `"PendingConfirmation"` (pending) or a real ARN (confirmed), nothing else.
+  Pending subscriptions show only a **Resend** action (calls `SubscribeAsync` again with the same
+  parameters, triggering SNS's idempotent re-delivery of the confirmation) — never Remove, since
+  `UnsubscribeAsync` has nothing to unsubscribe from until the subscription is confirmed and always fails
+  on real AWS. Confirmed subscriptions show only **Remove** (`UnsubscribeAsync`, `ActionRisk.Mutating`),
+  gated by a plain two-button `IConfirmationService.ConfirmAsync` confirm — not typed/Destructive, since
+  re-subscribing fully reverses it. "+ Subscribe" opens `SubscribeDialog.razor` with Protocol selector
+  (sqs, https, email, lambda), Endpoint field, and Raw message delivery toggle. **Attributes tab**: shows
+  only the topic ARN today — it does not render encryption, FIFO, or created-at (a possible future
+  addition, not built in this plan).
 
-- **Publish dialog** (`Dialogs/PublishDialog.razor`) — Topic (pre-filled from the row/detail page),
-  Subject (caption: "email only"), Message attributes (key/value rows), Message body. For FIFO topics:
-  required Message Group ID and either a Deduplication ID or a "content-based deduplication enabled"
-  note, mirroring `SendMessageDialog`'s identical FIFO field set. **Fan-out preview**: on dialog open,
-  calls `GetSubscriptionAttributes` once per subscription to fetch filter policies, then evaluates the
-  current message attributes against each policy client-side (pure function, no network) and displays
-  a "Matches N of M subscriptions" panel with ✓ for matched, ✕ for filtered, — for pending/failing.
-  Re-evaluated on every attribute edit. Publish is `ActionRisk.Mutating`, audited as `aws.topic.publish`.
+- **Publish dialog** (`src/SbConsole.Plugins.Aws/Pages/PublishDialog.razor`) — Topic (pre-filled from the
+  row/detail page), Subject (caption: "email only"), Message attributes (key/value rows; a repeated key
+  across two rows is tolerated by keeping the last row's value, not an unhandled `ArgumentException` from
+  a naive `ToDictionary`), Message body. For FIFO topics: a required Message Group ID field and a plain
+  (optional-looking but not validated) Deduplication ID field — there is no "content-based deduplication
+  enabled" toggle/note mirroring `SendMessageDialog`'s fuller FIFO field set; a blank Deduplication ID is
+  sent to `SnsPublishRequest.MessageDeduplicationId` as `null` (relying on the topic's own content-based
+  deduplication setting if enabled), never as an empty string, which AWS would otherwise reject.
+  **Fan-out preview**: on dialog open, calls `GetSubscriptionAttributes` once per subscription to fetch
+  filter policies, then evaluates the current message attributes against each policy client-side (pure
+  function, no network) and displays a "Matches N of M subscriptions" panel with ✓ for matched, ✕ for
+  filtered, — for pending. Re-evaluated on every attribute edit. Publish is `ActionRisk.Mutating`, audited
+  as `aws.topic.publish`.
 
 - **CloudWatch delivery-failure metric** — `ISnsOperations.GetDeliveryFailureCountAsync` calls CloudWatch
   `GetMetricStatistics` with `Namespace: "AWS/SNS"`, `MetricName: "NumberOfNotificationsFailed"`,
@@ -681,12 +694,16 @@ secret format or parser changes.
   for SNS `ListTopics` (cheap, matching the `ListQueues` pattern) via the new `Checks` infrastructure
   is a straightforward follow-up, now unblocked by the prerequisite infrastructure landing.
 
-- **Error handling** — `FriendlyAwsError` gains mappings for SNS and CloudWatch exception types this
-  plan's calls encounter: `NotFoundException` (topic/subscription not found), `InvalidParameterException`
-  (malformed filter policy, malformed endpoint), `AuthorizationErrorException` (SNS's access-denied
-  shape, distinct from SQS's `AccessDeniedException`), and CloudWatch's own `AccessDeniedException`
-  for metrics calls — all exception types verified against the installed `AWSSDK.SimpleNotificationService`
-  3.7.400.62 and `AWSSDK.CloudWatch` 3.7.400.62 packages at implementation time, not assumed.
+- **Error handling** — `FriendlyAwsError` gains pattern-matched arms for SNS and CloudWatch: it does not
+  catch distinct exception subtypes (there is no `NotFoundException`/`InvalidParameterException`/
+  `AuthorizationErrorException` in the installed SDK) but instead matches `ErrorCode` string values on
+  the base `AmazonSimpleNotificationServiceException` and `AmazonCloudWatchException` types, the same way
+  `AmazonSQSException { ErrorCode: "AccessDenied" }` is already matched above it: `AmazonSimpleNotificationServiceException
+  { ErrorCode: "AuthorizationError" }` → "Access denied — check IAM permissions",
+  `AmazonSimpleNotificationServiceException { ErrorCode: "NotFound" }` → "Topic or subscription not found",
+  and `AmazonCloudWatchException { ErrorCode: "AccessDenied" }` → "Access denied — check IAM permissions
+  for cloudwatch:GetMetricStatistics". Verified against the installed `AWSSDK.SimpleNotificationService`
+  3.7.400.62 and `AWSSDK.CloudWatch` 3.7.401 packages at implementation time, not assumed.
 
 - **Handlers, audit, and safety** — new plugin handlers (`ListTopicsQueryHandler`, `CreateTopicCommandHandler`,
   `DeleteTopicCommandHandler`, `ListSubscriptionsQueryHandler`, `SubscribeCommandHandler`,

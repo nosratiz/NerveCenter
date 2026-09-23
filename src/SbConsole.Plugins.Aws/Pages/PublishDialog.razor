@@ -97,8 +97,16 @@
     private bool Matches(SubscriptionSummary sub) =>
         SbConsole.Plugins.Aws.Client.SnsOperations.EvaluateFilterMatch(sub.FilterPolicyJson, CurrentAttributes());
 
+    // GroupBy + Last (not ToDictionary directly) -- two attribute rows sharing the same key is a
+    // real, easy-to-trigger user action (just type the same key twice), and ToDictionary throws
+    // ArgumentException on a duplicate key. This is called from Matches() during every render once
+    // the topic has subscriptions, so an unhandled exception here would crash the Blazor circuit.
+    // The last row wins, matching how a real SNS MessageAttributes dictionary can only hold one
+    // value per key anyway.
     private Dictionary<string, string> CurrentAttributes() =>
-        _attributes.Where(a => !string.IsNullOrWhiteSpace(a.Key)).ToDictionary(a => a.Key, a => a.Value);
+        _attributes.Where(a => !string.IsNullOrWhiteSpace(a.Key))
+            .GroupBy(a => a.Key)
+            .ToDictionary(g => g.Key, g => g.Last().Value);
 
     protected override async Task OnInitializedAsync()
     {
@@ -128,7 +136,7 @@
                 string.IsNullOrWhiteSpace(_subject) ? null : _subject, _message,
                 attributes.Count > 0 ? attributes : null,
                 IsFifo ? _messageGroupId : null,
-                IsFifo ? _messageDeduplicationId : null);
+                IsFifo && !string.IsNullOrWhiteSpace(_messageDeduplicationId) ? _messageDeduplicationId : null);
 
             var result = await PublishHandler.HandleAsync(new PublishCommand(ConnectionId, ConnectionName, TopicName, TopicArn, request));
             if (result.IsSuccess)

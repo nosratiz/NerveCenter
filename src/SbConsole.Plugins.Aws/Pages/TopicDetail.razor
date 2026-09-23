@@ -9,6 +9,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject IConfirmationService Confirmation
 
 <PageTitle>@TopicName</PageTitle>
 <div class="d-flex align-center gap-2 mb-2">
@@ -60,7 +61,10 @@
                         {
                             <MudButton Class="resend-action" OnClick="@(() => ResendAsync(context))">Resend</MudButton>
                         }
-                        <MudButton Class="remove-subscription" Color="Color.Error" OnClick="@(() => RemoveAsync(context))">Remove</MudButton>
+                        else
+                        {
+                            <MudButton Class="remove-subscription" Color="Color.Error" OnClick="@(() => RemoveAsync(context))">Remove</MudButton>
+                        }
                     </MudTd>
                 </RowTemplate>
             </MudTable>
@@ -154,6 +158,12 @@
 
     private async Task RemoveAsync(SubscriptionSummary subscription)
     {
+        var confirmed = await Confirmation.ConfirmAsync("Remove", subscription.Endpoint, false);
+        if (!confirmed)
+        {
+            return;
+        }
+
         var result = await UnsubscribeHandler.HandleAsync(new UnsubscribeCommand(ConnectionId, _connectionName, TopicName, subscription.SubscriptionArn));
         if (!result.IsSuccess)
         {

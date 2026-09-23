@@ -31,6 +31,7 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<SubscribeCommandHandler>();
         Services.AddSingleton<UnsubscribeCommandHandler>();
         Services.AddSingleton(Substitute.For<IAuditScope>());
+        Services.AddSingleton(Substitute.For<IConfirmationService>());
         Services.AddLogging();
     }
 
@@ -87,7 +88,52 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
         var cut = Render<TopicDetail>(parameters => parameters
             .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
 
+        // A pending subscription's ARN is the literal "PendingConfirmation" -- there's nothing to
+        // unsubscribe from yet, so Remove must never be offered on that row (calling
+        // UnsubscribeAsync on it always fails on real AWS). Only the confirmed row gets Remove;
+        // only the pending row gets Resend.
         cut.FindAll("button.resend-action").Should().ContainSingle();
-        cut.FindAll("button.remove-subscription").Should().HaveCount(2);
+        cut.FindAll("button.remove-subscription").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Remove_goes_through_confirmation_before_calling_the_handler()
+    {
+        var topicArn = "arn:aws:sns:us-east-1:1:shipment-updates-topic";
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), topicArn, Arg.Any<CancellationToken>())
+            .Returns([new SubscriptionSummary("arn:sub-1", "sqs", "shipment-updates", false, false, null)]);
+        var confirmation = Services.GetRequiredService<IConfirmationService>();
+        confirmation.ConfirmAsync("Remove", "shipment-updates", false, null, Arg.Any<CancellationToken>()).Returns(true);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"/p/aws/topics/{Uri.EscapeDataString(topicArn)}?connectionId={_connectionId}");
+        var cut = Render<TopicDetail>(parameters => parameters
+            .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
+
+        cut.Find("button.remove-subscription").Click();
+        await Task.Delay(30);
+
+        await confirmation.Received(1).ConfirmAsync("Remove", "shipment-updates", false, null, Arg.Any<CancellationToken>());
+        await _snsOperations.Received(1).UnsubscribeAsync("mode=access-keys;region=us-east-1", "arn:sub-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Remove_does_not_call_the_handler_when_confirmation_is_declined()
+    {
+        var topicArn = "arn:aws:sns:us-east-1:1:shipment-updates-topic";
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), topicArn, Arg.Any<CancellationToken>())
+            .Returns([new SubscriptionSummary("arn:sub-1", "sqs", "shipment-updates", false, false, null)]);
+        var confirmation = Services.GetRequiredService<IConfirmationService>();
+        confirmation.ConfirmAsync("Remove", "shipment-updates", false, null, Arg.Any<CancellationToken>()).Returns(false);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"/p/aws/topics/{Uri.EscapeDataString(topicArn)}?connectionId={_connectionId}");
+        var cut = Render<TopicDetail>(parameters => parameters
+            .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
+
+        cut.Find("button.remove-subscription").Click();
+        await Task.Delay(30);
+
+        await _snsOperations.DidNotReceive().UnsubscribeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

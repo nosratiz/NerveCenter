@@ -66,15 +66,15 @@ else
         <RowTemplate>
             <MudTd Style="font-family:monospace">@context.Name</MudTd>
             <MudTd>@(context.IsFifo ? "FIFO" : "Standard")</MudTd>
-            <MudTd Class="sub-count" Style="text-align:right;font-family:monospace">@context.SubscriptionCount</MudTd>
-            <MudTd Class="pending-count" Style="text-align:right;font-family:monospace">@context.PendingConfirmationCount</MudTd>
+            <MudTd Class="sub-count" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : context.SubscriptionCount.ToString())</MudTd>
+            <MudTd Class="pending-count" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : context.PendingConfirmationCount.ToString())</MudTd>
             <MudTd Class="failed-24h" Style="text-align:right;font-family:monospace">@FailedCountText(context.TopicArn)</MudTd>
             <MudTd>
-                @if (context.SubscriptionCount == 0)
+                @if (!context.AttributesUnavailable && context.SubscriptionCount == 0)
                 {
                     <MudChip T="string" Class="no-subs-flag" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">no subscriptions</MudChip>
                 }
-                @if (context.IsKmsEncrypted)
+                @if (!context.AttributesUnavailable && context.IsKmsEncrypted)
                 {
                     <MudChip T="string" Class="kms-flag" Size="Size.Small" Variant="Variant.Outlined">KMS</MudChip>
                 }
@@ -100,7 +100,11 @@ else
     private string _connectionEcho = "";
     private string? _deletingTopic;
     private readonly Dictionary<string, long?> _failedCounts = [];
-    private int _failureLoadGeneration;
+    // Shared by LoadTopicsAsync and LoadFailureCountsAsync (which is always invoked FROM
+    // LoadTopicsAsync, inheriting the same generation rather than minting its own) -- guards
+    // against a stale, still-in-flight load from an earlier connection selection landing after a
+    // newer one and overwriting _topics/_failedCounts with the wrong connection's data.
+    private int _loadGeneration;
 
     private string FailedCountText(string topicArn) => _failedCounts.TryGetValue(topicArn, out var count)
         ? (count.HasValue ? count.Value.ToString() : "—")
@@ -128,10 +132,22 @@ else
 
     private async Task LoadTopicsAsync()
     {
+        // Captured up front, before the await -- if the user switches connections while this call
+        // is still in flight, a later LoadTopicsAsync call bumps _loadGeneration, and this stale
+        // call's result must never overwrite _topics (it would show the OLD connection's topics
+        // under the NEW connection's selector, with _selectedConnectionId/IsProd now driving further
+        // actions like Delete's confirmation gate against the wrong topic list).
+        var generation = ++_loadGeneration;
+        var connectionId = _selectedConnectionId;
         _loading = true;
         try
         {
-            var result = await ListHandler.HandleAsync(_selectedConnectionId);
+            var result = await ListHandler.HandleAsync(connectionId);
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
             if (result.IsSuccess)
             {
                 _topics = result.Value!;
@@ -144,21 +160,22 @@ else
         }
         finally
         {
-            _loading = false;
+            if (generation == _loadGeneration)
+            {
+                _loading = false;
+            }
         }
 
-        _ = LoadFailureCountsAsync(_topics);
+        _ = LoadFailureCountsAsync(_topics, generation, connectionId);
     }
 
-    private async Task LoadFailureCountsAsync(IReadOnlyList<TopicSummary> topics)
+    private async Task LoadFailureCountsAsync(IReadOnlyList<TopicSummary> topics, int generation, Guid connectionId)
     {
-        var generation = ++_failureLoadGeneration;
-        var connectionId = _selectedConnectionId;
         _failedCounts.Clear();
         foreach (var topic in topics)
         {
             var result = await FailureCountHandler.HandleAsync(connectionId, topic.Name);
-            if (generation != _failureLoadGeneration)
+            if (generation != _loadGeneration)
             {
                 return;
             }
