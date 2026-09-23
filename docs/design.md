@@ -693,9 +693,13 @@ secret format or parser changes.
   `UnsubscribeCommandHandler`, `PublishCommandHandler`, `GetTopicDeliveryFailureCountQueryHandler`,
   `GetSubscriptionFilterPoliciesQueryHandler`) follow Core's naming convention, are DI-registered in
   `AwsPlugin.ConfigureServices`, and follow the identical try/catch → `FriendlyAwsError`-wrapped result
-  shape as Queues. Delete topic (cascades to its subscriptions — the confirmation dialog states the
-  subscription count that will be removed) and Publish are `ActionRisk.Mutating`; they are gated server-side
-  via `IConnectionProvider` lookups for `IsProd`, never client-supplied parameters. **No schema changes**:
+  shape as Queues. Delete topic is `ActionRisk.Destructive` (typed-confirm-on-prod, same
+  `IConfirmationService`/`IConnectionProvider.IsProd` gate every other destructive action in this plugin
+  uses — a plain `ConfirmAsync("Delete", topicName, connection.IsProd)`, with no subscription count shown).
+  Create topic, Subscribe, Unsubscribe, and Publish are `ActionRisk.Mutating` — Unsubscribe deliberately
+  stays Mutating rather than Destructive, since re-subscribing fully reverses it, unlike deleting the
+  topic itself. `IsProd` is always resolved server-side via `IConnectionProvider`, never a client-supplied
+  parameter. **No schema changes**:
   topics and subscriptions live in AWS, not SbConsole's own database, exactly as queues do today.
 
 Out of this plan: filter-policy authoring/editing (Subscribe/Edit have no filter-policy field; policies

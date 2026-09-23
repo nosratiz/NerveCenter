@@ -112,8 +112,9 @@ docker compose --profile aws up -d
 | `aws-init`   | (one-shot)             |
 
 Seeded queues: `order-events`, `order-events-dlq` (redrive policy already attached, max receives
-5), `payments`. Seeded topics: `order-events-topic` (Standard), `payment-notifications-topic`
-(FIFO).
+5), `payments`. No topics are seeded yet — `docker/aws/init-queues.sh` predates the SNS Topics
+feature and only creates queues; create a topic from the Topics page itself to try it against
+LocalStack.
 
 ### Connect the app to it (LocalStack)
 
