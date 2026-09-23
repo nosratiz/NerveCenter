@@ -77,6 +77,7 @@ else
                 }
             </MudTd>
             <MudTd>
+                <MudButton Class="publish-action" OnClick="@(() => OpenPublish(context.TopicArn, context.Name, context.IsFifo))">Publish</MudButton>
                 <MudButton Class="subs-action" Href="@($"/p/aws/topics/{Uri.EscapeDataString(context.TopicArn)}?connectionId={_selectedConnectionId}")">Subs</MudButton>
                 <MudButton Class="delete-topic" Color="Color.Error" Disabled="@(_deletingTopic == context.TopicArn)" OnClick="@(() => DeleteAsync(context.TopicArn, context.Name))">Delete</MudButton>
                 @if (_deletingTopic == context.TopicArn)
@@ -158,6 +159,20 @@ else
         {
             await LoadTopicsAsync();
         }
+    }
+
+    private async Task OpenPublish(string topicArn, string topicName, bool isFifo)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<PublishDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.TopicArn, topicArn },
+            { x => x.TopicName, topicName },
+            { x => x.IsFifo, isFifo },
+        };
+        await DialogService.ShowAsync<PublishDialog>("Publish to topic", parameters);
     }
 
     private async Task DeleteAsync(string topicArn, string topicName)

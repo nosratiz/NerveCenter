@@ -22,6 +22,7 @@
         <div class="d-flex align-center gap-2 mb-2">
             <MudText Typo="Typo.caption" Class="topic-arn mud-text-secondary" Style="font-family:monospace">@TopicArn</MudText>
             <MudSpacer />
+            <MudButton Class="publish-action" OnClick="OpenPublish">Publish</MudButton>
             <MudButton Class="subscribe-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenSubscribe">+ Subscribe</MudButton>
         </div>
         @if (_loading)
@@ -124,6 +125,19 @@
         {
             await LoadAsync();
         }
+    }
+
+    private async Task OpenPublish()
+    {
+        var parameters = new DialogParameters<PublishDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, _connectionName },
+            { x => x.TopicArn, TopicArn },
+            { x => x.TopicName, TopicName },
+            { x => x.IsFifo, TopicName.EndsWith(".fifo", StringComparison.Ordinal) },
+        };
+        await DialogService.ShowAsync<PublishDialog>("Publish to topic", parameters);
     }
 
     private async Task ResendAsync(SubscriptionSummary subscription)

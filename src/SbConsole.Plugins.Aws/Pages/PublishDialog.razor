@@ -1,0 +1,150 @@
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Topics
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@ConnectionName / @TopicName</MudText>
+        <MudTextField id="publish-subject" @bind-Value="_subject" Label="Subject (email only, optional)" Immediate="true" />
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Message attributes</MudText>
+        @for (var i = 0; i < _attributes.Count; i++)
+        {
+            var index = i;
+            <div class="d-flex gap-2 align-center mb-1">
+                <MudTextField Class="attribute-key" @bind-Value="_attributes[index].Key" Placeholder="Key" />
+                <MudTextField Class="attribute-value" @bind-Value="_attributes[index].Value" Placeholder="Value" />
+                <MudIconButton Class="remove-attribute" Icon="@Icons.Material.Filled.Close" OnClick="@(() => RemoveAttribute(index))" />
+            </div>
+        }
+        <MudButton Class="add-attribute" OnClick="AddAttribute">+ Add attribute</MudButton>
+
+        @if (IsFifo)
+        {
+            <MudTextField Class="message-group-id mt-3" @bind-Value="_messageGroupId" Label="Message group ID" Required="true" Immediate="true" />
+            <MudTextField Class="message-dedup-id" @bind-Value="_messageDeduplicationId" Label="Deduplication ID" Required="true" Immediate="true" />
+        }
+
+        @if (_filterPreviewLoading)
+        {
+            <MudProgressCircular Class="mt-3" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else if (_subscriptions.Count > 0)
+        {
+            <MudText Typo="Typo.caption" Class="fanout-summary mud-text-secondary mt-3">Matches @MatchCount of @_subscriptions.Count subscriptions</MudText>
+            @foreach (var sub in _subscriptions)
+            {
+                <div class="d-flex align-center gap-2 fanout-row">
+                    @if (sub.IsPending)
+                    {
+                        <MudText Class="fanout-status" Typo="Typo.caption">— pending</MudText>
+                    }
+                    else if (Matches(sub))
+                    {
+                        <MudText Class="fanout-status" Typo="Typo.caption" Color="Color.Success">✓</MudText>
+                    }
+                    else
+                    {
+                        <MudText Class="fanout-status" Typo="Typo.caption" Color="Color.Error">✕ filtered out</MudText>
+                    }
+                    <MudText Typo="Typo.caption" Style="font-family:monospace">@sub.Endpoint</MudText>
+                </div>
+            }
+        }
+
+        <MudTextField id="publish-message" @bind-Value="_message" Label="Message" Lines="6" Immediate="true" Class="mt-3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="publish-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="confirm-publish" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanPublish || _busy)" OnClick="Publish">Publish</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicArn { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public bool IsFifo { get; set; }
+
+    [Inject] private PublishCommandHandler PublishHandler { get; set; } = default!;
+    [Inject] private GetSubscriptionFilterPoliciesQueryHandler FilterPoliciesHandler { get; set; } = default!;
+
+    private string _subject = "";
+    private string _message = "";
+    private string _messageGroupId = "";
+    private string _messageDeduplicationId = "";
+    private readonly List<AttributeRow> _attributes = [];
+    private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
+    private bool _filterPreviewLoading;
+    private bool _busy;
+
+    private sealed class AttributeRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private bool CanPublish => !string.IsNullOrWhiteSpace(_message) && (!IsFifo || !string.IsNullOrWhiteSpace(_messageGroupId));
+
+    private int MatchCount => _subscriptions.Count(s => !s.IsPending && Matches(s));
+
+    private bool Matches(SubscriptionSummary sub) =>
+        SbConsole.Plugins.Aws.Client.SnsOperations.EvaluateFilterMatch(sub.FilterPolicyJson, CurrentAttributes());
+
+    private Dictionary<string, string> CurrentAttributes() =>
+        _attributes.Where(a => !string.IsNullOrWhiteSpace(a.Key)).ToDictionary(a => a.Key, a => a.Value);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _filterPreviewLoading = true;
+        try
+        {
+            var result = await FilterPoliciesHandler.HandleAsync(ConnectionId, TopicArn);
+            _subscriptions = result.IsSuccess ? result.Value! : [];
+        }
+        finally
+        {
+            _filterPreviewLoading = false;
+        }
+    }
+
+    private void AddAttribute() => _attributes.Add(new AttributeRow());
+
+    private void RemoveAttribute(int index) => _attributes.RemoveAt(index);
+
+    private async Task Publish()
+    {
+        _busy = true;
+        try
+        {
+            var attributes = CurrentAttributes();
+            var request = new SnsPublishRequest(
+                string.IsNullOrWhiteSpace(_subject) ? null : _subject, _message,
+                attributes.Count > 0 ? attributes : null,
+                IsFifo ? _messageGroupId : null,
+                IsFifo ? _messageDeduplicationId : null);
+
+            var result = await PublishHandler.HandleAsync(new PublishCommand(ConnectionId, ConnectionName, TopicName, TopicArn, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

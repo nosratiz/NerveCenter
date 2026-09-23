@@ -54,4 +54,42 @@ public class SnsOperationsTests
         summary.RawMessageDelivery.Should().BeNull();
         summary.FilterPolicyJson.Should().BeNull();
     }
+
+    [Fact]
+    public void EvaluateFilterMatch_returns_true_when_no_filter_policy_is_set()
+    {
+        SnsOperations.EvaluateFilterMatch(null, new Dictionary<string, string> { ["region"] = "uk" }).Should().BeTrue();
+    }
+
+    [Fact]
+    public void EvaluateFilterMatch_matches_a_simple_value_list_policy()
+    {
+        var policy = """{"region":["uk","eu"]}""";
+
+        SnsOperations.EvaluateFilterMatch(policy, new Dictionary<string, string> { ["region"] = "uk" }).Should().BeTrue();
+        SnsOperations.EvaluateFilterMatch(policy, new Dictionary<string, string> { ["region"] = "us" }).Should().BeFalse();
+    }
+
+    [Fact]
+    public void EvaluateFilterMatch_fails_when_the_message_has_no_matching_attribute()
+    {
+        var policy = """{"region":["uk"]}""";
+
+        SnsOperations.EvaluateFilterMatch(policy, new Dictionary<string, string> { ["eventType"] = "shipment.dispatched" }).Should().BeFalse();
+    }
+
+    [Fact]
+    public void EvaluateFilterMatch_requires_every_key_in_the_policy_to_match()
+    {
+        var policy = """{"region":["uk"],"eventType":["shipment.dispatched"]}""";
+        var attributes = new Dictionary<string, string> { ["region"] = "uk", ["eventType"] = "shipment.delivered" };
+
+        SnsOperations.EvaluateFilterMatch(policy, attributes).Should().BeFalse();
+    }
+
+    [Fact]
+    public void EvaluateFilterMatch_treats_malformed_policy_json_as_no_match()
+    {
+        SnsOperations.EvaluateFilterMatch("not json", new Dictionary<string, string>()).Should().BeFalse();
+    }
 }

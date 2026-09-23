@@ -41,6 +41,8 @@ public sealed class AwsPlugin : IPlugin
         services.AddScoped<ListSubscriptionsQueryHandler>();
         services.AddScoped<SubscribeCommandHandler>();
         services.AddScoped<UnsubscribeCommandHandler>();
+        services.AddScoped<PublishCommandHandler>();
+        services.AddScoped<GetSubscriptionFilterPoliciesQueryHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
         services.AddScoped<Queues.CreateQueueCommandHandler>();

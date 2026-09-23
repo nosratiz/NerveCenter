@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using CreateTopicRequest_ = Amazon.SimpleNotificationService.Model.CreateTopicRequest;
@@ -168,11 +169,84 @@ public sealed class SnsOperations : ISnsOperations
         await sns.UnsubscribeAsync(subscriptionArn, ct);
     }
 
-    // Placeholder throws for the remaining interface members -- implemented in Tasks 6, 7.
-    // These throws exist only so the class compiles as a complete ISnsOperations implementation;
-    // nothing calls them until those tasks wire up their own handlers/pages.
-    public Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 6.");
+    public async Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        var sdkRequest = new Amazon.SimpleNotificationService.Model.PublishRequest { TopicArn = topicArn, Message = request.Message };
+        if (request.Subject is { } subject)
+        {
+            sdkRequest.Subject = subject;
+        }
+
+        if (request.MessageAttributes is { Count: > 0 } attributes)
+        {
+            sdkRequest.MessageAttributes = attributes.ToDictionary(
+                kv => kv.Key,
+                kv => new Amazon.SimpleNotificationService.Model.MessageAttributeValue { DataType = "String", StringValue = kv.Value });
+        }
+
+        if (request.MessageGroupId is { } groupId)
+        {
+            sdkRequest.MessageGroupId = groupId;
+        }
+
+        if (request.MessageDeduplicationId is { } dedupId)
+        {
+            sdkRequest.MessageDeduplicationId = dedupId;
+        }
+
+        await sns.PublishAsync(sdkRequest, ct);
+    }
+
+    // Pure static, unit-testable without a real AWS account -- the fan-out preview's core logic.
+    // SNS filter policies match on MessageAttributes: a policy is a JSON object of
+    // attributeName -> array-of-allowed-values (the subset of SNS filter-policy syntax this plugin
+    // supports for evaluation -- $or/anything-but/numeric-range operators are not evaluated and a
+    // policy using them is treated as "no match," which is the conservative, safe direction to be
+    // wrong in for a preview). A null/empty policy always matches (no filter = receives everything).
+    // Malformed JSON is treated as no match, not an exception -- a preview must never crash the
+    // Publish dialog over a policy it can't parse.
+    internal static bool EvaluateFilterMatch(string? filterPolicyJson, IReadOnlyDictionary<string, string> messageAttributes)
+    {
+        if (string.IsNullOrEmpty(filterPolicyJson))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(filterPolicyJson);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!messageAttributes.TryGetValue(property.Name, out var value))
+                {
+                    return false;
+                }
+
+                var matchesThisKey = false;
+                foreach (var allowed in property.Value.EnumerateArray())
+                {
+                    if (allowed.ValueKind == JsonValueKind.String && allowed.GetString() == value)
+                    {
+                        matchesThisKey = true;
+                        break;
+                    }
+                }
+
+                if (!matchesThisKey)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 7.");
 }
