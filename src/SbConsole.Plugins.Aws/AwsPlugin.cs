@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Queues;
+using SbConsole.Plugins.Aws.Topics;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws;
@@ -13,13 +14,15 @@ public sealed class AwsPlugin : IPlugin
     public IReadOnlyList<PluginNavItem> NavItems =>
     [
         new("Queues", "/p/aws/queues"),
+        new("Topics", "/p/aws/topics"),
     ];
     public string ConnectionKind => "aws";
     public string ConnectionKindDisplayName => "AWS SQS/SNS";
 
     // Queues: Create/Delete/Purge queue, Receive, Delete message, Release message, Send, Redrive (8).
-    // Pages: Queues, Receive (2).
-    public PluginContribution Contribution => new(PageCount: 2, ActionCount: 8);
+    // Topics: Create/Delete topic, Subscribe/Unsubscribe, Publish (5).
+    // Pages: Queues, Receive, Topics, TopicDetail (4).
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 13);
 
     // The Queues/Messages/Redrive command and query handlers are added to this project one at a
     // time by Tasks 4, 7, 8, 9, 10, 12, 13 -- registering them here in Task 3 (as the plan's
@@ -29,7 +32,9 @@ public sealed class AwsPlugin : IPlugin
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<ISqsOperations, SqsOperations>();
+        services.AddSingleton<ISnsOperations, SnsOperations>();
         services.AddScoped<ListQueuesQueryHandler>();
+        services.AddScoped<ListTopicsQueryHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
         services.AddScoped<Queues.CreateQueueCommandHandler>();
