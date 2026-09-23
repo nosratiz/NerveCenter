@@ -107,4 +107,71 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
 
         cut.Find("td.failed-24h").TextContent.Should().Be("—");
     }
+
+    [Fact]
+    public async Task A_superseded_failure_count_load_does_not_overwrite_the_newer_result()
+    {
+        // The initial load's failure-count fetch is slow (call #1); the reload triggered by the
+        // delete below is fast (call #2) and finishes first. Once the slow call #1 finally
+        // resolves, it must not clobber the fresher value call #2 already wrote.
+        var topic = new TopicSummary("topic-a", "arn:aws:sns:us-east-1:1:topic-a", false, 0, 0, false);
+        Services.AddSingleton<ISnsOperations>(new SequencedFailureCountSnsOperations(topic));
+
+        var confirmation = Substitute.For<IConfirmationService>();
+        confirmation.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        Services.AddSingleton(confirmation);
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Topics>();
+
+        // The delete's own reload (generation 2) resolves synchronously via the fast call #2,
+        // well before the initial load's slow call #1 (generation 1) finishes.
+        cut.Find("button.delete-topic").Click();
+        await Task.Delay(50);
+        cut.Render();
+        cut.Find("td.failed-24h").TextContent.Should().Be("42");
+
+        // Let the slow call #1 resolve. A generation check must stop it from writing stale data.
+        await Task.Delay(300);
+        cut.Render();
+
+        cut.Find("td.failed-24h").TextContent.Should().Be("42");
+    }
+
+    private sealed class SequencedFailureCountSnsOperations(TopicSummary topic) : ISnsOperations
+    {
+        private int _failureCountCalls;
+
+        public Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string secret, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<TopicSummary>>([topic]);
+
+        public Task<string> CreateTopicAsync(string secret, CreateTopicRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task DeleteTopicAsync(string secret, string topicArn, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public async Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default)
+        {
+            if (Interlocked.Increment(ref _failureCountCalls) == 1)
+            {
+                await Task.Delay(150, ct);
+                return 999L;
+            }
+
+            return 42L;
+        }
+    }
 }

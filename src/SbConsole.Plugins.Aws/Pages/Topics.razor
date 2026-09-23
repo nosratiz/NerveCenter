@@ -100,6 +100,7 @@ else
     private string _connectionEcho = "";
     private string? _deletingTopic;
     private readonly Dictionary<string, long?> _failedCounts = [];
+    private int _failureLoadGeneration;
 
     private string FailedCountText(string topicArn) => _failedCounts.TryGetValue(topicArn, out var count)
         ? (count.HasValue ? count.Value.ToString() : "—")
@@ -151,10 +152,17 @@ else
 
     private async Task LoadFailureCountsAsync(IReadOnlyList<TopicSummary> topics)
     {
+        var generation = ++_failureLoadGeneration;
+        var connectionId = _selectedConnectionId;
         _failedCounts.Clear();
         foreach (var topic in topics)
         {
-            var result = await FailureCountHandler.HandleAsync(_selectedConnectionId, topic.Name);
+            var result = await FailureCountHandler.HandleAsync(connectionId, topic.Name);
+            if (generation != _failureLoadGeneration)
+            {
+                return;
+            }
+
             _failedCounts[topic.TopicArn] = result.IsSuccess ? result.Value : null;
             StateHasChanged();
         }
