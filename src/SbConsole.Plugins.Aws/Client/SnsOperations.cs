@@ -1,6 +1,7 @@
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using CreateTopicRequest_ = Amazon.SimpleNotificationService.Model.CreateTopicRequest;
+using SubscribeRequest_ = Amazon.SimpleNotificationService.Model.SubscribeRequest;
 
 namespace SbConsole.Plugins.Aws.Client;
 
@@ -147,13 +148,29 @@ public sealed class SnsOperations : ISnsOperations
         return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy);
     }
 
-    // Placeholder throws for the remaining interface members -- implemented in Tasks 5, 6, 7.
+    public async Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        var attributes = new Dictionary<string, string> { ["RawMessageDelivery"] = request.RawMessageDelivery.ToString().ToLowerInvariant() };
+        var response = await sns.SubscribeAsync(new SubscribeRequest_
+        {
+            TopicArn = request.TopicArn,
+            Protocol = request.Protocol,
+            Endpoint = request.Endpoint,
+            Attributes = attributes,
+        }, ct);
+        return response.SubscriptionArn;
+    }
+
+    public async Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        await sns.UnsubscribeAsync(subscriptionArn, ct);
+    }
+
+    // Placeholder throws for the remaining interface members -- implemented in Tasks 6, 7.
     // These throws exist only so the class compiles as a complete ISnsOperations implementation;
     // nothing calls them until those tasks wire up their own handlers/pages.
-    public Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 5.");
-    public Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 5.");
     public Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 6.");
     public Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default) =>

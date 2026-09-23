@@ -1,0 +1,63 @@
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Subscriptions
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudSelect T="string" Class="protocol-select" @bind-Value="_protocol" Label="Protocol">
+            <MudSelectItem Value="@("sqs")">sqs</MudSelectItem>
+            <MudSelectItem Value="@("https")">https</MudSelectItem>
+            <MudSelectItem Value="@("email")">email</MudSelectItem>
+            <MudSelectItem Value="@("lambda")">lambda</MudSelectItem>
+        </MudSelect>
+        <MudTextField id="subscribe-endpoint" @bind-Value="_endpoint" Label="Endpoint" Required="true" Immediate="true" />
+        <MudSwitch T="bool" Class="raw-delivery-toggle" @bind-Value="_rawMessageDelivery" Label="Raw message delivery" Color="Color.Primary" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="subscribe-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="confirm-subscribe" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_endpoint) || _busy)" OnClick="Save">Subscribe</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicArn { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+
+    [Inject] private SubscribeCommandHandler SubscribeHandler { get; set; } = default!;
+
+    private string _protocol = "sqs";
+    private string _endpoint = "";
+    private bool _rawMessageDelivery;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var request = new SubscribeRequest(TopicArn, _protocol, _endpoint, _rawMessageDelivery);
+            var result = await SubscribeHandler.HandleAsync(new SubscribeCommand(ConnectionId, ConnectionName, TopicName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -28,6 +28,9 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_connections);
         Services.AddSingleton(_snsOperations);
         Services.AddSingleton<ListSubscriptionsQueryHandler>();
+        Services.AddSingleton<SubscribeCommandHandler>();
+        Services.AddSingleton<UnsubscribeCommandHandler>();
+        Services.AddSingleton(Substitute.For<IAuditScope>());
         Services.AddLogging();
     }
 
@@ -67,5 +70,24 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
             .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
 
         cut.Find("td.sub-state").TextContent.Should().Contain("Pending");
+    }
+
+    [Fact]
+    public void Resend_is_only_shown_for_a_pending_subscription()
+    {
+        var topicArn = "arn:aws:sns:us-east-1:1:shipment-updates-topic";
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), topicArn, Arg.Any<CancellationToken>())
+            .Returns([
+                new SubscriptionSummary("PendingConfirmation", "email", "ops@example.com", true, null, null),
+                new SubscriptionSummary("arn:sub-1", "sqs", "shipment-updates", false, false, null),
+            ]);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"/p/aws/topics/{Uri.EscapeDataString(topicArn)}?connectionId={_connectionId}");
+        var cut = Render<TopicDetail>(parameters => parameters
+            .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
+
+        cut.FindAll("button.resend-action").Should().ContainSingle();
+        cut.FindAll("button.remove-subscription").Should().HaveCount(2);
     }
 }

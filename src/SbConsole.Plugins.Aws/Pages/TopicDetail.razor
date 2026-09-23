@@ -3,6 +3,10 @@
 @using SbConsole.Plugins.Aws.Subscriptions
 @using SbConsole.Sdk
 @inject ListSubscriptionsQueryHandler ListHandler
+@inject SubscribeCommandHandler SubscribeHandler
+@inject UnsubscribeCommandHandler UnsubscribeHandler
+@inject IConnectionProvider Connections
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 
@@ -17,6 +21,8 @@
     <MudTabPanel Text="Subscriptions">
         <div class="d-flex align-center gap-2 mb-2">
             <MudText Typo="Typo.caption" Class="topic-arn mud-text-secondary" Style="font-family:monospace">@TopicArn</MudText>
+            <MudSpacer />
+            <MudButton Class="subscribe-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenSubscribe">+ Subscribe</MudButton>
         </div>
         @if (_loading)
         {
@@ -31,6 +37,7 @@
                     <MudTh>Filter policy</MudTh>
                     <MudTh>Raw delivery</MudTh>
                     <MudTh>State</MudTh>
+                    <MudTh>Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>@context.Protocol</MudTd>
@@ -47,6 +54,13 @@
                             <MudChip T="string" Color="Color.Success" Size="Size.Small">Confirmed</MudChip>
                         }
                     </MudTd>
+                    <MudTd>
+                        @if (context.IsPending)
+                        {
+                            <MudButton Class="resend-action" OnClick="@(() => ResendAsync(context))">Resend</MudButton>
+                        }
+                        <MudButton Class="remove-subscription" Color="Color.Error" OnClick="@(() => RemoveAsync(context))">Remove</MudButton>
+                    </MudTd>
                 </RowTemplate>
             </MudTable>
         }
@@ -62,11 +76,16 @@
 
     private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
     private bool _loading;
+    private string _connectionName = "";
 
     private string TopicArn => Uri.UnescapeDataString(TopicArnEncoded);
     private string TopicName => TopicArn[(TopicArn.LastIndexOf(':') + 1)..];
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        _connectionName = (await Connections.ListAsync("aws")).FirstOrDefault(c => c.Id == ConnectionId)?.Name ?? "";
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -88,5 +107,45 @@
         {
             _loading = false;
         }
+    }
+
+    private async Task OpenSubscribe()
+    {
+        var parameters = new DialogParameters<SubscribeDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, _connectionName },
+            { x => x.TopicArn, TopicArn },
+            { x => x.TopicName, TopicName },
+        };
+        var dialog = await DialogService.ShowAsync<SubscribeDialog>("Subscribe", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task ResendAsync(SubscriptionSummary subscription)
+    {
+        var request = new SubscribeRequest(TopicArn, subscription.Protocol, subscription.Endpoint, subscription.RawMessageDelivery ?? false);
+        var result = await SubscribeHandler.HandleAsync(new SubscribeCommand(ConnectionId, _connectionName, TopicName, request));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task RemoveAsync(SubscriptionSummary subscription)
+    {
+        var result = await UnsubscribeHandler.HandleAsync(new UnsubscribeCommand(ConnectionId, _connectionName, TopicName, subscription.SubscriptionArn));
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+
+        await LoadAsync();
     }
 }
