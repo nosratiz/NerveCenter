@@ -19,7 +19,7 @@ public class DeleteConnectionCommandHandlerTests
         using var testDb = new TestDb();
         var audit = Substitute.For<IAuditWriter>();
         var create = new CreateConnectionCommandHandler(
-            testDb, new AesGcmSecretProtector(new byte[32]), audit, new FakeTimeProvider());
+            testDb, new AesGcmSecretProtector(new byte[32]), audit, new FakeTimeProvider(), []);
         var created = await create.HandleAsync(new CreateConnectionCommand("gone", "k", "s", [], "admin"));
 
         var result = await new DeleteConnectionCommandHandler(testDb, audit, new FakeTimeProvider())

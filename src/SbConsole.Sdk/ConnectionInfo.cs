@@ -9,7 +9,9 @@ public sealed record ConnectionInfo(
     bool? LastTestSucceeded = null,
     DateTimeOffset? LastTestedAt = null,
     string? LastTestError = null,
-    DateTimeOffset CreatedAt = default)
+    DateTimeOffset CreatedAt = default,
+    IReadOnlyDictionary<string, string>? Summary = null)
 {
     public bool IsProd => Tags.Contains("prod", StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, string> Summary { get; init; } = Summary ?? new Dictionary<string, string>();
 }

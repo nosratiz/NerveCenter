@@ -19,6 +19,32 @@ public interface IPlugin
     /// <summary>Shown in the host's Add/Edit Connection "Kind" dropdown.</summary>
     string ConnectionKindDisplayName { get; }
 
+    /// <summary>
+    /// Optional: a Blazor component type this plugin wants hosted in place of the host's generic
+    /// flat-secret-string textbox on the Connections page's editor. The host renders it via
+    /// &lt;DynamicComponent Type="..." Parameters="..."/&gt; and never parses the secret itself. The
+    /// component must declare exactly these three parameters, matched by name (not by a shared base
+    /// type — see docs/superpowers/plans/2026-09-22-connections-page-redesign.md's Global
+    /// Constraints for why there's no SDK-level base class):
+    ///   [Parameter] public string? InitialSecret { get; set; }         // read once, in OnInitialized
+    ///   [Parameter] public EventCallback&lt;string&gt; SecretChanged { get; set; }
+    ///   [Parameter] public bool IsProd { get; set; }
+    /// Returning null (the default) means "no custom form" -- the host falls back to its existing
+    /// flat textbox, so a plugin written before this member existed needs no change at all.
+    /// </summary>
+    Type? ConnectionFormComponentType => null;
+
+    /// <summary>
+    /// Optional: safe, non-secret display fields extracted from a connection's secret (e.g.
+    /// {"Region": "eu-west-1"}), persisted once at Create/Update time and shown as small chips on
+    /// the Connections list. Must never include anything credential-shaped -- this dictionary is
+    /// stored in the database in plaintext (SbConsole.Core.Data.Entities.Connection.SummaryJson),
+    /// unlike the secret itself. Returning an empty dictionary (the default) means "nothing to
+    /// show" -- the default implementation does exactly that, so a plugin written before this
+    /// member existed needs no change at all.
+    /// </summary>
+    IReadOnlyDictionary<string, string> GetConnectionSummary(string secret) => new Dictionary<string, string>();
+
     /// <summary>Static summary shown on the host's Plugins page.</summary>
     PluginContribution Contribution { get; }
 

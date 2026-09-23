@@ -5,6 +5,7 @@ using SbConsole.Core.Data.Entities;
 using SbConsole.Core.Results;
 using SbConsole.Core.Security;
 using SbConsole.Sdk;
+using System.Text.Json;
 
 namespace SbConsole.Core.Connections;
 
@@ -15,7 +16,8 @@ public sealed class UpdateConnectionCommandHandler(
     IDbContextFactory<SbcDbContext> dbFactory,
     ISecretProtector protector,
     IAuditWriter audit,
-    TimeProvider clock)
+    TimeProvider clock,
+    IEnumerable<IPlugin> plugins)
 {
     public async Task<Result> HandleAsync(UpdateConnectionCommand cmd, CancellationToken ct = default)
     {
@@ -36,6 +38,14 @@ public sealed class UpdateConnectionCommandHandler(
         if (cmd.NewSecret is not null)
         {
             connection.SecretCiphertext = protector.Protect(cmd.NewSecret);
+
+            // Only recompute the summary when a new secret was actually provided -- there is no
+            // plaintext to recompute it from otherwise (the old secret stays encrypted at rest and
+            // is never decrypted just to refresh a display chip), so the existing SummaryJson is
+            // left untouched.
+            var plugin = plugins.FirstOrDefault(p => p.ConnectionKind == connection.Kind);
+            var summary = plugin?.GetConnectionSummary(cmd.NewSecret) ?? new Dictionary<string, string>();
+            connection.SummaryJson = JsonSerializer.Serialize(summary);
         }
 
         await db.SaveChangesAsync(ct);
