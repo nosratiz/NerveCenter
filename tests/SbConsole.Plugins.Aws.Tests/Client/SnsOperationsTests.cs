@@ -24,4 +24,34 @@ public class SnsOperationsTests
         // connection failure surfaces as SOME exception, not a hang or a silently-empty list.
         await act.Should().ThrowAsync<Exception>();
     }
+
+    [Fact]
+    public void ClassifySubscription_flags_the_literal_PendingConfirmation_arn_as_pending()
+    {
+        var summary = SnsOperations.ClassifySubscription("PendingConfirmation", "https", "https://ops.example.com", new Dictionary<string, string>());
+
+        summary.IsPending.Should().BeTrue();
+        summary.SubscriptionArn.Should().Be("PendingConfirmation");
+    }
+
+    [Fact]
+    public void ClassifySubscription_reads_raw_delivery_and_filter_policy_from_attributes()
+    {
+        var attributes = new Dictionary<string, string> { ["RawMessageDelivery"] = "true", ["FilterPolicy"] = """{"region":["uk"]}""" };
+
+        var summary = SnsOperations.ClassifySubscription("arn:aws:sns:us-east-1:1:topic:sub-id", "sqs", "shipment-updates", attributes);
+
+        summary.IsPending.Should().BeFalse();
+        summary.RawMessageDelivery.Should().BeTrue();
+        summary.FilterPolicyJson.Should().Be("""{"region":["uk"]}""");
+    }
+
+    [Fact]
+    public void ClassifySubscription_defaults_raw_delivery_and_filter_policy_to_null_when_absent()
+    {
+        var summary = SnsOperations.ClassifySubscription("arn:aws:sns:us-east-1:1:topic:sub-id", "email", "ops@example.com", new Dictionary<string, string>());
+
+        summary.RawMessageDelivery.Should().BeNull();
+        summary.FilterPolicyJson.Should().BeNull();
+    }
 }

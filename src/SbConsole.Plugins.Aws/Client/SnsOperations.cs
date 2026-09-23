@@ -100,11 +100,56 @@ public sealed class SnsOperations : ISnsOperations
         await sns.DeleteTopicAsync(topicArn, ct);
     }
 
-    // Placeholder throws for the remaining interface members -- implemented in Tasks 4, 5, 6, 7.
+    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        var subscriptions = new List<Subscription>();
+        string? nextToken = null;
+        do
+        {
+            var page = await sns.ListSubscriptionsByTopicAsync(new ListSubscriptionsByTopicRequest { TopicArn = topicArn, NextToken = nextToken }, ct);
+            subscriptions.AddRange(page.Subscriptions);
+            nextToken = page.NextToken;
+        } while (!string.IsNullOrEmpty(nextToken));
+
+        var summaries = new List<SubscriptionSummary>();
+        foreach (var sub in subscriptions)
+        {
+            var attributes = new Dictionary<string, string>();
+            if (sub.SubscriptionArn != "PendingConfirmation")
+            {
+                try
+                {
+                    var attrsResponse = await sns.GetSubscriptionAttributesAsync(new GetSubscriptionAttributesRequest { SubscriptionArn = sub.SubscriptionArn }, ct);
+                    attributes = new Dictionary<string, string>(attrsResponse.Attributes);
+                }
+                catch (Exception) when (ct.IsCancellationRequested is false)
+                {
+                    // Left empty -- ClassifySubscription treats missing attributes as "unknown,
+                    // not failing," same partial-failure rule as everywhere else in this plugin.
+                }
+            }
+
+            summaries.Add(ClassifySubscription(sub.SubscriptionArn, sub.Protocol, sub.Endpoint, attributes));
+        }
+
+        return summaries;
+    }
+
+    // Pure static so it's unit-testable without a real AWS account -- mirrors SqsOperations.
+    // ToQueueSummary/ExtractDeadLetterTargetArn's reasoning. Internal so SnsOperationsTests can
+    // assert it directly (InternalsVisibleTo already covers the test project).
+    internal static SubscriptionSummary ClassifySubscription(string subscriptionArn, string protocol, string endpoint, IReadOnlyDictionary<string, string> attributes)
+    {
+        var isPending = subscriptionArn == "PendingConfirmation";
+        bool? rawDelivery = attributes.TryGetValue("RawMessageDelivery", out var raw) && bool.TryParse(raw, out var parsedRaw) ? parsedRaw : null;
+        var filterPolicy = attributes.GetValueOrDefault("FilterPolicy");
+        return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy);
+    }
+
+    // Placeholder throws for the remaining interface members -- implemented in Tasks 5, 6, 7.
     // These throws exist only so the class compiles as a complete ISnsOperations implementation;
     // nothing calls them until those tasks wire up their own handlers/pages.
-    public Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default) =>
-        throw new NotImplementedException("Implemented in Task 4.");
     public Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default) =>
         throw new NotImplementedException("Implemented in Task 5.");
     public Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default) =>

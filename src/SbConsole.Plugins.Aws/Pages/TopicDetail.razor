@@ -1,0 +1,92 @@
+@page "/p/aws/topics/{TopicArnEncoded}"
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Subscriptions
+@using SbConsole.Sdk
+@inject ListSubscriptionsQueryHandler ListHandler
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>@TopicName</PageTitle>
+<div class="d-flex align-center gap-2 mb-2">
+    <MudLink Href="/p/aws/topics">Topics</MudLink>
+    <MudText>/</MudText>
+    <MudText Style="font-family:monospace">@TopicName</MudText>
+</div>
+
+<MudTabs>
+    <MudTabPanel Text="Subscriptions">
+        <div class="d-flex align-center gap-2 mb-2">
+            <MudText Typo="Typo.caption" Class="topic-arn mud-text-secondary" Style="font-family:monospace">@TopicArn</MudText>
+        </div>
+        @if (_loading)
+        {
+            <MudProgressCircular Class="subs-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else
+        {
+            <MudTable Items="_subscriptions">
+                <HeaderContent>
+                    <MudTh>Protocol</MudTh>
+                    <MudTh>Endpoint</MudTh>
+                    <MudTh>Filter policy</MudTh>
+                    <MudTh>Raw delivery</MudTh>
+                    <MudTh>State</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Protocol</MudTd>
+                    <MudTd Style="font-family:monospace">@context.Endpoint</MudTd>
+                    <MudTd Class="filter-policy" Style="font-family:monospace">@(context.FilterPolicyJson ?? "none")</MudTd>
+                    <MudTd>@(context.RawMessageDelivery is { } raw ? (raw ? "On" : "Off") : "n/a")</MudTd>
+                    <MudTd Class="sub-state">
+                        @if (context.IsPending)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">Pending</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small">Confirmed</MudChip>
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudTabPanel>
+    <MudTabPanel Text="Attributes">
+        <MudText Typo="Typo.caption" Style="font-family:monospace">@TopicArn</MudText>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    [Parameter] public string TopicArnEncoded { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+
+    private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
+    private bool _loading;
+
+    private string TopicArn => Uri.UnescapeDataString(TopicArnEncoded);
+    private string TopicName => TopicArn[(TopicArn.LastIndexOf(':') + 1)..];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await ListHandler.HandleAsync(ConnectionId, TopicArn);
+            if (result.IsSuccess)
+            {
+                _subscriptions = result.Value!;
+            }
+            else
+            {
+                _subscriptions = [];
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

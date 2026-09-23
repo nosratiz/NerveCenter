@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Queues;
+using SbConsole.Plugins.Aws.Subscriptions;
 using SbConsole.Plugins.Aws.Topics;
 using SbConsole.Sdk;
 
@@ -37,6 +38,7 @@ public sealed class AwsPlugin : IPlugin
         services.AddScoped<ListTopicsQueryHandler>();
         services.AddScoped<CreateTopicCommandHandler>();
         services.AddScoped<DeleteTopicCommandHandler>();
+        services.AddScoped<ListSubscriptionsQueryHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
         services.AddScoped<Queues.CreateQueueCommandHandler>();
