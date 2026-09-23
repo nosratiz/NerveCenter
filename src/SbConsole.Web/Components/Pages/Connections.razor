@@ -5,9 +5,7 @@
 @using SbConsole.Web.Components.Connections
 @inject ListConnectionsQueryHandler ListHandler
 @inject DeleteConnectionCommandHandler DeleteHandler
-@inject TestConnectionCommandHandler TestHandler
 @inject IConfirmationService Confirmation
-@inject IDialogService DialogService
 
 <PageTitle>Connections</PageTitle>
 <MudText Typo="Typo.h4" Class="mb-2">Connections</MudText>
@@ -19,55 +17,64 @@
     <MudButton Class="add-connection-action" Color="Color.Primary" Variant="Variant.Filled" OnClick="OpenAdd">+ Add connection</MudButton>
 </div>
 
-<MudTable Items="FilteredConnections">
-    <HeaderContent>
-        <MudTh>Name</MudTh>
-        <MudTh>Kind</MudTh>
-        <MudTh>Tags</MudTh>
-        <MudTh>Created</MudTh>
-        <MudTh>Status</MudTh>
-        <MudTh>Actions</MudTh>
-    </HeaderContent>
-    <RowTemplate>
-        <MudTd>@context.Name</MudTd>
-        <MudTd>@context.Kind</MudTd>
-        <MudTd>
-            @foreach (var tag in context.Tags)
-            {
-                <MudChip T="string" Color="@(string.Equals(tag, "prod", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default)">@tag</MudChip>
-            }
-        </MudTd>
-        <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
-        <MudTd>@StatusText(context)</MudTd>
-        <MudTd>
-            <MudButton Class="test-connection" Disabled="@(_testingConnectionId == context.Id)" OnClick="@(() => TestAsync(context))">Test</MudButton>
-            @if (_testingConnectionId == context.Id)
-            {
-                <MudProgressCircular Class="test-connection-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
-            }
-            <MudButton OnClick="@(() => OpenEdit(context))">Edit</MudButton>
-            <MudButton Class="delete-connection" Color="Color.Error" OnClick="@(() => DeleteAsync(context))">Delete</MudButton>
-        </MudTd>
-    </RowTemplate>
-</MudTable>
-<MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Secrets are write-only — stored encrypted, never returned to the browser.</MudText>
+<div class="d-flex gap-4" style="align-items:flex-start;">
+    <div style="flex:1; min-width:0;">
+        <MudTable Items="FilteredConnections">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Kind</MudTh>
+                <MudTh>Tags</MudTh>
+                <MudTh></MudTh>
+                <MudTh>Created</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Name</MudTd>
+                <MudTd>@context.Kind</MudTd>
+                <MudTd>
+                    @foreach (var tag in context.Tags)
+                    {
+                        <MudChip T="string" Color="@(string.Equals(tag, "prod", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default)">@tag</MudChip>
+                    }
+                </MudTd>
+                <MudTd>
+                    @foreach (var kv in context.Summary)
+                    {
+                        <MudChip T="string" Size="Size.Small">@kv.Value</MudChip>
+                    }
+                </MudTd>
+                <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
+                <MudTd>@StatusText(context)</MudTd>
+                <MudTd>
+                    <MudButton Class="edit-connection" OnClick="@(() => OpenEdit(context))">Edit</MudButton>
+                    <MudButton Class="delete-connection" Color="Color.Error" OnClick="@(() => DeleteAsync(context))">Delete</MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Secrets are write-only — stored encrypted, never returned to the browser.</MudText>
+    </div>
+
+    @if (_editorOpen)
+    {
+        <MudPaper Class="pa-4" Style="width:420px; flex:none;" Elevation="1">
+            <ConnectionEditor @key="@_editorKey" Existing="@_editing" OnClosed="HandleEditorClosed" />
+        </MudPaper>
+    }
+</div>
 
 @code {
-    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
-
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private string _filterText = "";
+    private bool _editorOpen;
+    private ConnectionInfo? _editing;
+    private Guid _editorKey = Guid.NewGuid();
 
     private IEnumerable<ConnectionInfo> FilteredConnections => string.IsNullOrWhiteSpace(_filterText)
         ? _connections
         : _connections.Where(c =>
             c.Name.Contains(_filterText, StringComparison.OrdinalIgnoreCase) ||
             c.Tags.Any(t => t.Contains(_filterText, StringComparison.OrdinalIgnoreCase)));
-
-    // Busy state for the one button on this page that awaits a remote call. A connection test hits
-    // a real namespace and took ~9s live with no visual feedback at all. Scoped to the row that was
-    // clicked (not a page-level flag) so testing one connection doesn't disable the others.
-    private Guid? _testingConnectionId;
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
@@ -81,38 +88,29 @@
         _ => "Failed",
     };
 
-    private async Task TestAsync(ConnectionInfo connection)
+    // @key is set to a fresh Guid for "Add" and to the target connection's own Id for "Edit" --
+    // without a changing @key, Blazor reuses the same ConnectionEditor instance when switching
+    // between two different rows' Edit buttons, and its Existing parameter update alone does NOT
+    // re-run OnInitialized, so its (and any hosted DynamicComponent's) once-only secret hydration
+    // would never re-run for the newly selected connection.
+    private void OpenAdd()
     {
-        var actor = await ActorResolver.ResolveAsync(AuthState);
-        _testingConnectionId = connection.Id;
-        try
-        {
-            await TestHandler.HandleAsync(new TestConnectionCommand(connection.Id, actor));
-        }
-        finally
-        {
-            _testingConnectionId = null;
-        }
-
-        await RefreshAsync();
+        _editing = null;
+        _editorKey = Guid.NewGuid();
+        _editorOpen = true;
     }
 
-    private async Task OpenAdd()
+    private void OpenEdit(ConnectionInfo connection)
     {
-        var dialog = await DialogService.ShowAsync<AddEditConnectionDialog>("Add connection");
-        var result = await dialog.Result;
-        if (result is { Canceled: false })
-        {
-            await RefreshAsync();
-        }
+        _editing = connection;
+        _editorKey = connection.Id;
+        _editorOpen = true;
     }
 
-    private async Task OpenEdit(ConnectionInfo connection)
+    private async Task HandleEditorClosed(bool saved)
     {
-        var parameters = new DialogParameters<AddEditConnectionDialog> { { x => x.Existing, connection } };
-        var dialog = await DialogService.ShowAsync<AddEditConnectionDialog>("Edit connection", parameters);
-        var result = await dialog.Result;
-        if (result is { Canceled: false })
+        _editorOpen = false;
+        if (saved)
         {
             await RefreshAsync();
         }
@@ -130,4 +128,6 @@
         await DeleteHandler.HandleAsync(new DeleteConnectionCommand(connection.Id, actor));
         await RefreshAsync();
     }
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 }
