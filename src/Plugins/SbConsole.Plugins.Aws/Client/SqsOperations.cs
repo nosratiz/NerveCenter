@@ -44,10 +44,12 @@ public sealed class SqsOperations : ISqsOperations
 
     public async Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default)
     {
+        string identity;
         try
         {
             using var sts = BuildStsClient(secret);
-            await sts.GetCallerIdentityAsync(new GetCallerIdentityRequest(), ct);
+            var response = await sts.GetCallerIdentityAsync(new GetCallerIdentityRequest(), ct);
+            identity = response.Account;
         }
         catch (Exception ex)
         {
@@ -55,17 +57,22 @@ public sealed class SqsOperations : ISqsOperations
         }
 
         // Credentials are valid (GetCallerIdentity succeeded). A denied ListQueues probe is
-        // reported as a non-fatal note, not a failure -- design spec §4's "text-only diagnostics"
-        // decision: nothing is persisted and no button is hidden as a result.
+        // reported as a Failed check, not a failed connection test -- design spec §3's "under-
+        // permissioned" outcome: Success stays true, nothing is persisted, no button anywhere is
+        // hidden as a result (design spec §8, Out of scope).
         try
         {
             using var sqs = BuildSqsClient(secret);
-            await sqs.ListQueuesAsync(new ListQueuesRequest { MaxResults = 1 }, ct);
-            return new ConnectionTestResult(true);
+            var response = await sqs.ListQueuesAsync(new ListQueuesRequest { MaxResults = 1 }, ct);
+            return new ConnectionTestResult(
+                true, Identity: identity,
+                Checks: [new ConnectionCheck("Queues visible", ConnectionCheckStatus.Passed, response.QueueUrls.Count.ToString())]);
         }
         catch (Exception ex)
         {
-            return new ConnectionTestResult(true, $"Valid credentials; sqs:ListQueues denied — queue actions may fail ({FriendlyAwsError.From(ex)})");
+            return new ConnectionTestResult(
+                true, Identity: identity,
+                Checks: [new ConnectionCheck("Queues visible", ConnectionCheckStatus.Failed, FriendlyAwsError.From(ex))]);
         }
     }
 

@@ -32,6 +32,17 @@ public class AwsPluginTests
     }
 
     [Fact]
+    public async Task TestConnectionAsync_leaves_identity_and_checks_null_when_credentials_are_rejected()
+    {
+        var plugin = new AwsPlugin();
+
+        var result = await plugin.TestConnectionAsync("mode=access-keys;region=us-east-1;accessKeyId=AKIAFAKE;secretAccessKey=fake;endpoint=http://127.0.0.1:1");
+
+        result.Identity.Should().BeNull();
+        result.Checks.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetNavBadgeAsync_returns_null_for_an_unrelated_nav_href()
     {
         var plugin = new AwsPlugin();
