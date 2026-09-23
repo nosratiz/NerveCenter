@@ -9,8 +9,9 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY src/SbConsole.Sdk/SbConsole.Sdk.csproj                             src/SbConsole.Sdk/
 COPY src/SbConsole.Core/SbConsole.Core.csproj                           src/SbConsole.Core/
-COPY src/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj src/SbConsole.Plugins.ServiceBus/
-COPY src/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj         src/SbConsole.Plugins.Kafka/
+COPY src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj src/Plugins/SbConsole.Plugins.ServiceBus/
+COPY src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj           src/Plugins/SbConsole.Plugins.Kafka/
+COPY src/Plugins/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj               src/Plugins/SbConsole.Plugins.Aws/
 COPY src/SbConsole.Web/SbConsole.Web.csproj                             src/SbConsole.Web/
 RUN dotnet restore src/SbConsole.Web/SbConsole.Web.csproj
 

@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
+    <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
   </ItemGroup>
 
 </Project>

@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
+    <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
   </ItemGroup>
 
 </Project>

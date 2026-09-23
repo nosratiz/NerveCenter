@@ -51,8 +51,10 @@ src/
 ├── SbConsole.Sdk/                 # The plugin contract. Zero deps beyond BCL + Microsoft.Extensions.*.Abstractions.
 ├── SbConsole.Core/                # Host services: handlers, EF Core (SQLite/WAL), auth, audit, secrets, settings.
 ├── SbConsole.Web/                 # Blazor Web App (Interactive Server), MudBlazor shell, Minimal APIs.
-├── SbConsole.Plugins.ServiceBus/  # Plugin. References Sdk ONLY.
-└── SbConsole.Plugins.Kafka/       # Plugin. References Sdk ONLY.
+└── Plugins/                       # All plugin projects live here. Each references Sdk ONLY.
+    ├── SbConsole.Plugins.ServiceBus/
+    ├── SbConsole.Plugins.Kafka/
+    └── SbConsole.Plugins.Aws/
 tests/  — one xUnit project per src project, plus SbConsole.IntegrationTests (Testcontainers, not yet built)
 ```
 

@@ -1,9 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/SbConsole.Core/SbConsole.Core.csproj" />
-    <Project Path="src/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj" />
-    <Project Path="src/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj" />
-    <Project Path="src/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
+    <Project Path="src/Plugins/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj" />
+    <Project Path="src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj" />
+    <Project Path="src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
     <Project Path="src/SbConsole.Sdk/SbConsole.Sdk.csproj" />
     <Project Path="src/SbConsole.Web/SbConsole.Web.csproj" />
   </Folder>
