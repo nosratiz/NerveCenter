@@ -92,4 +92,17 @@ public class SnsOperationsTests
     {
         SnsOperations.EvaluateFilterMatch("not json", new Dictionary<string, string>()).Should().BeFalse();
     }
+
+    [Fact]
+    public void EvaluateFilterMatch_treats_a_non_object_top_level_policy_as_no_match()
+    {
+        SnsOperations.EvaluateFilterMatch("5", new Dictionary<string, string> { ["region"] = "uk" }).Should().BeFalse();
+        SnsOperations.EvaluateFilterMatch("[]", new Dictionary<string, string> { ["region"] = "uk" }).Should().BeFalse();
+    }
+
+    [Fact]
+    public void EvaluateFilterMatch_treats_a_non_array_property_value_as_no_match()
+    {
+        SnsOperations.EvaluateFilterMatch("""{"region":"uk"}""", new Dictionary<string, string> { ["region"] = "uk" }).Should().BeFalse();
+    }
 }

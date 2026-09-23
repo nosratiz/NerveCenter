@@ -216,6 +216,11 @@ public sealed class SnsOperations : ISnsOperations
         try
         {
             using var document = JsonDocument.Parse(filterPolicyJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (!messageAttributes.TryGetValue(property.Name, out var value))
@@ -224,12 +229,15 @@ public sealed class SnsOperations : ISnsOperations
                 }
 
                 var matchesThisKey = false;
-                foreach (var allowed in property.Value.EnumerateArray())
+                if (property.Value.ValueKind == JsonValueKind.Array)
                 {
-                    if (allowed.ValueKind == JsonValueKind.String && allowed.GetString() == value)
+                    foreach (var allowed in property.Value.EnumerateArray())
                     {
-                        matchesThisKey = true;
-                        break;
+                        if (allowed.ValueKind == JsonValueKind.String && allowed.GetString() == value)
+                        {
+                            matchesThisKey = true;
+                            break;
+                        }
                     }
                 }
 
