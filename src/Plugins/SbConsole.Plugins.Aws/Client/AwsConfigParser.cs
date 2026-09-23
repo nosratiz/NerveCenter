@@ -46,4 +46,29 @@ public static class AwsConfigParser
 
         return result;
     }
+
+    // Fixed key order purely for stable, human-diffable output when a saved secret is inspected
+    // directly (e.g. in a DB browser) -- Parse itself is order-independent. AwsConnectionFields
+    // (the only caller) never sets a key outside this list; an unrecognized key is silently
+    // dropped rather than appended in arbitrary order, matching Parse's own "skip, don't throw"
+    // tolerance for anything it doesn't recognize.
+    private static readonly string[] SerializeKeyOrder =
+    [
+        "mode", "region", "accessKeyId", "secretAccessKey", "sessionToken",
+        "roleArn", "externalId", "sessionName", "endpoint", "pathStyle",
+    ];
+
+    public static string Serialize(IReadOnlyDictionary<string, string> fields)
+    {
+        var parts = new List<string>();
+        foreach (var key in SerializeKeyOrder)
+        {
+            if (fields.TryGetValue(key, out var value) && value.Length > 0)
+            {
+                parts.Add($"{key}={value}");
+            }
+        }
+
+        return string.Join(';', parts);
+    }
 }

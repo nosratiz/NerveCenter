@@ -87,4 +87,42 @@ public class AwsConfigParserTests
     {
         AwsConfigParser.SafeEcho("").Should().Be("");
     }
+
+    [Fact]
+    public void Serialize_writes_known_keys_in_a_fixed_order()
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["region"] = "eu-west-1",
+            ["mode"] = "access-keys",
+            ["accessKeyId"] = "AKIA123",
+            ["secretAccessKey"] = "shh",
+        };
+
+        var serialized = AwsConfigParser.Serialize(fields);
+
+        serialized.Should().Be("mode=access-keys;region=eu-west-1;accessKeyId=AKIA123;secretAccessKey=shh");
+    }
+
+    [Fact]
+    public void Serialize_omits_empty_values()
+    {
+        var fields = new Dictionary<string, string> { ["mode"] = "default-chain", ["region"] = "", ["endpoint"] = "" };
+
+        AwsConfigParser.Serialize(fields).Should().Be("mode=default-chain");
+    }
+
+    [Theory]
+    [InlineData("mode=access-keys;region=eu-west-1;accessKeyId=AKIA123;secretAccessKey=shh;sessionToken=tok")]
+    [InlineData("mode=assume-role;region=us-east-1;roleArn=arn:aws:iam::123456789012:role/Reader;externalId=ext;sessionName=sess")]
+    [InlineData("mode=default-chain;region=eu-west-1")]
+    [InlineData("mode=access-keys;region=eu-west-1;accessKeyId=AKIA123;secretAccessKey=shh;endpoint=http://localhost:4566;pathStyle=True")]
+    public void Parse_then_Serialize_round_trips(string original)
+    {
+        var parsed = AwsConfigParser.Parse(original);
+
+        var serialized = AwsConfigParser.Serialize(parsed);
+
+        AwsConfigParser.Parse(serialized).Should().BeEquivalentTo(parsed);
+    }
 }
