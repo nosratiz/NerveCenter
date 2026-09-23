@@ -1,0 +1,60 @@
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Topics
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField id="topic-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_isFifo ? $"{_name}.fifo" : _name) — SNS requires the .fifo suffix on a FIFO topic; it is added for you.</MudText>
+        <MudSwitch T="bool" Class="fifo-toggle" @bind-Value="_isFifo" Label="FIFO" Color="Color.Primary" />
+        @if (_isFifo)
+        {
+            <MudSwitch T="bool" Class="content-based-dedup-toggle" @bind-Value="_contentBasedDeduplication" Label="Content-based deduplication" Color="Color.Primary" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="save-topic-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-topic" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_name) || _busy)" OnClick="Save">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+
+    [Inject] private CreateTopicCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private bool _isFifo;
+    private bool _contentBasedDeduplication;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var request = new CreateTopicRequest(_name, _isFifo, null, _isFifo ? _contentBasedDeduplication : null);
+            var result = await CreateHandler.HandleAsync(new CreateTopicCommand(ConnectionId, ConnectionName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

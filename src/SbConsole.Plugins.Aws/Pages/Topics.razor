@@ -4,8 +4,11 @@
 @using SbConsole.Sdk
 @inject IConnectionProvider Connections
 @inject ListTopicsQueryHandler ListHandler
+@inject DeleteTopicCommandHandler DeleteHandler
 @inject SbConsole.Plugins.Aws.Queues.GetConnectionEchoQueryHandler EchoHandler
 @inject ISnackbar Snackbar
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
 
 <PageTitle>Topics</PageTitle>
 <h1>Topics</h1>
@@ -39,6 +42,7 @@ else
             </MudMenu>
         </div>
         <MudSpacer />
+        <MudButton Class="create-topic-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenCreate">+ Create topic</MudButton>
         @if (_loading)
         {
             <MudProgressCircular Class="topics-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
@@ -74,6 +78,11 @@ else
             </MudTd>
             <MudTd>
                 <MudButton Class="subs-action" Href="@($"/p/aws/topics/{Uri.EscapeDataString(context.TopicArn)}?connectionId={_selectedConnectionId}")">Subs</MudButton>
+                <MudButton Class="delete-topic" Color="Color.Error" Disabled="@(_deletingTopic == context.TopicArn)" OnClick="@(() => DeleteAsync(context.TopicArn, context.Name))">Delete</MudButton>
+                @if (_deletingTopic == context.TopicArn)
+                {
+                    <MudProgressCircular Class="delete-topic-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+                }
             </MudTd>
         </RowTemplate>
     </MudTable>
@@ -85,6 +94,7 @@ else
     private Guid _selectedConnectionId;
     private bool _loading;
     private string _connectionEcho = "";
+    private string? _deletingTopic;
 
     private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
 
@@ -132,5 +142,47 @@ else
     {
         var result = await EchoHandler.HandleAsync(_selectedConnectionId);
         _connectionEcho = result.IsSuccess ? result.Value! : "";
+    }
+
+    private async Task OpenCreate()
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var parameters = new DialogParameters<CreateTopicDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+        };
+        var dialog = await DialogService.ShowAsync<CreateTopicDialog>("Create topic", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadTopicsAsync();
+        }
+    }
+
+    private async Task DeleteAsync(string topicArn, string topicName)
+    {
+        var connection = _connections.Single(c => c.Id == _selectedConnectionId);
+        var confirmed = await Confirmation.ConfirmAsync("Delete", topicName, connection.IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _deletingTopic = topicArn;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteTopicCommand(connection.Id, connection.Name, topicArn, topicName));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deletingTopic = null;
+        }
+
+        await LoadTopicsAsync();
     }
 }

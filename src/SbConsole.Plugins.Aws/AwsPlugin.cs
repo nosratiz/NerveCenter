@@ -35,6 +35,8 @@ public sealed class AwsPlugin : IPlugin
         services.AddSingleton<ISnsOperations, SnsOperations>();
         services.AddScoped<ListQueuesQueryHandler>();
         services.AddScoped<ListTopicsQueryHandler>();
+        services.AddScoped<CreateTopicCommandHandler>();
+        services.AddScoped<DeleteTopicCommandHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();
         services.AddScoped<Queues.CreateQueueCommandHandler>();

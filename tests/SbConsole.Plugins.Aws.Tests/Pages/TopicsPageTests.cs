@@ -30,7 +30,11 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton(_connections);
         Services.AddSingleton(_snsOperations);
         Services.AddSingleton<ListTopicsQueryHandler>();
+        Services.AddSingleton<CreateTopicCommandHandler>();
+        Services.AddSingleton<DeleteTopicCommandHandler>();
         Services.AddSingleton<GetConnectionEchoQueryHandler>();
+        Services.AddSingleton(Substitute.For<IAuditScope>());
+        Services.AddSingleton(Substitute.For<IConfirmationService>());
         Services.AddLogging();
     }
 
@@ -55,5 +59,21 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         var cut = Render<SbConsole.Plugins.Aws.Pages.Topics>();
 
         cut.FindAll(".no-subs-flag").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Delete_calls_the_handler_only_when_confirmation_service_returns_true()
+    {
+        var confirmation = Substitute.For<IConfirmationService>();
+        confirmation.ConfirmAsync("Delete", "order-events-topic", false, null, Arg.Any<CancellationToken>()).Returns(true);
+        Services.AddSingleton(confirmation);
+        _snsOperations.ListTopicsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns([new TopicSummary("order-events-topic", "arn:aws:sns:us-east-1:1:order-events-topic", false, 0, 0, false)]);
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Topics>();
+        cut.Find("button.delete-topic").Click();
+        await Task.Delay(50);
+
+        await _snsOperations.Received(1).DeleteTopicAsync("mode=access-keys;region=us-east-1", "arn:aws:sns:us-east-1:1:order-events-topic", Arg.Any<CancellationToken>());
     }
 }
