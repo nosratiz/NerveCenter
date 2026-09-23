@@ -614,6 +614,97 @@ SNS plan needs no compose change) gated by a real `healthcheck` (`curl` against
 one-shot `aws-init` seed script — depending on that healthcheck — that creates sample queues with
 a redrive policy already attached, mirroring Kafka's `kafka-init` pattern. See `docker/README.md`.
 
+### 6.7.1 Topics & Subscriptions (2026-09-23)
+
+The AWS plugin's SNS Topics section, shipped as an eight-task plan following Queues' own
+pattern: `ISnsOperations`/`SnsOperations` built the same way `ISqsOperations` is (every method
+takes the connection secret as a parameter, one real implementation constructed via the existing
+`AwsConfigParser`/`AwsCredentialsFactory` pipeline), two new routed pages (`Topics.razor` and
+`TopicDetail.razor`), three dialogs (Create, Subscribe, Publish), and handler folders mirroring
+`Queues`/`Messages` naming. Topics use the same connection kind (`"aws"`) as Queues — no new
+secret format or parser changes.
+
+- **`ISnsOperations`** — the seam between handlers and the real `AmazonSimpleNotificationServiceClient`
+  and `AmazonCloudWatchClient` (needed for the delivery-failure metric below). Methods: `ListTopicsAsync`,
+  `CreateTopicAsync`, `DeleteTopicAsync`, `ListSubscriptionsAsync`, `SubscribeAsync`, `UnsubscribeAsync`,
+  `PublishAsync`, `GetDeliveryFailureCountAsync`. `SnsOperations` constructs both clients the same way
+  `SqsOperations` does, forwarding `ServiceURL`/`UseHttp` from the parsed config so LocalStack
+  emulation works for SNS and CloudWatch too.
+
+- **Topics list** (`/p/aws/topics`) — a new nav item registered in `AwsPlugin.NavItems`, second after
+  Queues. Table columns: Topic name, Type (`Standard`/`FIFO`), Subscription count, Pending confirmation
+  count, Failed-24h (CloudWatch delivery-failure sum, see below), Flags (KMS encryption, zero-subscribers
+  warning), Actions. The Subscriptions and Failed-24h counts are populated via per-topic `ListSubscriptionsByTopic`
+  and `GetMetricStatistics` calls — matching the Queues page's own per-row partial-failure pattern, a topic
+  whose call fails renders that count unavailable (dashed) rather than blanking the entire page.
+  `PluginContribution` page count increases from 2 to 4 (`Queues`, `Receive`, `Topics`, `TopicDetail`);
+  action count increases from 8 to 13 (`CreateQueue`/`DeleteQueue`/`PurgeQueue`/`Receive`/`DeleteMessage`/
+  `ReleaseMessage`/`SendMessage`/`StartRedrive`, plus `CreateTopic`/`DeleteTopic`/`Subscribe`/`Unsubscribe`/
+  `Publish`).
+
+- **Topic detail** (`/p/aws/topics/{topicArn}`) — two-tab design mirroring `Queues.razor` only with tabs,
+  not a single-page layout. **Subscriptions tab** (default): ARN header with copy button; table showing
+  Protocol, Endpoint, Filter policy (read-only, no editing), Raw message delivery flag, State
+  (`Confirmed`/`Pending` with elapsed time / `Failing` based on subscription attributes), and Actions;
+  Pending subscriptions show a **Resend** action (calls `SubscribeAsync` again with the same parameters,
+  triggering SNS's idempotent re-delivery of the confirmation), confirmed/failing show **Remove**
+  (`UnsubscribeAsync`, `ActionRisk.Mutating`, plain confirm — not Destructive, since re-subscribing
+  fully reverses it); "+ Subscribe" opens `SubscribeDialog.razor` with Protocol selector (sqs, https,
+  email, lambda), Endpoint field, and Raw message delivery toggle. **Attributes tab**: ARN, encryption
+  (KMS key ID or "unencrypted"), FIFO yes/no, created-at if available.
+
+- **Publish dialog** (`Dialogs/PublishDialog.razor`) — Topic (pre-filled from the row/detail page),
+  Subject (caption: "email only"), Message attributes (key/value rows), Message body. For FIFO topics:
+  required Message Group ID and either a Deduplication ID or a "content-based deduplication enabled"
+  note, mirroring `SendMessageDialog`'s identical FIFO field set. **Fan-out preview**: on dialog open,
+  calls `GetSubscriptionAttributes` once per subscription to fetch filter policies, then evaluates the
+  current message attributes against each policy client-side (pure function, no network) and displays
+  a "Matches N of M subscriptions" panel with ✓ for matched, ✕ for filtered, — for pending/failing.
+  Re-evaluated on every attribute edit. Publish is `ActionRisk.Mutating`, audited as `aws.topic.publish`.
+
+- **CloudWatch delivery-failure metric** — `ISnsOperations.GetDeliveryFailureCountAsync` calls CloudWatch
+  `GetMetricStatistics` with `Namespace: "AWS/SNS"`, `MetricName: "NumberOfNotificationsFailed"`,
+  `Dimensions: [{Name: "TopicName", Value: topicName}]`, `StartTime: now-24h`, `EndTime: now`,
+  `Period: 86400`, `Statistics: ["Sum"]` — a zero-datapoint response (no failures or metric has no data)
+  returns 0, not an error. A denied call degrades that topic's Failed-24h cell (renders unavailable,
+  not zero) rather than failing the whole page, matching the partial-failure pattern everywhere else
+  in this plugin. **This requires a new IAM permission: `cloudwatch:GetMetricStatistics`**, documented
+  in `docker/README.md`'s least-privilege policy example alongside the existing SQS permissions.
+
+- **Test-connection integration note** — `SbConsole.Sdk.ConnectionCheck`/`ConnectionCheckStatus` and
+  the richer `ConnectionTestResult.Checks` field (for structured diagnostic probes like "Queues visible"
+  / "Topics visible") were introduced in the concurrent `worktree-feature+connections-page-redesign`
+  branch and have since merged to `main`. The infrastructure is now available; however,
+  `SqsOperations.TestConnectionAsync` still returns a simple result with only text diagnostics (no
+  Checks list populated) — it performs a `GetCallerIdentity` check (credentials valid), then a
+  cheap `ListQueues` probe (reports a denial as non-fatal text if denied). Adding a second probe
+  for SNS `ListTopics` (cheap, matching the `ListQueues` pattern) via the new `Checks` infrastructure
+  is a straightforward follow-up, now unblocked by the prerequisite infrastructure landing.
+
+- **Error handling** — `FriendlyAwsError` gains mappings for SNS and CloudWatch exception types this
+  plan's calls encounter: `NotFoundException` (topic/subscription not found), `InvalidParameterException`
+  (malformed filter policy, malformed endpoint), `AuthorizationErrorException` (SNS's access-denied
+  shape, distinct from SQS's `AccessDeniedException`), and CloudWatch's own `AccessDeniedException`
+  for metrics calls — all exception types verified against the installed `AWSSDK.SimpleNotificationService`
+  3.7.400.62 and `AWSSDK.CloudWatch` 3.7.400.62 packages at implementation time, not assumed.
+
+- **Handlers, audit, and safety** — new plugin handlers (`ListTopicsQueryHandler`, `CreateTopicCommandHandler`,
+  `DeleteTopicCommandHandler`, `ListSubscriptionsQueryHandler`, `SubscribeCommandHandler`,
+  `UnsubscribeCommandHandler`, `PublishCommandHandler`, `GetTopicDeliveryFailureCountQueryHandler`,
+  `GetSubscriptionFilterPoliciesQueryHandler`) follow Core's naming convention, are DI-registered in
+  `AwsPlugin.ConfigureServices`, and follow the identical try/catch → `FriendlyAwsError`-wrapped result
+  shape as Queues. Delete topic (cascades to its subscriptions — the confirmation dialog states the
+  subscription count that will be removed) and Publish are `ActionRisk.Mutating`; they are gated server-side
+  via `IConnectionProvider` lookups for `IsProd`, never client-supplied parameters. **No schema changes**:
+  topics and subscriptions live in AWS, not SbConsole's own database, exactly as queues do today.
+
+Out of this plan: filter-policy authoring/editing (Subscribe/Edit have no filter-policy field; policies
+are read-only and set via the AWS console), Access Policy tab on `TopicDetail.razor` (Subscriptions and
+Attributes only, matching the deferred `QueueDetail` scope), delivery logs (needs CloudWatch Logs, a
+separate service/permission), cross-link to "Subscribed to N SNS topics" on `QueueDetail.razor` (that page
+was never built), nav-badge/dashboard integration (stays at SDK defaults), per-message manual redrive from
+any SNS-side view (redrive remains queue-level only, already shipped with SQS).
+
 ## 7. Error handling
 
 - Handlers return typed results (`Result<T>` with error category: `NotFound`,

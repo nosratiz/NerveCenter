@@ -112,7 +112,8 @@ docker compose --profile aws up -d
 | `aws-init`   | (one-shot)             |
 
 Seeded queues: `order-events`, `order-events-dlq` (redrive policy already attached, max receives
-5), `payments`.
+5), `payments`. Seeded topics: `order-events-topic` (Standard), `payment-notifications-topic`
+(FIFO).
 
 ### Connect the app to it (LocalStack)
 
@@ -130,6 +131,77 @@ From the containerised app (if running SbConsole in a container), use:
 ```
 mode=access-keys;region=us-east-1;accessKeyId=test;secretAccessKey=test;endpoint=http://localstack:4566;pathStyle=true
 ```
+
+### Least-privilege IAM policy (AWS)
+
+For production use, the IAM principal SbConsole uses must have the following permissions. LocalStack
+accepts any credentials during local development, so this policy is for reference and for real AWS
+deployments.
+
+**SQS permissions** (Queues, Messages, Redrive):
+- `sqs:ListQueues` — list queues
+- `sqs:GetQueueAttributes` — fetch queue metadata (counts, configuration, redrive policy)
+- `sqs:CreateQueue` — create queue
+- `sqs:DeleteQueue` — delete queue
+- `sqs:PurgeQueue` — purge queue
+- `sqs:ReceiveMessage` — receive (get) messages
+- `sqs:DeleteMessage` — delete received message
+- `sqs:ChangeMessageVisibility` — release message (reset visibility timeout)
+- `sqs:SendMessage` — send message
+- `sqs:StartMessageMoveTask` — initiate DLQ redrive task
+
+**SNS permissions** (Topics, Subscriptions, Publish):
+- `sns:ListTopics` — list topics
+- `sns:GetTopicAttributes` — fetch topic metadata (subscription counts, encryption, configuration)
+- `sns:CreateTopic` — create topic
+- `sns:DeleteTopic` — delete topic
+- `sns:ListSubscriptionsByTopic` — list subscriptions on a topic
+- `sns:GetSubscriptionAttributes` — fetch subscription metadata (status, filter policy)
+- `sns:Subscribe` — subscribe to topic
+- `sns:Unsubscribe` — unsubscribe from topic
+- `sns:Publish` — publish message to topic
+
+**CloudWatch permissions** (Delivery metrics):
+- `cloudwatch:GetMetricStatistics` — fetch topic delivery-failure count over last 24 hours
+
+Example IAM policy (JSON):
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ListQueues",
+        "sqs:GetQueueAttributes",
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:PurgeQueue",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:SendMessage",
+        "sqs:StartMessageMoveTask",
+        "sns:ListTopics",
+        "sns:GetTopicAttributes",
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:ListSubscriptionsByTopic",
+        "sns:GetSubscriptionAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:Publish",
+        "cloudwatch:GetMetricStatistics"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Scope this to specific queue/topic ARNs as appropriate for your deployment. SbConsole does not
+support resource-level ACLs beyond AWS's own permission system — all queues and topics the
+connection can reach are accessible.
 
 ## SbConsole in a container (opt-in)
 
