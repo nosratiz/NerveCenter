@@ -1,4 +1,5 @@
 using Amazon.SecurityToken;
+using Amazon.SimpleNotificationService;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using SbConsole.Sdk;
@@ -25,6 +26,8 @@ public static class FriendlyAwsError
         QueueNameExistsException => "A queue with this name already exists with different settings",
         ReceiptHandleIsInvalidException => "This message's hold already expired — it's back in the queue",
         RequestThrottledException => "AWS is throttling this connection — try again shortly",
+        AmazonSimpleNotificationServiceException { ErrorCode: "AuthorizationError" } => "Access denied — check IAM permissions",
+        AmazonSimpleNotificationServiceException { ErrorCode: "NotFound" } => "Topic or subscription not found",
         _ => FriendlyError.From(ex),
     };
 }

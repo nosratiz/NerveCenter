@@ -11,6 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.CloudWatch" Version="3.7.401" />
+    <PackageReference Include="AWSSDK.SimpleNotificationService" Version="3.7.400.62" />
     <PackageReference Include="AWSSDK.SQS" Version="3.7.400.62" />
     <PackageReference Include="AWSSDK.SecurityToken" Version="3.7.401.13" />
     <PackageReference Include="MudBlazor" Version="9.9.0" />
