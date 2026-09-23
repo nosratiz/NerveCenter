@@ -15,7 +15,7 @@ public class ListConnectionsQueryHandlerTests
     {
         using var testDb = new TestDb();
         var create = new CreateConnectionCommandHandler(
-            testDb, new AesGcmSecretProtector(new byte[32]), Substitute.For<IAuditWriter>(), new FakeTimeProvider());
+            testDb, new AesGcmSecretProtector(new byte[32]), Substitute.For<IAuditWriter>(), new FakeTimeProvider(), []);
         await create.HandleAsync(new CreateConnectionCommand("bus-prod", "azure-servicebus", "s1", ["prod"], "admin"));
         await create.HandleAsync(new CreateConnectionCommand("other", "postgres", "s2", [], "admin"));
 

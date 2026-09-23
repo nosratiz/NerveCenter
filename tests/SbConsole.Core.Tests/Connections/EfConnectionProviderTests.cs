@@ -15,7 +15,7 @@ public class EfConnectionProviderTests
     {
         using var testDb = new TestDb();
         var protector = new AesGcmSecretProtector(new byte[32]);
-        var create = new CreateConnectionCommandHandler(testDb, protector, Substitute.For<IAuditWriter>(), new FakeTimeProvider());
+        var create = new CreateConnectionCommandHandler(testDb, protector, Substitute.For<IAuditWriter>(), new FakeTimeProvider(), []);
         var created = await create.HandleAsync(new CreateConnectionCommand("bus", "azure-servicebus", "Endpoint=sb://real", [], "admin"));
         var provider = new EfConnectionProvider(testDb, protector);
 

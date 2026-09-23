@@ -40,7 +40,7 @@ public class TestConnectionCommandHandlerTests
 
     private static async Task<Guid> SeedAsync(TestDb db, IAuditWriter audit, string kind = "azure-servicebus", string secret = "Endpoint=sb://x")
     {
-        var create = new CreateConnectionCommandHandler(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider());
+        var create = new CreateConnectionCommandHandler(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), []);
         var result = await create.HandleAsync(new CreateConnectionCommand("bus", kind, secret, [], "admin"));
         return result.Value;
     }

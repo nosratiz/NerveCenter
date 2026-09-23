@@ -17,7 +17,7 @@ public class UpdateConnectionCommandHandlerTests
 
     private static async Task<Guid> SeedAsync(TestDb db, IAuditWriter audit, string name = "bus", string secret = "Endpoint=sb://original")
     {
-        var create = new CreateConnectionCommandHandler(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider());
+        var create = new CreateConnectionCommandHandler(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), []);
         var result = await create.HandleAsync(new CreateConnectionCommand(name, "azure-servicebus", secret, ["dev"], "admin"));
         return result.Value;
     }
@@ -30,7 +30,7 @@ public class UpdateConnectionCommandHandlerTests
         var id = await SeedAsync(testDb, audit);
         var protector = new AesGcmSecretProtector(Key);
 
-        var result = await new UpdateConnectionCommandHandler(testDb, protector, audit, new FakeTimeProvider())
+        var result = await new UpdateConnectionCommandHandler(testDb, protector, audit, new FakeTimeProvider(), [])
             .HandleAsync(new UpdateConnectionCommand(id, "bus-renamed", ["prod"], NewSecret: null, "admin"));
 
         result.IsSuccess.Should().BeTrue();
@@ -49,7 +49,7 @@ public class UpdateConnectionCommandHandlerTests
         var id = await SeedAsync(testDb, audit);
         var protector = new AesGcmSecretProtector(Key);
 
-        await new UpdateConnectionCommandHandler(testDb, protector, audit, new FakeTimeProvider())
+        await new UpdateConnectionCommandHandler(testDb, protector, audit, new FakeTimeProvider(), [])
             .HandleAsync(new UpdateConnectionCommand(id, "bus", ["dev"], NewSecret: "Endpoint=sb://replaced", "admin"));
 
         await using var db = testDb.CreateDbContext();
@@ -65,7 +65,7 @@ public class UpdateConnectionCommandHandlerTests
         var id = await SeedAsync(testDb, audit);
         audit.ClearReceivedCalls();
 
-        await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider())
+        await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), [])
             .HandleAsync(new UpdateConnectionCommand(id, "bus-2", ["dev"], null, "admin"));
 
         await audit.Received(1).WriteAsync(
@@ -79,7 +79,7 @@ public class UpdateConnectionCommandHandlerTests
         using var testDb = new TestDb();
         var audit = Substitute.For<IAuditWriter>();
 
-        var result = await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider())
+        var result = await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), [])
             .HandleAsync(new UpdateConnectionCommand(Guid.NewGuid(), "x", [], null, "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.NotFound);
@@ -94,7 +94,7 @@ public class UpdateConnectionCommandHandlerTests
         await SeedAsync(testDb, audit, name: "taken");
         var id = await SeedAsync(testDb, audit, name: "renaming-this-one");
 
-        var result = await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider())
+        var result = await new UpdateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), [])
             .HandleAsync(new UpdateConnectionCommand(id, "taken", [], null, "admin"));
 
         result.Error!.Category.Should().Be(ErrorCategory.Conflict);

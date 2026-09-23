@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using SbConsole.Core.Audit;
@@ -16,7 +17,7 @@ public class CreateConnectionCommandHandlerTests
     private static readonly byte[] Key = new byte[32];
 
     private static CreateConnectionCommandHandler Handler(TestDb db, IAuditWriter audit) =>
-        new(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider());
+        new(db, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), []);
 
     [Fact]
     public async Task Creates_connection_with_encrypted_secret_and_audits()
@@ -55,5 +56,50 @@ public class CreateConnectionCommandHandlerTests
         await audit.DidNotReceive().WriteAsync(Arg.Any<AuditEntry>(), Arg.Any<CancellationToken>());
         await using var db = testDb.CreateDbContext();
         (await db.Connections.CountAsync()).Should().Be(1);
+    }
+
+    private sealed class FakePluginWithSummary(string kind, IReadOnlyDictionary<string, string> summary) : IPlugin
+    {
+        public string Id => kind;
+        public string DisplayName => kind;
+        public string Version => "1.0.0";
+        public IReadOnlyList<PluginNavItem> NavItems => [];
+        public string ConnectionKind => kind;
+        public string ConnectionKindDisplayName => kind;
+        public PluginContribution Contribution => new(0, 0);
+        public void ConfigureServices(IServiceCollection services) { }
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
+            Task.FromResult(new ConnectionTestResult(true));
+        public IReadOnlyDictionary<string, string> GetConnectionSummary(string secret) => summary;
+    }
+
+    [Fact]
+    public async Task Persists_the_plugins_connection_summary()
+    {
+        using var testDb = new TestDb();
+        var audit = Substitute.For<IAuditWriter>();
+        var plugin = new FakePluginWithSummary("aws", new Dictionary<string, string> { ["Region"] = "eu-west-1" });
+        var handler = new CreateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), [plugin]);
+
+        var result = await handler.HandleAsync(new CreateConnectionCommand("aws-prod", "aws", "region=eu-west-1", [], "admin"));
+
+        await using var db = testDb.CreateDbContext();
+        var saved = await db.Connections.SingleAsync(c => c.Id == result.Value);
+        saved.Summary.Should().ContainSingle(kv => kv.Key == "Region" && kv.Value == "eu-west-1");
+    }
+
+    [Fact]
+    public async Task Persists_an_empty_summary_when_no_plugin_matches_the_kind()
+    {
+        using var testDb = new TestDb();
+        var audit = Substitute.For<IAuditWriter>();
+        var handler = new CreateConnectionCommandHandler(testDb, new AesGcmSecretProtector(Key), audit, new FakeTimeProvider(), []);
+
+        var result = await handler.HandleAsync(new CreateConnectionCommand("mystery", "unregistered-kind", "s", [], "admin"));
+
+        result.IsSuccess.Should().BeTrue();
+        await using var db = testDb.CreateDbContext();
+        var saved = await db.Connections.SingleAsync(c => c.Id == result.Value);
+        saved.Summary.Should().BeEmpty();
     }
 }
