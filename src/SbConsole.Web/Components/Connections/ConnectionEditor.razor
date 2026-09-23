@@ -1,0 +1,194 @@
+@* src/SbConsole.Web/Components/Connections/ConnectionEditor.razor *@
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Authorization
+@using SbConsole.Core.Connections
+@using SbConsole.Sdk
+@using SbConsole.Web.Auth
+
+<MudText Typo="Typo.h6" Class="mb-3">@(Existing is null ? "Add connection" : "Edit connection")</MudText>
+
+<MudTextField id="connection-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+<MudSelect T="string" @bind-Value="_kind" Label="Kind" Disabled="@(Existing is not null)">
+    @foreach (var plugin in Plugins)
+    {
+        <MudSelectItem Value="@plugin.ConnectionKind">@plugin.ConnectionKindDisplayName</MudSelectItem>
+    }
+</MudSelect>
+
+@if (Existing is not null && SelectedPlugin?.ConnectionFormComponentType is not null)
+{
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+        Editing any field below replaces the entire stored secret — fill in every field your chosen auth mode needs.
+    </MudAlert>
+}
+
+@if (SelectedPlugin?.ConnectionFormComponentType is { } formType)
+{
+    <DynamicComponent Type="formType" Parameters="FormParameters()" />
+}
+else
+{
+    <MudTextField id="connection-secret" @bind-Value="_secret" InputType="InputType.Password" Immediate="true"
+                  Label="@(Existing is null ? "Connection string" : "Replace connection string (leave blank to keep)")" />
+}
+<MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">Encrypted at rest · never displayed again</MudText>
+
+<div class="d-flex gap-2 align-center">
+    <MudTextField id="connection-tag-input" @bind-Value="_tagInput" Label="Add tag" Immediate="true" />
+    <MudButton id="add-tag" OnClick="AddTag">Add</MudButton>
+</div>
+@foreach (var tag in _tags)
+{
+    <MudChip T="string" OnClose="@(() => RemoveTag(tag))">@tag</MudChip>
+}
+
+<div class="d-flex align-center gap-2 mt-4">
+    <MudButton Class="test-connection" Disabled="@(_testing || (Existing is null && string.IsNullOrWhiteSpace(_secret)))" OnClick="TestAsync">Test connection</MudButton>
+    @if (_testing)
+    {
+        <MudProgressCircular Class="test-connection-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+</div>
+
+@if (_testResult is { } result)
+{
+    <div class="test-result mt-2">
+        @if (result.Success)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true">Credentials valid@(result.Identity is { } identity ? $" · {identity}" : "")</MudAlert>
+            @if (result.Checks is { Count: > 0 } checks)
+            {
+                @foreach (var check in checks)
+                {
+                    <div class="d-flex align-center gap-2 mt-1">
+                        <MudIcon Icon="@(check.Status == ConnectionCheckStatus.Passed ? Icons.Material.Filled.Check : Icons.Material.Filled.Warning)"
+                                 Color="@(check.Status == ConnectionCheckStatus.Passed ? Color.Success : Color.Warning)" Size="Size.Small" />
+                        <MudText Typo="Typo.body2">@check.Label@(check.Detail is { } detail ? $" — {detail}" : "")</MudText>
+                    </div>
+                }
+            }
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">@result.ErrorMessage</MudAlert>
+        }
+    </div>
+}
+
+<div class="d-flex gap-2 mt-4">
+    <MudButton Class="save-connection" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSave)" OnClick="Save">Save</MudButton>
+    <MudButton Class="cancel-connection" OnClick="Cancel">Cancel</MudButton>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+    [Parameter] public ConnectionInfo? Existing { get; set; }
+    [Parameter] public EventCallback<bool> OnClosed { get; set; }
+
+    [Inject] private IEnumerable<IPlugin> Plugins { get; set; } = default!;
+    [Inject] private CreateConnectionCommandHandler CreateHandler { get; set; } = default!;
+    [Inject] private UpdateConnectionCommandHandler UpdateHandler { get; set; } = default!;
+    [Inject] private TestConnectionCommandHandler TestHandler { get; set; } = default!;
+
+    private string _name = "";
+    private string _kind = "";
+    private string _secret = "";
+    private string _tagInput = "";
+    private List<string> _tags = [];
+    private bool _testing;
+    private ConnectionTestResult? _testResult;
+
+    private IPlugin? SelectedPlugin => Plugins.FirstOrDefault(p => p.ConnectionKind == _kind);
+
+    protected override void OnParametersSet()
+    {
+        if (Existing is not null)
+        {
+            _name = Existing.Name;
+            _kind = Existing.Kind;
+            _tags = [.. Existing.Tags];
+        }
+    }
+
+    private bool CanSave =>
+        !string.IsNullOrWhiteSpace(_name)
+        && !string.IsNullOrWhiteSpace(_kind)
+        && (Existing is not null || !string.IsNullOrWhiteSpace(_secret));
+
+    private void AddTag()
+    {
+        if (!string.IsNullOrWhiteSpace(_tagInput) && !_tags.Contains(_tagInput))
+        {
+            _tags.Add(_tagInput);
+            _tagInput = "";
+        }
+    }
+
+    private void RemoveTag(string tag) => _tags.Remove(tag);
+
+    // A fresh Dictionary each render is harmless -- DynamicComponent re-applies parameters by
+    // value each render, and the child (see AwsConnectionFields) reads InitialSecret exactly once
+    // in OnInitialized, so the round-tripped value on later renders is simply ignored by it.
+    private Dictionary<string, object> FormParameters() => new()
+    {
+        ["InitialSecret"] = _secret,
+        ["SecretChanged"] = EventCallback.Factory.Create<string>(this, OnSecretChanged),
+        ["IsProd"] = _tags.Contains("prod", StringComparer.OrdinalIgnoreCase),
+    };
+
+    private void OnSecretChanged(string newSecret)
+    {
+        _secret = newSecret;
+        _testResult = null;
+    }
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        _testResult = null;
+        try
+        {
+            if (Existing is null)
+            {
+                // Nothing saved yet -- call the plugin directly with the in-progress secret. No
+                // persistence, no audit row: there is no connection row to attach either to.
+                if (SelectedPlugin is { } plugin)
+                {
+                    _testResult = await plugin.TestConnectionAsync(_secret);
+                }
+            }
+            else
+            {
+                // Tests the connection's PERSISTED secret, not any in-progress edits above -- the
+                // same handler the old row-level "Test" action called, preserving
+                // LastTestSucceeded/LastTestedAt/LastTestError persistence and the connection.test
+                // audit row.
+                var actor = await ActorResolver.ResolveAsync(AuthState);
+                var result = await TestHandler.HandleAsync(new TestConnectionCommand(Existing.Id, actor));
+                _testResult = result.Value;
+            }
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task Save()
+    {
+        var actor = await ActorResolver.ResolveAsync(AuthState);
+        if (Existing is null)
+        {
+            await CreateHandler.HandleAsync(new CreateConnectionCommand(_name, _kind, _secret, _tags, actor));
+        }
+        else
+        {
+            var newSecret = string.IsNullOrWhiteSpace(_secret) ? null : _secret;
+            await UpdateHandler.HandleAsync(new UpdateConnectionCommand(Existing.Id, _name, _tags, newSecret, actor));
+        }
+
+        await OnClosed.InvokeAsync(true);
+    }
+
+    private async Task Cancel() => await OnClosed.InvokeAsync(false);
+}
