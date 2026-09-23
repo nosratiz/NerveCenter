@@ -5,12 +5,20 @@
 <MudAutocomplete T="string" Label="Region" Value="_region" ValueChanged="OnRegionChanged"
                  SearchFunc="SearchRegions" ToStringFunc="RegionDisplay" Immediate="true" CoerceText="false" />
 
-@* MudToggleGroup<T> has no "Fixed" parameter (that's "FixedContent", which only affects
-   CheckMark icon layout -- unused here) -- confirmed via ilspycmd against the installed
-   MudBlazor 9.9.0 DLL, so it's omitted rather than guessed. Each MudToggleItem also gets an
-   explicit "data-value" splat attribute: MudToggleItem<T> renders as a MudButton (an actual
-   <button>, not a <div>) and exposes no built-in attribute reflecting its Value, so tests need
-   a stable hook to target a specific item. *@
+@* MudToggleGroup<T> has no "Fixed" parameter -- re-verified: adding Fixed="true" produces a
+   real compiler error (MUD0002 "Illegal Attribute 'Fixed' on 'MudToggleGroup'"), not a false
+   claim. `strings`-ing the installed MudBlazor 9.9.0 DLL does turn up get_Fixed/set_Fixed, but
+   decompiling with ilspycmd shows those belong to MudContainer/MudAppBar/MudPopover/MudDrawer --
+   an unrelated "CSS position: fixed" concept, not deselection behavior. The real API for "no
+   empty state" is MudToggleGroup<T>.SelectionMode: it defaults to SelectionMode.SingleSelection,
+   under which ToggleItemAsync always assigns the clicked value and never clears it (only
+   SelectionMode.ToggleSelection clears on re-click). So the default (left unset here) already
+   gives the required-single-select behavior with no first-class "Fixed"-style parameter needed;
+   OnModeChanged still guards against an empty/unrecognized value defensively (see below), since
+   nothing stops a future SelectionMode change or a non-UI caller from passing one. Each
+   MudToggleItem also gets an explicit "data-value" splat attribute: MudToggleItem<T> renders as
+   a MudButton (an actual <button>, not a <div>) and exposes no built-in attribute reflecting its
+   Value, so tests need a stable hook to target a specific item. *@
 <MudToggleGroup T="string" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
     <MudToggleItem Value="@("access-keys")" data-value="access-keys">Access keys</MudToggleItem>
     <MudToggleItem Value="@("assume-role")" data-value="assume-role">Assume role</MudToggleItem>
@@ -116,6 +124,14 @@ else
 
     private Task OnModeChanged(string value)
     {
+        if (value is not ("access-keys" or "assume-role" or "default-chain"))
+        {
+            // Defends against an empty/unrecognized value reaching us -- e.g. a future
+            // SelectionMode.ToggleSelection switch that lets the active item be deselected, or
+            // any other non-UI caller of this callback -- so _mode never becomes blank/invalid.
+            return Task.CompletedTask;
+        }
+
         _mode = value;
         return NotifyChangedAsync();
     }

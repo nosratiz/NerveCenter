@@ -80,6 +80,30 @@ public class AwsConnectionFieldsTests : BunitContext, IAsyncLifetime
         expanded.FindAll("input#aws-endpoint").Should().ContainSingle();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("not-a-real-mode")]
+    public void OnModeChanged_ignores_an_empty_or_unrecognized_value(string? invalidMode)
+    {
+        // MudToggleGroup<T> defaults to SelectionMode.SingleSelection, under which clicking a
+        // toggle item -- even the already-selected one -- always assigns that item's value and
+        // never clears it; there's no click sequence that reaches ValueChanged with an
+        // empty/invalid string today. OnModeChanged still guards against one (see the comment
+        // above the toggle group in AwsConnectionFields.razor), so we drive that private callback
+        // directly via reflection, matching bUnit's own recommended approach for logic that isn't
+        // reachable through a rendered interaction.
+        var cut = RenderFields("mode=assume-role;region=eu-west-1", out var emitted);
+
+        var method = typeof(AwsConnectionFields).GetMethod("OnModeChanged", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        method.Should().NotBeNull();
+
+        cut.InvokeAsync(() => (Task)method!.Invoke(cut.Instance, [invalidMode])!);
+
+        cut.Find("input#aws-role-arn").Should().NotBeNull();
+        emitted.Should().NotContain(s => s.Contains("mode=;") || s.EndsWith("mode=") || s.Contains($"mode={invalidMode}"));
+    }
+
     [Fact]
     public void Warns_when_a_custom_endpoint_is_set_on_a_prod_connection()
     {
