@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:5249",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "SBC_DATA_KEY": "<base64-encoded 32-byte key>",
+        "SBC_DB_PATH": "sbconsole.dev.db",
+        "SBC_ADMIN_PASSWORD": "<dev admin password>",
+        "SBC_API_KEY": "<dev api key>",
+        "SBC_BIND": "http://localhost:5249"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:7018;http://localhost:5249",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "SBC_DATA_KEY": "<base64-encoded 32-byte key>",
+        "SBC_DB_PATH": "sbconsole.dev.db",
+        "SBC_ADMIN_PASSWORD": "<dev admin password>",
+        "SBC_API_KEY": "<dev api key>",
+        "SBC_BIND": "https://localhost:7018;http://localhost:5249"
+      }
+    }
+  }
+}
