@@ -932,10 +932,12 @@ changed the host's test-connection flow (Task 3-7), and implemented the AWS plug
   `TestConnectionCommandHandler` (writes `LastTestSucceeded`/`LastTestedAt`/`LastTestError`
   and an audit row), preserving the same test row-action behavior from the old modal.
 - **Connections list enhancements** — adds a Summary column (showing chips from
-  `Connection.SummaryJson`), leveraging `IPlugin.GetConnectionSummary`. The Status
-  column (shipped in §4) now optionally shows richer diagnostics: success with Identity
-  (e.g. "OK · arn:aws:iam::123456789:user/alice") and/or structured Checks (showing
-  one icon + label line per probe, with a Detail note if present).
+  `Connection.SummaryJson`), leveraging `IPlugin.GetConnectionSummary`. The list's
+  Status column itself is unchanged (`StatusText`'s plain "Never tested"/"OK"/error-text/"Failed"
+  switch, shipped in §4) — the richer `Identity`/`Checks` diagnostics render only inside
+  `ConnectionEditor`'s inline test-result panel (success shows "Credentials valid · {identity}"
+  plus one icon + label line per check, with a Detail note if present; failure shows the
+  plain `ErrorMessage`), not in the list row.
 - **`AwsConnectionFields.razor`** — AWS plugin's custom connection form, the first
   adopter of the new `ConnectionFormComponentType` hook. A structured alternative to
   the flat-secret textbox: shows Region autocomplete (searchable by system name or
@@ -958,7 +960,9 @@ changed the host's test-connection flow (Task 3-7), and implemented the AWS plug
 
 **Out of scope, carried over from the design spec (§3, §8)**:
 
-- SNS/Topics in the AWS plugin (separate future plan).
+- SNS/Topics in the AWS plugin — out of scope for this redesign specifically (it
+  doesn't touch the connection model at all), and shipped separately the same day
+  as its own plan; see §6.7.1.
 - Persisted denied-action enforcement (a capability-set stored in the connection
   for later use by the UI to e.g. hide a button when `TestConnectionAsync` reports
   permission denied — test results remain text-only today, not used to gate UI
