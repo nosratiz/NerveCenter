@@ -9,7 +9,8 @@ mockups (`~/Desktop/UI mockups for NerveCenter`) after the first pass was
 drafted without consulting them, §6.3 new Dead-letter overview, §8 updated).
 Extended 2026-09-14 (Glass shell: §10 rewritten for the app-bar/drawer
 gradient-glass treatment). Extended 2026-09-21 (AWS plugin, Queues: §6.7 new
-plugin section).
+plugin section). Extended 2026-09-23 (AWS SNS Topics: §6.7.1; Connections page
+redesign: §3 optional `IPlugin` form/summary hooks, new §11).
 SDK version: `SbConsole.Sdk` 1.3.0 — see §3 for the 2026-09-10 additions
 (`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
 `IConfirmationService`), the 2026-09-12 additions/removal
@@ -685,14 +686,13 @@ secret format or parser changes.
   in `docker/README.md`'s least-privilege policy example alongside the existing SQS permissions.
 
 - **Test-connection integration note** — `SbConsole.Sdk.ConnectionCheck`/`ConnectionCheckStatus` and
-  the richer `ConnectionTestResult.Checks` field (for structured diagnostic probes like "Queues visible"
-  / "Topics visible") were introduced in the concurrent `worktree-feature+connections-page-redesign`
-  branch and have since merged to `main`. The infrastructure is now available; however,
-  `SqsOperations.TestConnectionAsync` still returns a simple result with only text diagnostics (no
-  Checks list populated) — it performs a `GetCallerIdentity` check (credentials valid), then a
-  cheap `ListQueues` probe (reports a denial as non-fatal text if denied). Adding a second probe
-  for SNS `ListTopics` (cheap, matching the `ListQueues` pattern) via the new `Checks` infrastructure
-  is a straightforward follow-up, now unblocked by the prerequisite infrastructure landing.
+  the richer `ConnectionTestResult.Identity`/`Checks` fields were introduced by the connections-page
+  redesign (§11). `SqsOperations.TestConnectionAsync` now populates them: a `GetCallerIdentity` check
+  (credentials valid; its account id becomes `Identity`), then two cheap permission probes reported as
+  checks — "Queues visible" (`ListQueues`, `MaxResults = 1`) and "Topics visible" (one `ListTopics`
+  page). Each probe goes through `ConnectionProbe.RunAsync`, which turns a denial into a `Failed` check
+  with a `FriendlyAwsError` message — never a failed connection test — and is unit-tested directly,
+  since the probes themselves need a real or emulated AWS account.
 
 - **Error handling** — `FriendlyAwsError` gains pattern-matched arms for SNS and CloudWatch: it does not
   catch distinct exception subtypes (there is no `NotFoundException`/`InvalidParameterException`/
@@ -752,9 +752,12 @@ any SNS-side view (redrive remains queue-level only, already shipped with SQS).
   cross-connection overview alike.
 - Kafka plugin (Topics, §6.5): same deferral, same reasoning — unit tests only against a
   substitute of `IKafkaOperations`, no Testcontainers, no real broker traffic.
-- AWS plugin (Queues, §6.7): same deferral, same reasoning — unit tests only against a substitute
-  of `ISqsOperations`, no Testcontainers, no real AWS/LocalStack traffic. LocalStack in
-  `docker-compose.yml` is for manual local dev only.
+- AWS plugin (Queues, §6.7; Topics, §6.7.1): same deferral, same reasoning — unit tests only
+  against substitutes of `ISqsOperations`/`ISnsOperations`, no Testcontainers, no real
+  AWS/LocalStack traffic. LocalStack in `docker-compose.yml` is for manual local dev only.
+- Connections page redesign (§11): `ConnectionEditor`, `AwsConnectionFields`, and the two-pane
+  `Connections.razor` are covered by bUnit only — the same pattern as every other Blazor component
+  in this codebase, not a new deferral.
 - `NavMenu`'s badge-refresh loop (§5, §6.3) is tested by calling its refresh
   method directly, not by waiting out its real 60-second timer — the loop
   itself is a thin wrapper (`while` + `Task.Delay` + the same call) around a
@@ -847,3 +850,193 @@ just recolored and retyped.
   Because the glow lives on
   `body`, it also renders behind Login's `EmptyLayout` card — an approved
   consequence of the whole-app scope, not an oversight.
+
+## 11. Connections page redesign and structured connection forms (2026-09-22)
+
+The Connections page evolved from a basic modal-dialog edit flow (§5.1, v1.1) to a
+two-pane layout with an inline editor panel and richer test-connection diagnostics,
+enabled by three new SDK contracts for structured, per-plugin connection-form UI.
+Built in a ten-task plan (`docs/superpowers/plans/2026-09-22-connections-page-redesign.md`)
+that added the SDK contracts (Task 1), persisted connection summaries (Task 2),
+changed the host's test-connection flow (Task 3-7), and implemented the AWS plugin's
+`AwsConnectionFields.razor` as the first adopter (Tasks 4-6, 8-9). Full design spec:
+`docs/superpowers/specs/2026-09-22-connections-page-redesign-design.md`.
+
+**SDK additions (§3 expansion)** — **(v1.4)**:
+
+- `IPlugin.ConnectionFormComponentType` — optional: a `System.Type?` of a Blazor
+  component this plugin wants rendered on the Connections page's editor in place
+  of the host's generic flat-secret-string textbox. Returning `null` (the default)
+  means "no custom form" — plugins written before this member existed need no change.
+  **Important implementation detail:** there is **no SDK-level base class** for this
+  component. The host discovers the component's parameters by name via
+  `DynamicComponent`, and the component must declare exactly three parameters:
+  `InitialSecret` (`string?`, read once in `OnInitialized`), `SecretChanged`
+  (`EventCallback<string>`), and `IsProd` (`bool`). This naming convention is
+  documented on the property's XML doc comment, matched by name at runtime, not
+  enforced by a shared type. Rationale: `SbConsole.Sdk` has zero dependencies
+  beyond BCL and `Microsoft.Extensions.*.Abstractions` (CLAUDE.md §2) — adding a
+  `ComponentBase`-derived base class would require `Microsoft.AspNetCore.App` in
+  the SDK, forcing that dependency on every plugin unnecessarily. A plugin's own
+  form component (built in the plugin project, which already references the app
+  framework) needs no SDK base type; it just matches the named-parameter contract
+  documented in the `IPlugin` doc comment, same as any Blazor component with a
+  published interface.
+- `IPlugin.GetConnectionSummary(string secret)` — optional: returns a safe,
+  non-secret dictionary (e.g. `{"Region": "eu-west-1"}`) of display fields
+  extracted from a connection's secret. Returning an empty dictionary (the default)
+  means "nothing to show." Stored in plaintext in the database (unlike the secret
+  itself) and shown as small chips on the Connections list. A plugin must never
+  include credential-shaped keys here — the dictionary is not encrypted.
+- `ConnectionTestResult` enrichment (§3 expansion) — now includes two optional
+  fields: `Identity` (`string?`) for the authenticated principal (e.g. `"arn:aws:iam::123456789:user/alice"`),
+  and `Checks` (`IReadOnlyList<ConnectionCheck>?`) for structured diagnostic probes
+  (`ConnectionCheck(string Label, ConnectionCheckStatus Status, string? Detail = null)`
+  with `ConnectionCheckStatus` being `Passed` or `Failed`). Together these enable
+  richer test results: a simple success with identity, a simple error message, or a
+  valid-but-under-permissioned state (Success=true, at least one Failed check). The
+  richer diagnostics are rendered in the editor panel; a plugin that never populates
+  these (Service Bus, Kafka today) renders exactly the plain single-line message it
+  always has.
+
+**Core changes** — Connections table schema adds one new column (§4 expansion):
+
+- `Connection.SummaryJson` (`string?`, nullable) — persisted once at Create/Update
+  time by calling the matching `IPlugin.GetConnectionSummary`, then deserialized
+  into the connection's `Summary` property (an `IReadOnlyDictionary<string, string>`)
+  and displayed as chips on the list.
+
+**Web/UI changes** — Connections page two-pane redesign (§5.1 expansion):
+
+- **Layout**: replaced the modal Add/Edit dialog with an inline editor panel. The
+  page is now a flex row: the left side (flex:1) holds the connections table, the
+  right side (width:420px, flex:none) conditionally renders a `MudPaper` containing
+  `ConnectionEditor.razor` when editing. **Not using `MudDrawer`:** the mockup's
+  panel has no slide/overlay animation — it's a plain persistent side-by-side split.
+  Implementing this as a `MudDrawer` (Anchor.End, DrawerVariant.Persistent) would
+  require the drawer to be a direct child of the single `MudLayout` in MainLayout,
+  per MudBlazor's layout-root assumptions; `Connections.razor` renders inside
+  `MudMainContent`'s `@Body`, one level further in, and nesting a second `MudDrawer`
+  there is untested and potentially fragile. A conditionally-rendered `MudPaper` in
+  a flex row achieves the same visual result with no dependency on drawer positioning
+  logic.
+- **`ConnectionEditor.razor`** (new component, replaces modal dialog) — a
+  side-panel form for creating or editing a single connection. When adding: shows
+  Kind dropdown (enabled), Name/Secret textbox or custom form, Tag management, and
+  a Test button. When editing an existing connection: Kind dropdown is disabled,
+  optionally shows an alert warning that "editing any field replaces the entire
+  stored secret — fill in every field your chosen auth mode needs" (surfacing the
+  pre-existing write-only contract), and Test uses a different code path: for new
+  unsaved connections, tests the in-progress secret directly via the plugin (no
+  persistence, no audit); for existing connections, tests the persisted secret via
+  `TestConnectionCommandHandler` (writes `LastTestSucceeded`/`LastTestedAt`/`LastTestError`
+  and an audit row), preserving the same test row-action behavior from the old modal.
+- **Connections list enhancements** — adds a Summary column (showing chips from
+  `Connection.SummaryJson`), leveraging `IPlugin.GetConnectionSummary`. The Status
+  column (shipped in §4) now optionally shows richer diagnostics: success with Identity
+  (e.g. "OK · arn:aws:iam::123456789:user/alice") and/or structured Checks (showing
+  one icon + label line per probe, with a Detail note if present).
+- **`AwsConnectionFields.razor`** — AWS plugin's custom connection form, the first
+  adopter of the new `ConnectionFormComponentType` hook. A structured alternative to
+  the flat-secret textbox: shows Region autocomplete (searchable by system name or
+  display name, e.g. "eu-west-1" or "Europe"), Auth Mode toggle (access-keys /
+  assume-role / default-chain), mode-specific fields (access-key ID/secret/session
+  token; role ARN/external ID/session name; or a note for default-chain), and an
+  Advanced section (custom endpoint URL, path-style addressing toggle, prod-tag
+  warning when endpoint is set). Parses the secret once in `OnInitialized` via
+  `AwsConfigParser.Parse`, emits structured config via `AwsConfigParser.Serialize`
+  when any field changes, and reads the IsProd parameter to conditionally show
+  warnings. Same parameter-matching-by-name contract as any other custom form.
+
+**Testing (§8 expansion)**:
+
+- `ConnectionEditor.razor`, `AwsConnectionFields.razor`, and the Connections page
+  are covered by bUnit component tests only — matching the existing pattern for
+  every other Blazor component in this codebase (confirmation dialog, peek grid,
+  etc.). No Testcontainers, no AWS/LocalStack traffic; handlers and operations are
+  substituted directly.
+
+**Out of scope, carried over from the design spec (§3, §8)**:
+
+- SNS/Topics in the AWS plugin (separate future plan).
+- Persisted denied-action enforcement (a capability-set stored in the connection
+  for later use by the UI to e.g. hide a button when `TestConnectionAsync` reports
+  permission denied — test results remain text-only today, not used to gate UI
+  actions).
+- IAM Policy Simulator integration (for pre-flight "will this action succeed" checks
+  in the AWS plugin).
+- A host-level Region field (plugins can expose it via `GetConnectionSummary`, as
+  AWS does, but there's no first-class integration).
+- Service Bus and Kafka adopting `ConnectionFormComponentType` or enriched
+  `ConnectionTestResult` Checks (today they use the default empty form and simple
+  text results). AWS stands alone as the first adopter while the shape proves out.
+
+## 11. Connections page redesign (2026-09-22)
+
+Cross-cutting rather than single-plugin — it touched `SbConsole.Sdk`, `SbConsole.Core`, and
+`SbConsole.Web`, with the AWS plugin as the first (and so far only) adopter — so it gets its own
+top-level section instead of nesting under §6. Full design:
+`docs/superpowers/specs/2026-09-22-connections-page-redesign-design.md`; plan:
+`docs/superpowers/plans/2026-09-22-connections-page-redesign.md`.
+
+What shipped:
+
+- **Two optional `IPlugin` members**, both default-implemented so Service Bus and Kafka needed no
+  change: `Type? ConnectionFormComponentType` (a plugin-supplied Blazor component the host renders
+  in place of its flat secret textbox; `null` keeps the textbox) and
+  `IReadOnlyDictionary<string, string> GetConnectionSummary(string secret)` (safe, non-secret display
+  fields — empty by default).
+- **Richer `ConnectionTestResult`** — two optional fields, `Identity` (who the credentials resolved
+  to) and `Checks` (a list of `ConnectionCheck(Label, Status, Detail)` with
+  `ConnectionCheckStatus.Passed`/`Failed`). One record shape covers all three outcomes: success
+  (`Success = true`, all checks passed), invalid credentials (`Success = false`, `ErrorMessage` set),
+  and valid-but-under-permissioned (`Success = true`, at least one `Failed` check). A plugin that
+  never sets them renders the same single-line message it always has.
+- **`Connection.SummaryJson`** (migration `AddConnectionSummaryColumn`, exposed as
+  `ConnectionInfo.Summary`) — `Create`/`UpdateConnectionCommandHandler` call the plugin's
+  `GetConnectionSummary` once at save time and persist the result, so the list page renders summary
+  chips without decrypting any secret. Stored in plaintext, which is why the XML doc on
+  `GetConnectionSummary` forbids anything credential-shaped.
+- **`Connections.razor` two-pane layout** — the table plus a conditionally rendered, fixed-width
+  (420px) `ConnectionEditor` panel beside it, replacing the modal `AddEditConnectionDialog.razor`
+  (deleted). The editor runs Test connection inline and renders `Identity`/`Checks` when present;
+  the table shows each connection's `Summary` as chips.
+- **`AwsConnectionFields.razor`** — the AWS plugin's structured form (auth-mode toggle, region
+  autocomplete, per-mode credential fields, optional endpoint for LocalStack), serialized back into
+  the flat `key=value;` secret via the new `AwsConfigParser.Serialize`. `AwsPlugin` returns
+  `{"Region": …}` (or `"?"`) from `GetConnectionSummary`, and its `TestConnectionAsync` fills
+  `Identity`/`Checks` as §6.7.1 describes.
+
+Two deliberate deviations from the spec's literal wording, both found while grounding it against the
+actual code:
+
+1. **No `ConnectionFormComponentBase` in `SbConsole.Sdk`.** The spec sketched a base class plugins
+   inherit. `SbConsole.Sdk` has no dependency beyond `Microsoft.Extensions.DependencyInjection.Abstractions`
+   — no Blazor — and a `ComponentBase`-derived type there would need a `FrameworkReference` to
+   `Microsoft.AspNetCore.App` that no other SDK type needs. Instead `ConnectionFormComponentType` is a
+   plain `System.Type?`, and the plugin's component (in the plugin project, which already references
+   ASP.NET Core) declares three parameters by documented naming convention — `InitialSecret`
+   (`string?`), `SecretChanged` (`EventCallback<string>`), `IsProd` (`bool`) — which the host's
+   `DynamicComponent` binds by name. The convention is spelled out on the member's XML doc so it's
+   discoverable without this document.
+2. **No `MudDrawer` for the editor panel.** The app's only `MudDrawer` is the nav rail, a direct
+   child of the single `MudLayout` in `MainLayout.razor`; `Connections.razor` renders one level
+   deeper inside `MudMainContent`, and MudBlazor's drawer positioning isn't documented or tested for a
+   second drawer nested there. The mockup's panel is a plain persistent side-by-side split with no
+   slide/overlay anyway, so a conditionally rendered `MudPaper` in a flex row gives the same result
+   with no dependency on the drawer's layout-root assumptions.
+
+Accepted limitation: a custom connection form can't pre-fill previously saved secret fields when
+editing (secrets are write-only, never decrypted back to the browser). Changing anything in the
+custom form replaces the entire stored secret, so the user re-enters every field their auth mode
+needs — the same all-or-nothing contract the flat textbox already had. The editor states this in a
+visible caption rather than validating per-field completeness.
+
+Out of scope, carried over from the spec's §8 (SNS/Topics, listed there too, has since shipped as
+§6.7.1, and its "Topics visible" probe is now the second entry in the AWS `Checks` list): persisted
+"denied actions" / degraded read-only enforcement — the mockup's "Save read-only" is just Save, no
+`HiddenActions` concept exists, and every action stays visible everywhere, failing gracefully via the
+`FriendlyError` path if IAM denies it at call time; IAM Policy Simulator integration; a host-level,
+first-class `Region` field (`Summary` is a generic string/string dictionary the host renders without
+understanding); and Service Bus/Kafka adopting either new hook — both are viable later, but neither
+connection secret has enough field complexity today to justify it.
