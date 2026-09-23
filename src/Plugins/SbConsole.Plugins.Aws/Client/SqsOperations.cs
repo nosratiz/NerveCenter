@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Amazon.SecurityToken;
+using Amazon.SimpleNotificationService.Model;
 using Amazon.SecurityToken.Model;
 using Amazon.SQS;
 using Amazon.SQS.Model;
@@ -56,24 +57,25 @@ public sealed class SqsOperations : ISqsOperations
             return new ConnectionTestResult(false, FriendlyAwsError.From(ex));
         }
 
-        // Credentials are valid (GetCallerIdentity succeeded). A denied ListQueues probe is
-        // reported as a Failed check, not a failed connection test -- design spec §3's "under-
+        // Credentials are valid (GetCallerIdentity succeeded). A denied ListQueues/ListTopics probe
+        // is reported as a Failed check, not a failed connection test -- design spec §3's "under-
         // permissioned" outcome: Success stays true, nothing is persisted, no button anywhere is
         // hidden as a result (design spec §8, Out of scope).
-        try
+        var queuesCheck = await ConnectionProbe.RunAsync("Queues visible", async token =>
         {
             using var sqs = BuildSqsClient(secret);
-            var response = await sqs.ListQueuesAsync(new ListQueuesRequest { MaxResults = 1 }, ct);
-            return new ConnectionTestResult(
-                true, Identity: identity,
-                Checks: [new ConnectionCheck("Queues visible", ConnectionCheckStatus.Passed, response.QueueUrls.Count.ToString())]);
-        }
-        catch (Exception ex)
+            var response = await sqs.ListQueuesAsync(new ListQueuesRequest { MaxResults = 1 }, token);
+            return response.QueueUrls.Count.ToString();
+        }, ct);
+        var topicsCheck = await ConnectionProbe.RunAsync("Topics visible", async token =>
         {
-            return new ConnectionTestResult(
-                true, Identity: identity,
-                Checks: [new ConnectionCheck("Queues visible", ConnectionCheckStatus.Failed, FriendlyAwsError.From(ex))]);
-        }
+            // ListTopics has no MaxResults; one page (up to 100 ARNs) is still a single cheap call.
+            using var sns = SnsOperations.BuildSnsClient(secret);
+            var response = await sns.ListTopicsAsync(new ListTopicsRequest(), token);
+            return response.Topics.Count.ToString();
+        }, ct);
+
+        return new ConnectionTestResult(true, Identity: identity, Checks: [queuesCheck, topicsCheck]);
     }
 
     public async Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string secret, string? namePrefix, CancellationToken ct = default)

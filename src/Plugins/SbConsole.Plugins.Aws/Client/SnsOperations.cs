@@ -15,7 +15,7 @@ namespace SbConsole.Plugins.Aws.Client;
 /// </summary>
 public sealed class SnsOperations : ISnsOperations
 {
-    private static AmazonSimpleNotificationServiceClient BuildSnsClient(string secret)
+    internal static AmazonSimpleNotificationServiceClient BuildSnsClient(string secret)
     {
         var parsed = AwsConfigParser.Parse(secret);
         var sqsConfig = AwsCredentialsFactory.BuildConfig(parsed);
