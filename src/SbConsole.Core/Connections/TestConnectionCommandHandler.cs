@@ -66,7 +66,7 @@ public sealed class TestConnectionCommandHandler(
             Detail = errorMessage,
         }, ct);
 
-        // The caller (Connections.razor) renders the same text, so return the capped version too.
+        // The caller (ConnectionEditor.razor) renders the same text, so return the capped version too.
         return Result<ConnectionTestResult>.Ok(testResult with { ErrorMessage = errorMessage });
     }
 }

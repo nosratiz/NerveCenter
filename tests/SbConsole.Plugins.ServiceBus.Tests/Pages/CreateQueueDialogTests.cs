@@ -20,7 +20,7 @@ public class CreateQueueDialogTests : BunitContext, IAsyncLifetime
     // class via its synchronous IDisposable.Dispose() unless the class also implements
     // Xunit.IAsyncLifetime, in which case DisposeAsync() runs first -- disposing those services
     // the async-safe way before the base (synchronous) Dispose() runs as a no-op afterwards. See
-    // ConnectionsPageTests.cs / AddEditConnectionDialogTests.cs for the same pattern.
+    // ConnectionsPageTests.cs / ConnectionEditorTests.cs for the same pattern.
     Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
     async Task IAsyncLifetime.DisposeAsync() => await base.DisposeAsync();
 
@@ -34,7 +34,7 @@ public class CreateQueueDialogTests : BunitContext, IAsyncLifetime
     // call Close/Cancel) -- without it, <MudDialog> treats itself as "inline and not yet shown" and
     // renders nothing. That type isn't public, so it can't be named directly; instead we build one
     // substitute that implements both interfaces via reflection, and cascade it as `IMudDialogInstance`.
-    // See AddEditConnectionDialogTests.cs / ConfirmDialogTests.cs for the same pattern.
+    // See ConfirmDialogTests.cs for the same pattern.
     private static readonly Type MudDialogInstanceInternalType =
         typeof(IMudDialogInstance).Assembly.GetType("MudBlazor.IMudDialogInstanceInternal")
         ?? throw new InvalidOperationException("MudBlazor.IMudDialogInstanceInternal not found - MudBlazor API may have changed.");

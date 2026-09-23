@@ -197,6 +197,9 @@ public class ConnectionEditorTests : BunitContext, IAsyncLifetime
             .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "Endpoint=sb://x", ["dev"], "admin"));
         var existing = new ConnectionInfo(created.Value, "sb-dev", "azure-servicebus", ["dev"]);
 
+        // No field is touched before Test is clicked, so _secret stays empty and the persisted-
+        // handler branch (Existing is not null, _secret empty) still fires -- this premise is
+        // unchanged by the Issue 3 fix, which only added a branch for a NON-empty _secret.
         var cut = RenderEditor(existing: existing);
         cut.Find("button.test-connection").Click();
         await Task.Delay(50);
@@ -206,5 +209,56 @@ public class ConnectionEditorTests : BunitContext, IAsyncLifetime
         await using var db = _testDb.CreateDbContext();
         var saved = await db.Connections.SingleAsync(c => c.Id == existing.Id);
         saved.LastTestSucceeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Testing_an_existing_connection_after_editing_the_secret_tests_the_new_value_directly()
+    {
+        // Substitute (rather than FakePlugin) so we can assert TestConnectionAsync was called
+        // directly with the new, unsaved secret -- proving Test does NOT fall through to the
+        // persisted handler (which would test the OLD secret still in the database).
+        var plugin = Substitute.For<IPlugin>();
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.ConnectionKindDisplayName.Returns("Azure Service Bus");
+        plugin.TestConnectionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ConnectionTestResult(true, Identity: "new-secret-identity"));
+        Services.AddSingleton<IEnumerable<IPlugin>>([plugin]);
+
+        var created = await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "Endpoint=sb://old", ["dev"], "admin"));
+        var existing = new ConnectionInfo(created.Value, "sb-dev", "azure-servicebus", ["dev"]);
+
+        var cut = RenderEditor(existing: existing);
+        cut.Find("input#connection-secret").Input("Endpoint=sb://new");
+        cut.Find("button.test-connection").Click();
+        await Task.Delay(50);
+        cut.Render();
+
+        await plugin.Received(1).TestConnectionAsync("Endpoint=sb://new", Arg.Any<CancellationToken>());
+        cut.Markup.Should().Contain("new-secret-identity");
+
+        // The persisted handler/DB was never touched by this direct-plugin test path.
+        await using var db = _testDb.CreateDbContext();
+        var saved = await db.Connections.SingleAsync(c => c.Id == existing.Id);
+        saved.LastTestedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Save_in_add_mode_with_a_custom_form_persists_the_forms_emitted_secret()
+    {
+        Services.AddSingleton<IEnumerable<IPlugin>>([new FakePlugin("aws", "AWS SQS/SNS", typeof(FakeFormComponent))]);
+
+        var cut = RenderEditor();
+        cut.Find("input#connection-name").Input("aws-dev");
+        cut.Find("div.mud-input-control.mud-select").MouseDown(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        cut.Find("div.mud-list-item").Click();
+        cut.Find("#fake-form-field").Change("region=eu-west-1;accessKey=abc;secretKey=xyz");
+        cut.Find("button.save-connection").Click();
+        await Task.Delay(50);
+
+        await using var db = _testDb.CreateDbContext();
+        var saved = await db.Connections.SingleAsync(c => c.Name == "aws-dev");
+        var protector = Services.GetRequiredService<ISecretProtector>();
+        protector.Unprotect(saved.SecretCiphertext).Should().Be("region=eu-west-1;accessKey=abc;secretKey=xyz");
     }
 }

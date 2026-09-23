@@ -44,6 +44,53 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
             Task.FromResult(new ConnectionTestResult(true));
     }
 
+    // A plugin with a stateful custom form, so Editing_a_different_row_gives_the_custom_form_a_
+    // fresh_instance below can prove the @key-forced remount actually happens -- a component that
+    // merely re-hydrates the same value each render wouldn't distinguish "same instance,
+    // parameters updated" from "brand-new instance".
+    private sealed class FakeFormPlugin : IPlugin
+    {
+        public string Id => "aws";
+        public string DisplayName => "AWS SQS/SNS";
+        public string Version => "1.0.0";
+        public IReadOnlyList<PluginNavItem> NavItems => [];
+        public string ConnectionKind => "aws";
+        public string ConnectionKindDisplayName => "AWS SQS/SNS";
+        public PluginContribution Contribution => new(0, 0);
+        public void ConfigureServices(IServiceCollection services) { }
+        public Type? ConnectionFormComponentType => typeof(StatefulFakeFormComponent);
+        public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
+            Task.FromResult(new ConnectionTestResult(true));
+    }
+
+    private sealed class StatefulFakeFormComponent : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter] public string? InitialSecret { get; set; }
+        [Microsoft.AspNetCore.Components.Parameter] public Microsoft.AspNetCore.Components.EventCallback<string> SecretChanged { get; set; }
+        [Microsoft.AspNetCore.Components.Parameter] public bool IsProd { get; set; }
+
+        // Deliberately keeps its own field-level state past OnInitialized (unlike the read-once
+        // hydration DynamicComponent forms document) so a stale reused instance would visibly leak
+        // a previous row's typed-but-unsaved value into the next row's panel.
+        private string _value = "";
+
+        protected override void OnInitialized() => _value = InitialSecret ?? "";
+
+        protected override void BuildRenderTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "id", "fake-form-field");
+            builder.AddAttribute(2, "value", _value);
+            builder.AddAttribute(3, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(
+                this, e =>
+                {
+                    _value = (string?)e.Value ?? "";
+                    return SecretChanged.InvokeAsync(_value);
+                }));
+            builder.CloseElement();
+        }
+    }
+
     private readonly TestDb _testDb = new();
     private readonly IAuditWriter _audit = Substitute.For<IAuditWriter>();
     private static readonly byte[] Key = new byte[32];
@@ -195,6 +242,33 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("sb-new");
         cut.FindAll("input#connection-name").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Editing_a_different_row_gives_the_custom_form_a_fresh_instance_not_the_previous_rows_typed_state()
+    {
+        // Replaces the constructor's azure-servicebus FakePlugin -- this test only needs "aws"
+        // rows, driven through a custom form component instead of the flat secret textbox.
+        Services.AddSingleton<IEnumerable<IPlugin>>([new FakeFormPlugin()]);
+
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("aws-a", "aws", "secret-a", [], "admin"));
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("aws-b", "aws", "secret-b", [], "admin"));
+
+        var cut = RenderPage();
+        cut.FindAll("button.edit-connection")[0].Click();
+        cut.Find("#fake-form-field").Change("typed-but-unsaved");
+        cut.Find("#fake-form-field").GetAttribute("value").Should().Be("typed-but-unsaved");
+
+        // Switching to row B's Edit uses a different @key (the connection's own Id), which per
+        // Connections.razor's documented @key contract forces a brand-new ConnectionEditor (and
+        // therefore a brand-new DynamicComponent) instance. Saved secrets are write-only and never
+        // round-tripped to the browser, so a fresh instance's InitialSecret is always "" -- the
+        // meaningful assertion is that row A's typed-but-unsaved value does NOT leak into row B's
+        // panel, which is exactly what a stale/reused instance would do.
+        cut.FindAll("button.edit-connection")[1].Click();
+        cut.Find("#fake-form-field").GetAttribute("value").Should().Be("");
     }
 
     [Fact]

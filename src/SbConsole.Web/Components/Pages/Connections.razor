@@ -110,10 +110,11 @@
     private async Task HandleEditorClosed(bool saved)
     {
         _editorOpen = false;
-        if (saved)
-        {
-            await RefreshAsync();
-        }
+        // Refresh regardless of whether the user saved: testing an EXISTING connection from
+        // inside ConnectionEditor writes LastTestSucceeded/LastTestedAt/LastTestError to the
+        // database immediately, independent of Save/Cancel, so the list's Status column must be
+        // refreshed on every close to avoid showing a stale value after Test-then-Cancel.
+        await RefreshAsync();
     }
 
     private async Task DeleteAsync(ConnectionInfo connection)

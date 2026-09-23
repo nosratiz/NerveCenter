@@ -54,7 +54,7 @@ public class AuditPageTests : BunitContext, IAsyncLifetime
     // itself. bUnit only renders what's given to Render(...), so a lone <Audit/> never gets the
     // popover's <div class="mud-list-item"> markup in its subtree -- render a provider alongside it
     // so cut.Find/FindAll can see the opened popover's items (same pattern as
-    // AddEditConnectionDialogTests.RenderDialog).
+    // ConnectionEditorTests.RenderEditor).
     private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderPage()
     {
         RenderFragment fragment = builder =>
@@ -93,7 +93,7 @@ public class AuditPageTests : BunitContext, IAsyncLifetime
         // MudSelect opens its popover on mousedown of the inner input-control div, not on click of
         // the outer "mud-select" wrapper (which only carries an onclick:stopPropagation modifier
         // with no click handler of its own) -- confirmed working pattern from
-        // AddEditConnectionDialogTests.
+        // ConnectionEditorTests.
         cut.Find("div.mud-input-control.mud-select").MouseDown(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
         cut.FindAll("div.mud-list-item").First(e => e.TextContent.Contains("Destructive")).Click();
         cut.WaitForState(() => !cut.Markup.Contains("message.peek"));

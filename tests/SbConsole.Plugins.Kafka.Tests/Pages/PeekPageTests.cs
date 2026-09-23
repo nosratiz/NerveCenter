@@ -88,7 +88,7 @@ public class PeekPageTests : BunitContext, IAsyncLifetime
         // MudSelect's dropdown content is rendered by <MudPopoverProvider/>, a separate component
         // the real app hosts once in its layout -- bUnit only renders what's given to Render(...),
         // so a lone <Peek/> never gets the popover's <div class="mud-list-item"> markup in its
-        // subtree. Same pattern SbConsole.Web.Tests/AddEditConnectionDialogTests.cs uses.
+        // subtree. Same pattern SbConsole.Web.Tests/ConnectionEditorTests.cs uses.
         RenderFragment fragment = builder =>
         {
             builder.OpenComponent<MudPopoverProvider>(0);

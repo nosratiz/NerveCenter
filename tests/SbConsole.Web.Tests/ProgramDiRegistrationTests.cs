@@ -26,7 +26,7 @@ namespace SbConsole.Web.Tests;
 ///      the exact reproduction of the original bug (500s on "/", "/audit", "/plugins").
 ///   2. Every command/query handler a page OR dialog component injects resolves without throwing
 ///      from the app's own root service provider -- this also covers
-///      AddEditConnectionDialog.razor's UpdateConnectionCommandHandler, which a plain GET never
+///      ConnectionEditor.razor's UpdateConnectionCommandHandler, which a plain GET never
 ///      renders (it's opened on demand from an active Blazor circuit, so prerendering alone can't
 ///      reach it).
 ///
@@ -89,7 +89,7 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         // Resolves against factory.Services -- the actual root IServiceProvider built from Program.cs's
         // builder.Services -- not a hand-rolled ServiceCollection. This is what catches a missing
         // AddScoped<...>() line in Program.cs itself, including UpdateConnectionCommandHandler, which
-        // AddEditConnectionDialog.razor only injects when opened from a live Blazor circuit and which the
+        // ConnectionEditor.razor only injects when opened from a live Blazor circuit and which the
         // page-route GETs above therefore cannot reach during prerendering.
         using var factory = new WebApplicationFactory<Program>();
         using var scope = factory.Services.CreateScope();

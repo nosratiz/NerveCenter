@@ -857,9 +857,11 @@ The Connections page evolved from a basic modal-dialog edit flow (§5.1, v1.1) t
 two-pane layout with an inline editor panel and richer test-connection diagnostics,
 enabled by three new SDK contracts for structured, per-plugin connection-form UI.
 Built in a ten-task plan (`docs/superpowers/plans/2026-09-22-connections-page-redesign.md`)
-that added the SDK contracts (Task 1), persisted connection summaries (Task 2),
-changed the host's test-connection flow (Task 3-7), and implemented the AWS plugin's
-`AwsConnectionFields.razor` as the first adopter (Tasks 4-6, 8-9). Full design spec:
+that added the SDK contracts (Task 1), persisted connection summaries (Tasks 2-3),
+implemented the AWS plugin's `AwsConnectionFields.razor` and enriched test
+diagnostics as the first adopter (Tasks 4-7), and changed the host's
+test-connection flow via `ConnectionEditor.razor` and the two-pane layout
+(Tasks 8-9). Full design spec:
 `docs/superpowers/specs/2026-09-22-connections-page-redesign-design.md`.
 
 **SDK additions (§3 expansion)** — **(v1.4)**:
@@ -926,11 +928,17 @@ changed the host's test-connection flow (Task 3-7), and implemented the AWS plug
   a Test button. When editing an existing connection: Kind dropdown is disabled,
   optionally shows an alert warning that "editing any field replaces the entire
   stored secret — fill in every field your chosen auth mode needs" (surfacing the
-  pre-existing write-only contract), and Test uses a different code path: for new
-  unsaved connections, tests the in-progress secret directly via the plugin (no
-  persistence, no audit); for existing connections, tests the persisted secret via
-  `TestConnectionCommandHandler` (writes `LastTestSucceeded`/`LastTestedAt`/`LastTestError`
-  and an audit row), preserving the same test row-action behavior from the old modal.
+  pre-existing write-only contract), and Test uses a different code path: for a new
+  unsaved connection, or an existing connection whose fields have been edited since
+  the panel opened, tests the in-progress secret directly via the plugin (no
+  persistence, no audit — there's nothing saved yet that matches the edited value);
+  otherwise (an existing connection whose fields are untouched), tests the persisted
+  secret via `TestConnectionCommandHandler` (writes
+  `LastTestSucceeded`/`LastTestedAt`/`LastTestError` and an audit row). This
+  redesign is also where the list's row-level Test action was removed — the old
+  modal itself never had a Test button; Test lived as a separate action on each
+  list row. Testing now happens only inside the editor panel, whether adding or
+  editing, never from the list.
 - **Connections list enhancements** — adds a Summary column (showing chips from
   `Connection.SummaryJson`), leveraging `IPlugin.GetConnectionSummary`. The list's
   Status column itself is unchanged (`StatusText`'s plain "Never tested"/"OK"/error-text/"Failed"

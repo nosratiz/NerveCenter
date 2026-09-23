@@ -100,7 +100,7 @@ else
 
     private IPlugin? SelectedPlugin => Plugins.FirstOrDefault(p => p.ConnectionKind == _kind);
 
-    protected override void OnParametersSet()
+    protected override void OnInitialized()
     {
         if (Existing is not null)
         {
@@ -148,10 +148,12 @@ else
         _testResult = null;
         try
         {
-            if (Existing is null)
+            if (Existing is null || !string.IsNullOrWhiteSpace(_secret))
             {
-                // Nothing saved yet -- call the plugin directly with the in-progress secret. No
-                // persistence, no audit row: there is no connection row to attach either to.
+                // Either nothing saved yet, or the user has touched the secret/form since it
+                // hydrated -- call the plugin directly with the in-progress secret so Test
+                // reflects what Save is about to persist, not the old persisted secret. No
+                // persistence, no audit row: there is nothing saved yet that matches _secret.
                 if (SelectedPlugin is { } plugin)
                 {
                     _testResult = await plugin.TestConnectionAsync(_secret);
@@ -159,8 +161,9 @@ else
             }
             else
             {
-                // Tests the connection's PERSISTED secret, not any in-progress edits above -- the
-                // same handler the old row-level "Test" action called, preserving
+                // The user hasn't touched anything since hydration, so testing "the saved
+                // connection" is correct -- tests the connection's PERSISTED secret, the same
+                // handler the old row-level "Test" action called, preserving
                 // LastTestSucceeded/LastTestedAt/LastTestError persistence and the connection.test
                 // audit row.
                 var actor = await ActorResolver.ResolveAsync(AuthState);
