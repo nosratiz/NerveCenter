@@ -40,4 +40,33 @@ public class AwsPluginTests
 
         badge.Should().BeNull();
     }
+
+    [Fact]
+    public void Declares_AwsConnectionFields_as_its_connection_form_component()
+    {
+        var plugin = new AwsPlugin();
+
+        plugin.ConnectionFormComponentType.Should().Be(typeof(SbConsole.Plugins.Aws.Client.AwsConnectionFields));
+    }
+
+    [Fact]
+    public void GetConnectionSummary_echoes_only_the_region()
+    {
+        var plugin = new AwsPlugin();
+
+        var summary = plugin.GetConnectionSummary("mode=access-keys;region=eu-west-1;accessKeyId=AKIA123;secretAccessKey=shh");
+
+        summary.Should().ContainSingle(kv => kv.Key == "Region" && kv.Value == "eu-west-1");
+        summary.Values.Should().NotContain(v => v.Contains("AKIA123") || v.Contains("shh"));
+    }
+
+    [Fact]
+    public void GetConnectionSummary_falls_back_to_a_placeholder_when_no_region_is_set()
+    {
+        var plugin = new AwsPlugin();
+
+        var summary = plugin.GetConnectionSummary("mode=default-chain");
+
+        summary["Region"].Should().Be("?");
+    }
 }

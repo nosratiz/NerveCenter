@@ -20,6 +20,14 @@ public sealed class AwsPlugin : IPlugin
     public string ConnectionKind => "aws";
     public string ConnectionKindDisplayName => "AWS SQS/SNS";
 
+    public Type? ConnectionFormComponentType => typeof(AwsConnectionFields);
+
+    public IReadOnlyDictionary<string, string> GetConnectionSummary(string secret)
+    {
+        var parsed = AwsConfigParser.Parse(secret);
+        return new Dictionary<string, string> { ["Region"] = parsed.GetValueOrDefault("region", "?") };
+    }
+
     // Queues: Create/Delete/Purge queue, Receive, Delete message, Release message, Send, Redrive (8).
     // Topics: Create/Delete topic, Subscribe/Unsubscribe, Publish (5).
     // Pages: Queues, Receive, Topics, TopicDetail (4).
