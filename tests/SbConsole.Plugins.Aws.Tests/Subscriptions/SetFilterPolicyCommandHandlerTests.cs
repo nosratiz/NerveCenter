@@ -80,4 +80,21 @@ public class SetFilterPolicyCommandHandlerTests
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("Connection not found.");
     }
+
+    [Fact]
+    public async Task A_partial_scope_change_failure_says_the_subscription_was_left_partially_updated_and_audits_it()
+    {
+        var partial = new FilterPolicyPartiallyAppliedException(
+            "The subscription was left partially updated: the scope was changed to MessageBody, but setting the new filter policy failed.",
+            new InvalidOperationException("Invalid parameter: FilterPolicy"));
+        _operations.SetSubscriptionFilterPolicyAsync(Secret, "arn:sub-1", Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(partial);
+
+        var result = await CreateHandler().HandleAsync(Command("""{"region":{"uk":["x"]}}""", FilterPolicyValidator.MessageBody));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("partially updated").And.Contain("Invalid parameter: FilterPolicy");
+        await _audit.Received(1).RecordAsync("aws.subscription.filterpolicy.set", "aws-dev/orders-topic", ActionRisk.Mutating, false,
+            Arg.Is<string?>(d => d != null && d.Contains("partially updated") && d.Contains("Invalid parameter: FilterPolicy")), Arg.Any<CancellationToken>());
+    }
 }

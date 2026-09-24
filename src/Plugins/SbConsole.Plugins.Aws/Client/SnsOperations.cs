@@ -265,16 +265,44 @@ public sealed class SnsOperations : ISnsOperations
             currentScope = current.Attributes?.GetValueOrDefault(FilterPolicyScopeAttribute);
         }
 
-        foreach (var (name, value) in PlanFilterPolicyUpdates(currentPolicy, currentScope, policyJson, scope))
-        {
-            await sns.SetSubscriptionAttributesAsync(new SetSubscriptionAttributesRequest
+        await ApplyFilterPolicyUpdatesAsync(
+            PlanFilterPolicyUpdates(currentPolicy, currentScope, policyJson, scope),
+            (name, value, token) => sns.SetSubscriptionAttributesAsync(new SetSubscriptionAttributesRequest
             {
                 SubscriptionArn = subscriptionArn,
                 AttributeName = name,
                 AttributeValue = value,
-            }, ct);
+            }, token),
+            ct);
+    }
+
+    // Makes the planned calls in order (the setter is injected so this is unit-testable without
+    // AWS). A failure on the first call changed nothing and is rethrown as-is; a failure after an
+    // earlier call succeeded left the subscription half-updated, which is reported explicitly as a
+    // FilterPolicyPartiallyAppliedException naming what did and didn't land.
+    internal static async Task ApplyFilterPolicyUpdatesAsync(
+        IReadOnlyList<(string Name, string Value)> plan, Func<string, string, CancellationToken, Task> setAttribute, CancellationToken ct)
+    {
+        (string Name, string Value)? applied = null;
+        foreach (var (name, value) in plan)
+        {
+            try
+            {
+                await setAttribute(name, value, ct);
+            }
+            catch (Exception ex) when (applied is { } done)
+            {
+                throw new FilterPolicyPartiallyAppliedException(DescribePartialUpdate(done, (name, value)), ex);
+            }
+
+            applied = (name, value);
         }
     }
+
+    private static string DescribePartialUpdate((string Name, string Value) applied, (string Name, string Value) failed) =>
+        applied.Name == FilterPolicyScopeAttribute
+            ? $"The subscription was left partially updated: the scope was changed to {applied.Value}, but setting the new filter policy failed — the previous filter policy is now evaluated under the {applied.Value} scope."
+            : $"The subscription was left partially updated: the new filter policy was set, but changing the scope to {failed.Value} failed — the new policy is evaluated under the previous scope.";
 
     // Pure static: which SetSubscriptionAttributes calls to make, in order. SetSubscriptionAttributes
     // sets one attribute per call and SNS validates the policy against the scope in force at that

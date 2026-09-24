@@ -246,4 +246,63 @@ public class SnsOperationsTests
     {
         SnsOperations.MaxEndpointScanPages.Should().Be(20);
     }
+
+    [Fact]
+    public async Task ApplyFilterPolicyUpdates_makes_every_call_in_plan_order()
+    {
+        var calls = new List<(string, string)>();
+
+        await SnsOperations.ApplyFilterPolicyUpdatesAsync(
+            [("FilterPolicyScope", "MessageBody"), ("FilterPolicy", "{}")],
+            (name, value, _) => { calls.Add((name, value)); return Task.CompletedTask; },
+            CancellationToken.None);
+
+        calls.Should().Equal(("FilterPolicyScope", "MessageBody"), ("FilterPolicy", "{}"));
+    }
+
+    [Fact]
+    public async Task ApplyFilterPolicyUpdates_rethrows_a_first_call_failure_as_is_since_nothing_changed()
+    {
+        var boom = new InvalidOperationException("denied");
+
+        var act = () => SnsOperations.ApplyFilterPolicyUpdatesAsync(
+            [("FilterPolicyScope", "MessageBody"), ("FilterPolicy", "{}")],
+            (_, _, _) => Task.FromException(boom),
+            CancellationToken.None);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(boom);
+    }
+
+    [Fact]
+    public async Task ApplyFilterPolicyUpdates_reports_a_scope_change_that_landed_before_the_policy_failed()
+    {
+        var boom = new InvalidOperationException("Invalid parameter: FilterPolicy");
+
+        var act = () => SnsOperations.ApplyFilterPolicyUpdatesAsync(
+            [("FilterPolicyScope", "MessageBody"), ("FilterPolicy", """{"a":{"b":["c"]}}""")],
+            (name, _, _) => name == "FilterPolicy" ? Task.FromException(boom) : Task.CompletedTask,
+            CancellationToken.None);
+
+        var thrown = (await act.Should().ThrowAsync<FilterPolicyPartiallyAppliedException>()).Which;
+        thrown.InnerException.Should().BeSameAs(boom);
+        thrown.Message.Should().Contain("partially updated")
+            .And.Contain("scope was changed to MessageBody")
+            .And.Contain("previous filter policy");
+    }
+
+    [Fact]
+    public async Task ApplyFilterPolicyUpdates_reports_a_policy_that_landed_before_the_scope_change_failed()
+    {
+        var boom = new InvalidOperationException("throttled");
+
+        var act = () => SnsOperations.ApplyFilterPolicyUpdatesAsync(
+            [("FilterPolicy", """{"a":["b"]}"""), ("FilterPolicyScope", "MessageAttributes")],
+            (name, _, _) => name == "FilterPolicyScope" ? Task.FromException(boom) : Task.CompletedTask,
+            CancellationToken.None);
+
+        var thrown = (await act.Should().ThrowAsync<FilterPolicyPartiallyAppliedException>()).Which;
+        thrown.Message.Should().Contain("partially updated")
+            .And.Contain("new filter policy was set")
+            .And.Contain("MessageAttributes");
+    }
 }

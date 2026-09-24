@@ -38,6 +38,15 @@ public sealed class SetFilterPolicyCommandHandler(ISnsOperations operations, ICo
             await audit.RecordAsync(AuditAction, target, ActionRisk.Mutating, succeeded: true, ct: ct);
             return PluginResult.Ok();
         }
+        catch (FilterPolicyPartiallyAppliedException ex)
+        {
+            // Half of a two-call scope change landed -- say so explicitly (and audit it) rather than
+            // report a plain failure the user might assume changed nothing.
+            logger.LogError(ex, "Setting the filter policy on a subscription of topic {Target} partially failed.", target);
+            var error = $"{ex.Message} {FriendlyAwsError.From(ex.InnerException!)}";
+            await audit.RecordAsync(AuditAction, target, ActionRisk.Mutating, succeeded: false, detail: error, ct: ct);
+            return PluginResult.Fail(error);
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Setting the filter policy on a subscription of topic {Target} failed.", target);

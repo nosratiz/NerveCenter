@@ -829,7 +829,10 @@ comes from the server-side `IConnectionProvider` lookup. **No SDK or schema chan
   `FilterPolicy`/`FilterPolicyScope` (`GetSubscriptionAttributes`) because SNS sets one attribute per
   call and validates the policy against the scope in force at that moment: `PlanFilterPolicyUpdates`
   (pure, unit-tested) writes the scope first only when switching to `MessageBody` with a policy already
-  present, and policy-then-scope otherwise. **Clearing** is a single `FilterPolicy = ""` call (scope
+  present, and policy-then-scope otherwise. If the second of those two calls fails after the first
+  succeeded, `ApplyFilterPolicyUpdatesAsync` throws `FilterPolicyPartiallyAppliedException` and the
+  handler returns (and audits) an explicit "left partially updated" error naming which half landed
+  — like Move to source's "possible duplicate" error. **Clearing** is a single `FilterPolicy = ""` call (scope
   left alone — SNS rejects a scope without a policy). `FilterPolicyValidator` runs client-side before
   any AWS call and live in both editors: scope must be `MessageAttributes`/`MessageBody`, and the
   policy must be a top-level JSON object (empty = clear); SNS's own operator rules are left to SNS.
