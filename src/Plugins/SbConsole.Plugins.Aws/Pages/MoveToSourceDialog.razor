@@ -1,0 +1,31 @@
+@using SbConsole.Plugins.Aws.Messages
+
+@* Picks which dead-letter source a received message goes back to, when the DLQ has more than one.
+   Returns the chosen source queue URL via DialogResult.Ok -- the Receive page performs the move. *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">Message @MessageId dead-lettered from more than one queue. Move it to:</MudText>
+        <MudSelect T="string" Class="source-queue" @bind-Value="_selectedUrl" Label="Source queue">
+            @foreach (var url in SourceQueueUrls)
+            {
+                <MudSelectItem T="string" Value="@url">@MoveMessageToSourceCommandHandler.QueueNameFromUrl(url)</MudSelectItem>
+            }
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Class="confirm-move" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrEmpty(_selectedUrl)" OnClick="Move">Move</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string MessageId { get; set; } = "";
+    [Parameter] public IReadOnlyList<string> SourceQueueUrls { get; set; } = [];
+
+    private string? _selectedUrl;
+
+    private void Move() => MudDialog.Close(DialogResult.Ok(_selectedUrl!));
+
+    private void Cancel() => MudDialog.Cancel();
+}

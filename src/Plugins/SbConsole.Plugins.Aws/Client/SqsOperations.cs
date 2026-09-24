@@ -406,10 +406,12 @@ public sealed class SqsOperations : ISqsOperations
             : DateTimeOffset.MinValue;
         var senderId = attributes.GetValueOrDefault("SenderId", "");
         var messageAttributes = message.MessageAttributes.ToDictionary(kv => kv.Key, kv => kv.Value.StringValue ?? "");
+        // Returned because ReceiveMessagesAsync requests MessageSystemAttributeName.All.
+        var groupId = attributes.TryGetValue("MessageGroupId", out var group) ? group : null;
 
         return new ReceivedMessage(
             message.MessageId, message.ReceiptHandle, message.Body, receiveCount,
-            sentTimestamp, senderId, message.MD5OfBody, messageAttributes);
+            sentTimestamp, senderId, message.MD5OfBody, messageAttributes, groupId);
     }
 
     public async Task DeleteMessageAsync(string secret, string queueUrl, string receiptHandle, CancellationToken ct = default)

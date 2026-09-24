@@ -1,9 +1,13 @@
 @page "/p/aws/queues/receive"
 @using SbConsole.Plugins.Aws.Client
 @using SbConsole.Plugins.Aws.Messages
+@using SbConsole.Plugins.Aws.Queues
 @inject ReceiveMessagesCommandHandler ReceiveHandler
 @inject DeleteMessageCommandHandler DeleteHandler
 @inject ReleaseMessageCommandHandler ReleaseHandler
+@inject MoveMessageToSourceCommandHandler MoveHandler
+@inject GetQueueDetailQueryHandler QueueDetailHandler
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @implements IDisposable
 
@@ -11,6 +15,10 @@
 <h1>Receive: @QueueName</h1>
 
 <MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">SQS has no peek — receiving is the only way to read a message, and it hides what you received from other consumers for the visibility timeout.</MudText>
+@if (_sourcesLoaded && _sourceQueueUrls is null)
+{
+    <MudText Typo="Typo.caption" Class="move-to-source-unavailable mud-text-secondary mb-2 d-block">Move to source is unavailable: couldn't determine this queue's dead-letter sources (sqs:ListDeadLetterSourceQueues failed).</MudText>
+}
 
 @if (_messages.Count > 0)
 {
@@ -43,6 +51,14 @@
                 <MudCheckBox Class="select-message" T="bool" Value="@_selectedHandles.Contains(message.ReceiptHandle)" ValueChanged="@(v => ToggleSelection(message.ReceiptHandle, v))" />
                 <span style="font-family:monospace">@message.MessageId</span>
                 <MudChip T="string" Size="Size.Small" Class="@ReceiveCountBadgeClass(message.ApproxReceiveCount)" Color="@ReceiveCountBadgeColor(message.ApproxReceiveCount)">@message.ApproxReceiveCount</MudChip>
+                @if (_sourceQueueUrls is { Count: > 0 })
+                {
+                    <MudSpacer />
+                    <span @onclick:stopPropagation="true">
+                        <MudButton Class="move-to-source" Size="Size.Small" Variant="Variant.Text" Disabled="_moving" OnClick="@(() => MoveToSourceAsync(message))"
+                                   title="@MoveToSourceTitle">Move to source</MudButton>
+                    </span>
+                }
             </div>
         }
     </div>
@@ -86,6 +102,17 @@
     private bool _busy;
     private string? _connectionName;
 
+    // This queue's dead-letter sources (queues whose RedrivePolicy targets it). Null = unknown (the
+    // lookup failed) -- Move to source is hidden with a caption rather than guessed; empty = not a
+    // DLQ, so there's nowhere to move back to.
+    private IReadOnlyList<string>? _sourceQueueUrls;
+    private bool _sourcesLoaded;
+    private bool _moving;
+
+    private string MoveToSourceTitle => _sourceQueueUrls is { Count: 1 } single
+        ? $"Send a copy to {MoveMessageToSourceCommandHandler.QueueNameFromUrl(single[0])}, then delete it from this DLQ"
+        : "Pick a source queue, send a copy there, then delete it from this DLQ";
+
     // Countdown state for the hold banner -- purely a client-side estimate of when the visibility
     // timeout set on the most recent successful receive expires, not a server round-trip. Real AWS
     // timing can differ (e.g. clock skew, a message re-held by a later receive), which is why
@@ -108,6 +135,12 @@
         // no destructive, prod-gated action to protect, unlike Service Bus's Peek.razor).
         var connections = await Connections.ListAsync("aws");
         _connectionName = connections.FirstOrDefault(c => c.Id == ConnectionId)?.Name ?? "";
+
+        // One GetQueueAttributes + ListDeadLetterSourceQueues round-trip (the query handler already
+        // logs/reduces any failure) -- a failure only disables Move to source, never the page.
+        var detail = await QueueDetailHandler.HandleAsync(ConnectionId, QueueUrl);
+        _sourceQueueUrls = MoveMessageToSourceCommandHandler.ResolveSources(detail.IsSuccess ? detail.Value : null);
+        _sourcesLoaded = true;
     }
 
     private void StartCountdown()
@@ -222,6 +255,58 @@
         if (_selected is not null && !_messages.Contains(_selected))
         {
             _selected = _messages.FirstOrDefault();
+        }
+    }
+
+    private async Task MoveToSourceAsync(ReceivedMessage message)
+    {
+        if (_sourceQueueUrls is not { Count: > 0 } sources)
+        {
+            return;
+        }
+
+        var sourceUrl = sources[0];
+        if (sources.Count > 1)
+        {
+            var parameters = new DialogParameters<MoveToSourceDialog>
+            {
+                { x => x.MessageId, message.MessageId },
+                { x => x.SourceQueueUrls, sources },
+            };
+            var dialog = await DialogService.ShowAsync<MoveToSourceDialog>("Move to source", parameters);
+            var picked = await dialog.Result;
+            if (picked is null || picked.Canceled || picked.Data is not string pickedUrl)
+            {
+                return;
+            }
+
+            sourceUrl = pickedUrl;
+        }
+
+        _moving = true;
+        try
+        {
+            var result = await MoveHandler.HandleAsync(new MoveMessageToSourceCommand(
+                ConnectionId, _connectionName ?? "", QueueUrl, QueueName, sourceUrl, message));
+            if (result.IsSuccess)
+            {
+                _messages.Remove(message);
+                _selectedHandles.Remove(message.ReceiptHandle);
+                if (_selected == message)
+                {
+                    _selected = _messages.FirstOrDefault();
+                }
+
+                Snackbar.Add($"Moved to {MoveMessageToSourceCommandHandler.QueueNameFromUrl(sourceUrl)}.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _moving = false;
         }
     }
 

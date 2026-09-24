@@ -2,10 +2,13 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Messages;
+using SbConsole.Plugins.Aws.Pages;
+using SbConsole.Plugins.Aws.Queues;
 
 namespace SbConsole.Plugins.Aws.Tests.Pages;
 
@@ -16,7 +19,12 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
 
     private readonly ISqsOperations _operations = Substitute.For<ISqsOperations>();
     private readonly SbConsole.Sdk.IConnectionProvider _connections = Substitute.For<SbConsole.Sdk.IConnectionProvider>();
+    private readonly IDialogService _dialogService = Substitute.For<IDialogService>();
     private readonly Guid _connectionId = Guid.NewGuid();
+
+    private const string Secret = "mode=default-chain;region=eu-west-1";
+    private const string SourceA = "https://sqs/orders-a";
+    private const string SourceB = "https://sqs/orders-b";
 
     public ReceivePageTests()
     {
@@ -29,7 +37,28 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<ReceiveMessagesCommandHandler>();
         Services.AddSingleton<DeleteMessageCommandHandler>();
         Services.AddSingleton<ReleaseMessageCommandHandler>();
+        Services.AddSingleton<MoveMessageToSourceCommandHandler>();
+        Services.AddSingleton<GetQueueDetailQueryHandler>();
+        Services.AddSingleton(_dialogService);
         Services.AddLogging();
+    }
+
+    // The Receive page's own queue is https://sqs/orders; `sources` is what SQS's
+    // ListDeadLetterSourceQueues reported for it (null = that lookup failed).
+    private void GivenSources(IReadOnlyList<string>? sources) =>
+        _operations.GetQueueDetailAsync(Secret, "https://sqs/orders", Arg.Any<CancellationToken>())
+            .Returns(new QueueDetails("orders", "https://sqs/orders", "arn:aws:sqs:eu-west-1:123456789012:orders", false, false,
+                1, 0, 0, null, null, new Dictionary<string, string>(), null, null, sources));
+
+    private async Task<IRenderedComponent<Receive>> RenderAndReceiveAsync(params ReceivedMessage[] messages)
+    {
+        _operations.ReceiveMessagesAsync(Secret, "https://sqs/orders", Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(messages.ToList());
+        var cut = RenderPage();
+        cut.Find("button.receive-action").Click();
+        await Task.Delay(30);
+        cut.Render();
+        return cut;
     }
 
     private static ReceivedMessage Message(string id, int receiveCount) =>
@@ -154,5 +183,80 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
 
         await _operations.Received(1).ChangeMessageVisibilityAsync("mode=default-chain;region=eu-west-1", "https://sqs/orders", "handle-m1", 0, Arg.Any<CancellationToken>());
         await _operations.Received(1).ChangeMessageVisibilityAsync("mode=default-chain;region=eu-west-1", "https://sqs/orders", "handle-m2", 0, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_non_DLQ_has_no_move_to_source_action()
+    {
+        GivenSources([]);
+
+        var cut = await RenderAndReceiveAsync(Message("m1", 1));
+
+        cut.FindAll("button.move-to-source").Should().BeEmpty();
+        cut.FindAll(".move-to-source-unavailable").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task When_the_source_lookup_failed_the_action_is_hidden_with_an_explanation()
+    {
+        GivenSources(null);
+
+        var cut = await RenderAndReceiveAsync(Message("m1", 1));
+
+        cut.FindAll("button.move-to-source").Should().BeEmpty();
+        cut.Find(".move-to-source-unavailable").TextContent.Should().Contain("ListDeadLetterSourceQueues");
+    }
+
+    [Fact]
+    public async Task A_DLQ_with_one_source_moves_the_message_directly_and_removes_the_row()
+    {
+        GivenSources([SourceA]);
+
+        var cut = await RenderAndReceiveAsync(Message("m1", 6), Message("m2", 6));
+        cut.FindAll("button.move-to-source").Should().HaveCount(2);
+        cut.FindAll("button.move-to-source")[0].Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        await _operations.Received(1).SendMessageAsync(Secret, SourceA, Arg.Is<SendMessageRequest>(r => r.Body == "body-m1"), Arg.Any<CancellationToken>());
+        await _operations.Received(1).DeleteMessageAsync(Secret, "https://sqs/orders", "handle-m1", Arg.Any<CancellationToken>());
+        await _dialogService.DidNotReceiveWithAnyArgs().ShowAsync<MoveToSourceDialog>(default, default(DialogParameters)!);
+        cut.FindAll(".message-row").Should().ContainSingle();
+        cut.Markup.Should().NotContain("handle-m1");
+    }
+
+    [Fact]
+    public async Task A_DLQ_with_several_sources_asks_which_one_then_moves_to_the_picked_source()
+    {
+        GivenSources([SourceA, SourceB]);
+        var reference = Substitute.For<IDialogReference>();
+        reference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(SourceB)));
+        _dialogService.ShowAsync<MoveToSourceDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>()).Returns(reference);
+
+        var cut = await RenderAndReceiveAsync(Message("m1", 6));
+        cut.Find("button.move-to-source").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        await _operations.Received(1).SendMessageAsync(Secret, SourceB, Arg.Any<SendMessageRequest>(), Arg.Any<CancellationToken>());
+        await _operations.DidNotReceive().SendMessageAsync(Secret, SourceA, Arg.Any<SendMessageRequest>(), Arg.Any<CancellationToken>());
+        cut.FindAll(".message-row").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancelling_the_source_picker_moves_nothing()
+    {
+        GivenSources([SourceA, SourceB]);
+        var reference = Substitute.For<IDialogReference>();
+        reference.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Cancel()));
+        _dialogService.ShowAsync<MoveToSourceDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>()).Returns(reference);
+
+        var cut = await RenderAndReceiveAsync(Message("m1", 6));
+        cut.Find("button.move-to-source").Click();
+        await Task.Delay(30);
+        cut.Render();
+
+        await _operations.DidNotReceiveWithAnyArgs().SendMessageAsync(default!, default!, default!, default);
+        cut.FindAll(".message-row").Should().ContainSingle();
     }
 }

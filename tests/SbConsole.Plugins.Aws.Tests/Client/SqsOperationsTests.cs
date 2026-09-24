@@ -146,6 +146,23 @@ public class SqsOperationsTests
         received.SenderId.Should().Be("AIDAEXAMPLE");
         received.Md5OfBody.Should().Be("abc123");
         received.MessageAttributes.Should().Equal(new Dictionary<string, string> { ["source"] = "checkout" });
+        received.MessageGroupId.Should().BeNull("a standard-queue message carries no MessageGroupId attribute");
+    }
+
+    [Fact]
+    public void ToReceivedMessage_maps_the_FIFO_MessageGroupId_system_attribute()
+    {
+        var message = new Amazon.SQS.Model.Message
+        {
+            MessageId = "msg-1",
+            ReceiptHandle = "handle-1",
+            Body = "{}",
+            MD5OfBody = "abc123",
+            Attributes = new Dictionary<string, string> { ["MessageGroupId"] = "customer-42" },
+            MessageAttributes = new Dictionary<string, Amazon.SQS.Model.MessageAttributeValue>(),
+        };
+
+        SqsOperations.ToReceivedMessage(message).MessageGroupId.Should().Be("customer-42");
     }
     [Fact]
     public void ParseRedrivePolicy_parses_target_arn_and_numeric_maxReceiveCount()

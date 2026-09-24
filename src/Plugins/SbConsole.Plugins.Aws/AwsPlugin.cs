@@ -30,12 +30,12 @@ public sealed class AwsPlugin : IPlugin
         return new Dictionary<string, string> { ["Region"] = parsed.GetValueOrDefault("region", "?") };
     }
 
-    // Queues: Create/Delete/Purge queue, Receive, Delete message, Release message, Send, Redrive,
-    // Cancel redrive (9).
+    // Queues: Create/Delete/Purge queue, Receive, Delete message, Release message, Move message to
+    // source, Send, Redrive, Cancel redrive (10).
     // Topics: Create/Delete topic, Subscribe/Unsubscribe, Publish, Set subscription filter policy (6).
     // Pages: Queues, QueueDetail, Receive, Topics, TopicDetail (5). QueueDetail's Send/Purge/Delete/
     // Redrive buttons reuse the existing handlers above; its only new action is Cancel redrive.
-    public PluginContribution Contribution => new(PageCount: 5, ActionCount: 15);
+    public PluginContribution Contribution => new(PageCount: 5, ActionCount: 16);
 
     // The Queues/Messages/Redrive command and query handlers are added to this project one at a
     // time by Tasks 4, 7, 8, 9, 10, 12, 13 -- registering them here in Task 3 (as the plan's
@@ -68,6 +68,7 @@ public sealed class AwsPlugin : IPlugin
         services.AddScoped<Messages.DeleteMessageCommandHandler>();
         services.AddScoped<Messages.ReleaseMessageCommandHandler>();
         services.AddScoped<Messages.SendMessageCommandHandler>();
+        services.AddScoped<Messages.MoveMessageToSourceCommandHandler>();
         services.AddScoped<Redrive.StartRedriveCommandHandler>();
         services.AddScoped<Redrive.ListRedriveTasksQueryHandler>();
         services.AddScoped<Redrive.CancelRedriveCommandHandler>();
