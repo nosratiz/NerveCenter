@@ -56,6 +56,81 @@ public class SnsOperationsTests
     }
 
     [Fact]
+    public void ClassifySubscription_reads_the_filter_policy_scope_when_present()
+    {
+        var attributes = new Dictionary<string, string> { ["FilterPolicy"] = """{"region":["uk"]}""", ["FilterPolicyScope"] = "MessageBody" };
+
+        var summary = SnsOperations.ClassifySubscription("arn:aws:sns:us-east-1:1:topic:sub-id", "sqs", "shipment-updates", attributes);
+
+        summary.FilterPolicyScope.Should().Be("MessageBody");
+    }
+
+    [Fact]
+    public void BuildSubscribeAttributes_omits_the_filter_policy_when_none_is_given()
+    {
+        var attributes = SnsOperations.BuildSubscribeAttributes(new SubscribeRequest("arn:topic", "sqs", "arn:queue", true));
+
+        attributes.Should().Equal(new Dictionary<string, string> { ["RawMessageDelivery"] = "true" });
+    }
+
+    [Fact]
+    public void BuildSubscribeAttributes_sends_the_filter_policy_and_scope_when_given()
+    {
+        var request = new SubscribeRequest("arn:topic", "sqs", "arn:queue", false, """{"region":["uk"]}""", "MessageBody");
+
+        var attributes = SnsOperations.BuildSubscribeAttributes(request);
+
+        attributes.Should().Contain("FilterPolicy", """{"region":["uk"]}""");
+        attributes.Should().Contain("FilterPolicyScope", "MessageBody");
+    }
+
+    [Fact]
+    public void BuildSubscribeAttributes_defaults_the_scope_to_MessageAttributes_when_a_policy_has_none()
+    {
+        var request = new SubscribeRequest("arn:topic", "sqs", "arn:queue", false, """{"region":["uk"]}""");
+
+        SnsOperations.BuildSubscribeAttributes(request).Should().Contain("FilterPolicyScope", "MessageAttributes");
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_clears_with_an_empty_FilterPolicy_and_never_touches_the_scope()
+    {
+        SnsOperations.PlanFilterPolicyUpdates("""{"a":["b"]}""", "MessageBody", null, "MessageAttributes")
+            .Should().Equal([("FilterPolicy", "")]);
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_sets_only_the_policy_when_the_scope_is_unchanged()
+    {
+        SnsOperations.PlanFilterPolicyUpdates("""{"a":["b"]}""", null, """{"a":["c"]}""", "MessageAttributes")
+            .Should().Equal([("FilterPolicy", """{"a":["c"]}""")]);
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_switches_to_MessageBody_scope_first_when_a_policy_already_exists()
+    {
+        // The new (possibly nested, body-only) policy must be validated under the new scope.
+        SnsOperations.PlanFilterPolicyUpdates("""{"a":["b"]}""", "MessageAttributes", """{"a":{"b":["c"]}}""", "MessageBody")
+            .Should().Equal([("FilterPolicyScope", "MessageBody"), ("FilterPolicy", """{"a":{"b":["c"]}}""")]);
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_sets_the_policy_before_the_scope_when_none_exists_yet()
+    {
+        SnsOperations.PlanFilterPolicyUpdates(null, null, """{"a":["b"]}""", "MessageBody")
+            .Should().Equal([("FilterPolicy", """{"a":["b"]}"""), ("FilterPolicyScope", "MessageBody")]);
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_switches_to_MessageAttributes_policy_first()
+    {
+        // The new policy must be flat (attribute-scope), which is also valid under the old body
+        // scope -- whereas the old body policy may be nested and invalid under attribute scope.
+        SnsOperations.PlanFilterPolicyUpdates("""{"a":{"b":["c"]}}""", "MessageBody", """{"a":["b"]}""", "MessageAttributes")
+            .Should().Equal([("FilterPolicy", """{"a":["b"]}"""), ("FilterPolicyScope", "MessageAttributes")]);
+    }
+
+    [Fact]
     public void EvaluateFilterMatch_returns_true_when_no_filter_policy_is_set()
     {
         SnsOperations.EvaluateFilterMatch(null, new Dictionary<string, string> { ["region"] = "uk" }).Should().BeTrue();

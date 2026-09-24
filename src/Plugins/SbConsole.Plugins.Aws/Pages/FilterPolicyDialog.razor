@@ -1,0 +1,77 @@
+@using SbConsole.Plugins.Aws.Subscriptions
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace;word-break:break-all">@Endpoint</MudText>
+        <MudSelect T="string" Class="filter-scope-select mt-2" @bind-Value="_scope" Label="Scope">
+            <MudSelectItem Value="@FilterPolicyValidator.MessageAttributes">Message attributes</MudSelectItem>
+            <MudSelectItem Value="@FilterPolicyValidator.MessageBody">Message body</MudSelectItem>
+        </MudSelect>
+        <MudTextField id="filter-policy-json" @bind-Value="_policy" Label="Filter policy (JSON)" Lines="10" Immediate="true" Class="mt-3"
+                      Style="font-family:monospace" HelperText="Leave empty to remove the filter policy." />
+        @if (Validation.Error is { } error)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Error" Class="filter-policy-error">@error</MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="filter-policy-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="save-filter-policy" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!Validation.IsValid || _busy)" OnClick="Save">
+            @(Validation.IsClear ? "Remove filter" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string TopicName { get; set; } = "";
+    [Parameter] public string SubscriptionArn { get; set; } = "";
+    [Parameter] public string Endpoint { get; set; } = "";
+    [Parameter] public string? InitialPolicyJson { get; set; }
+    // null (SNS reports no scope) means SNS's default, MessageAttributes.
+    [Parameter] public string? InitialScope { get; set; }
+
+    [Inject] private SetFilterPolicyCommandHandler Handler { get; set; } = default!;
+
+    private string _policy = "";
+    private string _scope = FilterPolicyValidator.MessageAttributes;
+    private bool _busy;
+
+    private FilterPolicyValidator.Result Validation => FilterPolicyValidator.Validate(_policy, _scope);
+
+    protected override void OnInitialized()
+    {
+        _policy = string.IsNullOrWhiteSpace(InitialPolicyJson) ? "" : TopicDetail.FormatJson(InitialPolicyJson);
+        _scope = InitialScope is FilterPolicyValidator.MessageBody ? FilterPolicyValidator.MessageBody : FilterPolicyValidator.MessageAttributes;
+    }
+
+    private async Task Save()
+    {
+        _busy = true;
+        try
+        {
+            var result = await Handler.HandleAsync(new SetFilterPolicyCommand(ConnectionId, ConnectionName, TopicName, SubscriptionArn, _policy, _scope));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

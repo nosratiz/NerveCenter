@@ -66,6 +66,9 @@
                         }
                         else
                         {
+                            @* Confirmed rows only: a pending subscription's ARN is the literal
+                               "PendingConfirmation", which SetSubscriptionAttributes can't target. *@
+                            <MudButton Class="edit-filter-action" OnClick="@(() => OpenEditFilterAsync(context))">Edit filter</MudButton>
                             <MudButton Class="remove-subscription" Color="Color.Error" OnClick="@(() => RemoveAsync(context))">Remove</MudButton>
                         }
                     </MudTd>
@@ -271,6 +274,29 @@
             { x => x.TopicName, TopicName },
         };
         var dialog = await DialogService.ShowAsync<SubscribeDialog>("Subscribe", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    // Pre-filled from the row itself: _subscriptions comes from ListSubscriptionsAsync, the same
+    // call GetSubscriptionFilterPoliciesQueryHandler wraps, and was just loaded -- re-querying
+    // would be an identical round trip per subscription.
+    private async Task OpenEditFilterAsync(SubscriptionSummary subscription)
+    {
+        var parameters = new DialogParameters<FilterPolicyDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, _connectionName },
+            { x => x.TopicName, TopicName },
+            { x => x.SubscriptionArn, subscription.SubscriptionArn },
+            { x => x.Endpoint, subscription.Endpoint },
+            { x => x.InitialPolicyJson, subscription.FilterPolicyJson },
+            { x => x.InitialScope, subscription.FilterPolicyScope },
+        };
+        var dialog = await DialogService.ShowAsync<FilterPolicyDialog>("Edit filter policy", parameters);
         var result = await dialog.Result;
         if (result is { Canceled: false })
         {

@@ -12,6 +12,20 @@
         </MudSelect>
         <MudTextField id="subscribe-endpoint" @bind-Value="_endpoint" Label="Endpoint" Required="true" Immediate="true" />
         <MudSwitch T="bool" Class="raw-delivery-toggle" @bind-Value="_rawMessageDelivery" Label="Raw message delivery" Color="Color.Primary" />
+        <MudSwitch T="bool" Class="filter-policy-toggle" @bind-Value="_useFilterPolicy" Label="Filter policy" Color="Color.Primary" />
+        @if (_useFilterPolicy)
+        {
+            <MudSelect T="string" Class="filter-scope-select" @bind-Value="_filterScope" Label="Filter scope">
+                <MudSelectItem Value="@FilterPolicyValidator.MessageAttributes">Message attributes</MudSelectItem>
+                <MudSelectItem Value="@FilterPolicyValidator.MessageBody">Message body</MudSelectItem>
+            </MudSelect>
+            <MudTextField id="subscribe-filter-policy" @bind-Value="_filterPolicy" Label="Filter policy (JSON)" Lines="6" Immediate="true" Class="mt-2"
+                          Style="font-family:monospace" HelperText="Leave empty for no filter." />
+            @if (FilterValidation.Error is { } filterError)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Error" Class="filter-policy-error">@filterError</MudText>
+            }
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
@@ -19,7 +33,7 @@
         {
             <MudProgressCircular Class="subscribe-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }
-        <MudButton Class="confirm-subscribe" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_endpoint) || _busy)" OnClick="Save">Subscribe</MudButton>
+        <MudButton Class="confirm-subscribe" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_endpoint) || !FilterValidation.IsValid || _busy)" OnClick="Save">Subscribe</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -36,13 +50,24 @@
     private string _endpoint = "";
     private bool _rawMessageDelivery;
     private bool _busy;
+    private bool _useFilterPolicy;
+    private string _filterPolicy = "";
+    private string _filterScope = FilterPolicyValidator.MessageAttributes;
+
+    // An editor that's toggled off (or left empty) means "no filter" -- always valid.
+    private FilterPolicyValidator.Result FilterValidation => _useFilterPolicy
+        ? FilterPolicyValidator.Validate(_filterPolicy, _filterScope)
+        : new FilterPolicyValidator.Result(true, true, null);
 
     private async Task Save()
     {
         _busy = true;
         try
         {
-            var request = new SubscribeRequest(TopicArn, _protocol, _endpoint, _rawMessageDelivery);
+            var withFilter = !FilterValidation.IsClear;
+            var request = new SubscribeRequest(TopicArn, _protocol, _endpoint, _rawMessageDelivery,
+                withFilter ? _filterPolicy.Trim() : null,
+                withFilter ? _filterScope : null);
             var result = await SubscribeHandler.HandleAsync(new SubscribeCommand(ConnectionId, ConnectionName, TopicName, request));
             if (result.IsSuccess)
             {

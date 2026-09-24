@@ -101,6 +101,26 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public void Edit_filter_is_only_offered_on_a_confirmed_subscription()
+    {
+        var topicArn = "arn:aws:sns:us-east-1:1:shipment-updates-topic";
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), topicArn, Arg.Any<CancellationToken>())
+            .Returns([
+                new SubscriptionSummary("PendingConfirmation", "email", "ops@example.com", true, null, null),
+                new SubscriptionSummary("arn:sub-1", "sqs", "shipment-updates", false, false, null),
+            ]);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"/p/aws/topics/{Uri.EscapeDataString(topicArn)}?connectionId={_connectionId}");
+        var cut = Render<TopicDetail>(parameters => parameters
+            .Add(p => p.TopicArnEncoded, Uri.EscapeDataString(topicArn)));
+
+        // A pending subscription's ARN is the literal "PendingConfirmation" -- SetSubscriptionAttributes
+        // has nothing to target, so only the confirmed row gets Edit filter.
+        cut.FindAll("button.edit-filter-action").Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Remove_goes_through_confirmation_before_calling_the_handler()
     {
         var topicArn = "arn:aws:sns:us-east-1:1:shipment-updates-topic";

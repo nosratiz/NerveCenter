@@ -27,6 +27,14 @@ public interface ISnsOperations
     /// <summary>Mutating, not Destructive -- reversible by subscribing again.</summary>
     Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default);
 
+    /// <summary>
+    /// Mutating. Sets (or, with a null/empty <paramref name="policyJson"/>, clears) the
+    /// subscription's FilterPolicy via SetSubscriptionAttributes, with <paramref name="scope"/>
+    /// ("MessageAttributes" | "MessageBody") as its FilterPolicyScope. Clearing never touches the
+    /// scope. Only valid on a confirmed subscription -- a pending one has no real ARN.
+    /// </summary>
+    Task SetSubscriptionFilterPolicyAsync(string secret, string subscriptionArn, string? policyJson, string scope, CancellationToken ct = default);
+
     Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default);
 
     /// <summary>Sum of NumberOfNotificationsFailed over the trailing 24h, via CloudWatch GetMetricStatistics. Zero datapoints means zero failures, not an error.</summary>

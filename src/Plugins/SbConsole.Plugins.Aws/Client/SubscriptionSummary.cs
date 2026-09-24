@@ -6,7 +6,10 @@ public sealed record SubscriptionSummary(
     // The topic this subscription belongs to. Set by ListSubscriptionsForEndpointAsync (the queue
     // detail page's "subscribed to N topics" panel needs it); left null by the per-topic
     // ListSubscriptionsAsync, whose caller already knows the topic.
-    string? TopicArn = null)
+    string? TopicArn = null,
+    // "MessageAttributes" or "MessageBody" when SNS reports one (only alongside a filter policy);
+    // null means unknown/unset, which SNS treats as MessageAttributes.
+    string? FilterPolicyScope = null)
 {
     public string? TopicName => TopicArn is null ? null : SnsOperations.TopicNameFromArn(TopicArn);
 }

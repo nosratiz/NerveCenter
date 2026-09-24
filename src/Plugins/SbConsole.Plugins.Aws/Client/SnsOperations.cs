@@ -169,7 +169,8 @@ public sealed class SnsOperations : ISnsOperations
         var isPending = subscriptionArn == "PendingConfirmation";
         bool? rawDelivery = attributes.TryGetValue("RawMessageDelivery", out var raw) && bool.TryParse(raw, out var parsedRaw) ? parsedRaw : null;
         var filterPolicy = attributes.GetValueOrDefault("FilterPolicy");
-        return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy);
+        var filterPolicyScope = attributes.GetValueOrDefault("FilterPolicyScope");
+        return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy, FilterPolicyScope: filterPolicyScope);
     }
 
     public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default)
@@ -198,15 +199,92 @@ public sealed class SnsOperations : ISnsOperations
     public async Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default)
     {
         using var sns = BuildSnsClient(secret);
-        var attributes = new Dictionary<string, string> { ["RawMessageDelivery"] = request.RawMessageDelivery.ToString().ToLowerInvariant() };
         var response = await sns.SubscribeAsync(new SubscribeRequest_
         {
             TopicArn = request.TopicArn,
             Protocol = request.Protocol,
             Endpoint = request.Endpoint,
-            Attributes = attributes,
+            Attributes = BuildSubscribeAttributes(request),
         }, ct);
         return response.SubscriptionArn;
+    }
+
+    private const string FilterPolicyAttribute = "FilterPolicy";
+    private const string FilterPolicyScopeAttribute = "FilterPolicyScope";
+    private const string DefaultFilterPolicyScope = "MessageAttributes";
+
+    // Pure static so the Subscribe attribute map is unit-testable without AWS. FilterPolicy/
+    // FilterPolicyScope are only sent when a policy is actually given -- an empty FilterPolicy
+    // attribute on Subscribe is pointless, and a scope without a policy is rejected by SNS.
+    internal static Dictionary<string, string> BuildSubscribeAttributes(SubscribeRequest request)
+    {
+        var attributes = new Dictionary<string, string> { ["RawMessageDelivery"] = request.RawMessageDelivery.ToString().ToLowerInvariant() };
+        if (!string.IsNullOrWhiteSpace(request.FilterPolicy))
+        {
+            attributes[FilterPolicyAttribute] = request.FilterPolicy;
+            attributes[FilterPolicyScopeAttribute] = string.IsNullOrWhiteSpace(request.FilterPolicyScope) ? DefaultFilterPolicyScope : request.FilterPolicyScope;
+        }
+
+        return attributes;
+    }
+
+    public async Task SetSubscriptionFilterPolicyAsync(string secret, string subscriptionArn, string? policyJson, string scope, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        string? currentPolicy = null;
+        string? currentScope = null;
+        if (!string.IsNullOrWhiteSpace(policyJson))
+        {
+            // Only needed to order the two SetSubscriptionAttributes calls (see
+            // PlanFilterPolicyUpdates) -- a clear never looks at the current state.
+            var current = await sns.GetSubscriptionAttributesAsync(new GetSubscriptionAttributesRequest { SubscriptionArn = subscriptionArn }, ct);
+            currentPolicy = current.Attributes?.GetValueOrDefault(FilterPolicyAttribute);
+            currentScope = current.Attributes?.GetValueOrDefault(FilterPolicyScopeAttribute);
+        }
+
+        foreach (var (name, value) in PlanFilterPolicyUpdates(currentPolicy, currentScope, policyJson, scope))
+        {
+            await sns.SetSubscriptionAttributesAsync(new SetSubscriptionAttributesRequest
+            {
+                SubscriptionArn = subscriptionArn,
+                AttributeName = name,
+                AttributeValue = value,
+            }, ct);
+        }
+    }
+
+    // Pure static: which SetSubscriptionAttributes calls to make, in order. SetSubscriptionAttributes
+    // sets one attribute per call and SNS validates the policy against the scope in force at that
+    // moment, so the order matters when the scope changes:
+    // - Clearing: a single FilterPolicy = "" call. Assumption (per AWS's SetSubscriptionAttributes
+    //   docs, "an empty value removes the filter policy"): the installed AWSSDK.SimpleNotificationService
+    //   3.7.400.62 marshals AttributeValue = "" onto the wire (IsSetAttributeValue is a null check,
+    //   verified against the DLL). FilterPolicyScope is deliberately left alone -- a scope without a
+    //   policy is meaningless and SNS rejects setting it on its own.
+    // - Same scope: FilterPolicy only.
+    // - To MessageBody with a policy already present: scope first, so a nested (body-only) new policy
+    //   is validated under MessageBody. The existing policy must survive the scope switch -- any
+    //   attribute-scope policy is flat, which is also valid under MessageBody.
+    // - Otherwise (no current policy -- SNS won't take a scope without one -- or switching to
+    //   MessageAttributes, where the new policy must be flat and so is also valid under the old body
+    //   scope, while the old body policy may be nested): policy first, then scope.
+    internal static IReadOnlyList<(string Name, string Value)> PlanFilterPolicyUpdates(
+        string? currentPolicy, string? currentScope, string? newPolicy, string newScope)
+    {
+        if (string.IsNullOrWhiteSpace(newPolicy))
+        {
+            return [(FilterPolicyAttribute, "")];
+        }
+
+        var effectiveCurrentScope = string.IsNullOrEmpty(currentScope) ? DefaultFilterPolicyScope : currentScope;
+        if (string.Equals(effectiveCurrentScope, newScope, StringComparison.Ordinal))
+        {
+            return [(FilterPolicyAttribute, newPolicy)];
+        }
+
+        return newScope == "MessageBody" && !string.IsNullOrWhiteSpace(currentPolicy)
+            ? [(FilterPolicyScopeAttribute, newScope), (FilterPolicyAttribute, newPolicy)]
+            : [(FilterPolicyAttribute, newPolicy), (FilterPolicyScopeAttribute, newScope)];
     }
 
     public async Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default)

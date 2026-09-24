@@ -166,6 +166,9 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         public Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public Task SetSubscriptionFilterPolicyAsync(string secret, string subscriptionArn, string? policyJson, string scope, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default)
             => throw new NotSupportedException();
 
