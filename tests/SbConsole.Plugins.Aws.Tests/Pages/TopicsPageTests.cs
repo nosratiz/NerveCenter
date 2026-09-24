@@ -151,6 +151,9 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         public Task DeleteTopicAsync(string secret, string topicArn, CancellationToken ct = default)
             => Task.CompletedTask;
 
+        public Task<IReadOnlyDictionary<string, string>> GetTopicAttributesAsync(string secret, string topicArn, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
             => throw new NotSupportedException();
 

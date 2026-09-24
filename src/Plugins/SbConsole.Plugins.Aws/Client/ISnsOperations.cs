@@ -12,6 +12,9 @@ public interface ISnsOperations
     /// <summary>Destructive.</summary>
     Task DeleteTopicAsync(string secret, string topicArn, CancellationToken ct = default);
 
+    /// <summary>Every attribute GetTopicAttributes returns for the topic, raw (Policy/DeliveryPolicy are JSON strings).</summary>
+    Task<IReadOnlyDictionary<string, string>> GetTopicAttributesAsync(string secret, string topicArn, CancellationToken ct = default);
+
     Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default);
     /// <summary>
     /// Every subscription (any topic) whose Endpoint equals <paramref name="endpoint"/> -- e.g. a

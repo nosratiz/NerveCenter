@@ -1,8 +1,11 @@
 @page "/p/aws/topics/{TopicArnEncoded}"
 @using SbConsole.Plugins.Aws.Client
+@using System.Text.Json
 @using SbConsole.Plugins.Aws.Subscriptions
+@using SbConsole.Plugins.Aws.Topics
 @using SbConsole.Sdk
 @inject ListSubscriptionsQueryHandler ListHandler
+@inject GetTopicAttributesQueryHandler AttributesHandler
 @inject SubscribeCommandHandler SubscribeHandler
 @inject UnsubscribeCommandHandler UnsubscribeHandler
 @inject IConnectionProvider Connections
@@ -71,7 +74,75 @@
         }
     </MudTabPanel>
     <MudTabPanel Text="Attributes">
-        <MudText Typo="Typo.caption" Style="font-family:monospace">@TopicArn</MudText>
+        @if (_attributesLoading)
+        {
+            <MudProgressCircular Class="attributes-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else if (_attributesError is not null)
+        {
+            @AttributesError
+        }
+        else
+        {
+            <MudSimpleTable Class="topic-summary-table mb-4" Dense="true">
+                <tbody>
+                    <tr><td class="attribute-name">ARN</td><td style="font-family:monospace;word-break:break-all">@(Attr("TopicArn") ?? TopicArn)</td></tr>
+                    <tr><td class="attribute-name">Display name</td><td>@(Attr("DisplayName") is { Length: > 0 } displayName ? displayName : "none")</td></tr>
+                    <tr><td class="attribute-name">Owner</td><td style="font-family:monospace">@(Attr("Owner") ?? "n/a")</td></tr>
+                    <tr><td class="attribute-name">FIFO</td><td>@YesNo(Attr("FifoTopic"))</td></tr>
+                    <tr><td class="attribute-name">Content-based dedup</td><td>@YesNo(Attr("ContentBasedDeduplication"))</td></tr>
+                    <tr><td class="attribute-name">KMS key</td><td style="font-family:monospace;word-break:break-all">@(Attr("KmsMasterKeyId") ?? "none")</td></tr>
+                    <tr><td class="attribute-name">Subscriptions confirmed</td><td class="subs-confirmed">@(Attr("SubscriptionsConfirmed") ?? "n/a")</td></tr>
+                    <tr><td class="attribute-name">Subscriptions pending</td><td class="subs-pending">@(Attr("SubscriptionsPending") ?? "n/a")</td></tr>
+                    <tr><td class="attribute-name">Subscriptions deleted</td><td class="subs-deleted">@(Attr("SubscriptionsDeleted") ?? "n/a")</td></tr>
+                </tbody>
+            </MudSimpleTable>
+
+            <MudText Typo="Typo.subtitle2" Class="mb-1">All other attributes</MudText>
+            <MudSimpleTable Class="attributes-table" Dense="true">
+                <tbody>
+                    @foreach (var entry in _attributes.Where(a => !SummaryKeys.Contains(a.Key)).OrderBy(a => a.Key, StringComparer.Ordinal))
+                    {
+                        <tr>
+                            <td class="attribute-name">@entry.Key</td>
+                            <td style="font-family:monospace;word-break:break-all">@entry.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudTabPanel>
+    <MudTabPanel Text="Access policy">
+        @if (_attributesLoading)
+        {
+            <MudProgressCircular Class="policy-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else if (_attributesError is not null)
+        {
+            @AttributesError
+        }
+        else
+        {
+            <MudText Typo="Typo.subtitle2" Class="mb-1">Access policy</MudText>
+            @if (Attr("Policy") is { Length: > 0 } policy)
+            {
+                @PolicyBlock(("topic-policy", policy))
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="topic-policy-none mud-text-secondary mb-4">No access policy set.</MudText>
+            }
+            @if (Attr("DeliveryPolicy") is { Length: > 0 } deliveryPolicy)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-1">Delivery policy</MudText>
+                @PolicyBlock(("topic-delivery-policy", deliveryPolicy))
+            }
+            @if (Attr("EffectiveDeliveryPolicy") is { Length: > 0 } effectiveDeliveryPolicy)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-1">Effective delivery policy</MudText>
+                @PolicyBlock(("topic-effective-delivery-policy", effectiveDeliveryPolicy))
+            }
+        }
     </MudTabPanel>
 </MudTabs>
 
@@ -81,6 +152,32 @@
 
     private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
     private bool _loading;
+    private IReadOnlyDictionary<string, string> _attributes = new Dictionary<string, string>();
+    private bool _attributesLoading;
+    private string? _attributesError;
+
+    // Shown in the summary table (or the Access policy tab), so left out of the raw table.
+    private static readonly HashSet<string> SummaryKeys = new(StringComparer.Ordinal)
+    {
+        "TopicArn", "DisplayName", "Owner", "FifoTopic", "ContentBasedDeduplication", "KmsMasterKeyId",
+        "SubscriptionsConfirmed", "SubscriptionsPending", "SubscriptionsDeleted",
+        "Policy", "DeliveryPolicy", "EffectiveDeliveryPolicy",
+    };
+
+    private RenderFragment AttributesError => __builder =>
+    {
+        <MudAlert Class="topic-attributes-error" Severity="Severity.Warning" Dense="true">
+            Couldn't load topic attributes: @_attributesError
+        </MudAlert>
+    };
+
+    // Read-only by design -- no policy editing (design doc §6.7 completion pass, Task 5).
+    private static RenderFragment PolicyBlock((string CssClass, string Json) policy) => __builder =>
+    {
+        <MudPaper Class="pa-3 mb-4" Outlined="true">
+            <pre class="@policy.CssClass" style="font-family:monospace;white-space:pre-wrap;word-break:break-all;margin:0">@FormatJson(policy.Json)</pre>
+        </MudPaper>
+    };
     private string _connectionName = "";
 
     private string TopicArn => Uri.UnescapeDataString(TopicArnEncoded);
@@ -90,6 +187,56 @@
     {
         _connectionName = (await Connections.ListAsync("aws")).FirstOrDefault(c => c.Id == ConnectionId)?.Name ?? "";
         await LoadAsync();
+        await LoadAttributesAsync();
+    }
+
+    private string? Attr(string key) => _attributes.TryGetValue(key, out var value) ? value : null;
+
+    private static string YesNo(string? value) => value is null ? "n/a" : string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ? "Yes" : "No";
+
+    // Pretty-prints JSON (indented); anything that isn't valid JSON is returned unchanged so the
+    // raw policy string is still visible. Internal static so it's unit-testable directly.
+    internal static string FormatJson(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return raw;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            return JsonSerializer.Serialize(document.RootElement, IndentedJson);
+        }
+        catch (JsonException)
+        {
+            return raw;
+        }
+    }
+
+    // Relaxed escaping keeps '+', '&', '\'' etc. readable instead of \u00XX -- safe here because
+    // Blazor HTML-encodes the rendered text anyway.
+    private static readonly JsonSerializerOptions IndentedJson = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    // Separate from the subscriptions load on purpose: a denied sns:GetTopicAttributes is an
+    // inline warning on the Attributes/Access policy tabs, never a page failure.
+    private async Task LoadAttributesAsync()
+    {
+        _attributesLoading = true;
+        try
+        {
+            var result = await AttributesHandler.HandleAsync(ConnectionId, TopicArn);
+            _attributes = result.IsSuccess ? result.Value! : new Dictionary<string, string>();
+            _attributesError = result.IsSuccess ? null : result.Error;
+        }
+        finally
+        {
+            _attributesLoading = false;
+        }
     }
 
     private async Task LoadAsync()

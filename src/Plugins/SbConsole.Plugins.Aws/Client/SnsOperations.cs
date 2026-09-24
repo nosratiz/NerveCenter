@@ -118,6 +118,13 @@ public sealed class SnsOperations : ISnsOperations
         await sns.DeleteTopicAsync(topicArn, ct);
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> GetTopicAttributesAsync(string secret, string topicArn, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        var response = await sns.GetTopicAttributesAsync(new GetTopicAttributesRequest { TopicArn = topicArn }, ct);
+        return new Dictionary<string, string>(response.Attributes ?? [], StringComparer.Ordinal);
+    }
+
     public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
     {
         using var sns = BuildSnsClient(secret);
