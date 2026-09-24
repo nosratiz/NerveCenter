@@ -47,7 +47,9 @@ public class AwsPluginTests
     {
         var plugin = new AwsPlugin();
 
-        var badge = await plugin.GetNavBadgeAsync("/p/aws/queues", "mode=default-chain;region=us-east-1");
+        // "/p/aws/topics", not "/p/aws/queues" -- the Queues href now reports a real DLQ badge (which
+        // would call SQS), so only an href with no badge is safe to exercise without AWS.
+        var badge = await plugin.GetNavBadgeAsync("/p/aws/topics", "mode=default-chain;region=us-east-1");
 
         badge.Should().BeNull();
     }
