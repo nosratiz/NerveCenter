@@ -79,7 +79,7 @@
                 <MudText Typo="Typo.subtitle2" Class="mt-2">Message attributes</MudText>
                 @foreach (var attribute in _selected.MessageAttributes)
                 {
-                    <div style="font-size:12px">@(attribute.Key) = @(attribute.Value)</div>
+                    <div class="message-attribute" style="font-size:12px">@(attribute.Key) (@(attribute.Value.DataType)) = @(attribute.Value.DisplayValue)</div>
                 }
             }
             <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Receipt handle — valid only while hidden. Delete needs this handle, not the message ID.</MudText>

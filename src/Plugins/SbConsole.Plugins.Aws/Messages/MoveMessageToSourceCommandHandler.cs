@@ -64,16 +64,18 @@ public sealed class MoveMessageToSourceCommandHandler(ISqsOperations operations,
     // ".fifo", and a DLQ and its sources are always the same type. FIFO needs a MessageGroupId (reuse
     // the original so per-group ordering is kept) and a dedup id (the original message id -- a
     // retried move within SQS's 5-minute dedup window can't double-enqueue). A standard queue gets
-    // neither. Body and message attributes are copied as-is; the delay is not (it already elapsed).
+    // neither. Body and message attributes are copied as-is -- each attribute keeps its DataType and
+    // String/Binary value (TypedMessageAttributes) -- and the delay is not (it already elapsed).
     internal static SendMessageRequest BuildResendRequest(ReceivedMessage message, string destinationQueueUrl)
     {
         var fifo = destinationQueueUrl.TrimEnd('/').EndsWith(".fifo", StringComparison.Ordinal);
         return new SendMessageRequest(
             message.Body,
-            message.MessageAttributes,
+            MessageAttributes: null,
             DelaySeconds: null,
             MessageGroupId: fifo ? message.MessageGroupId : null,
-            MessageDeduplicationId: fifo ? message.MessageId : null);
+            MessageDeduplicationId: fifo ? message.MessageId : null,
+            TypedMessageAttributes: message.MessageAttributes.Count > 0 ? message.MessageAttributes : null);
     }
 
     internal static string QueueNameFromUrl(string queueUrl)

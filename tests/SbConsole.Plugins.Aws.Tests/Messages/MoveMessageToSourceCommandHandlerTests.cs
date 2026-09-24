@@ -28,7 +28,7 @@ public class MoveMessageToSourceCommandHandlerTests
 
     private static ReceivedMessage Message(string? groupId = null) =>
         new("msg-1", "handle-1", "{\"orderId\":1}", 6, DateTimeOffset.UtcNow, "sender", "md5",
-            new Dictionary<string, string> { ["source"] = "checkout" }, groupId);
+            new Dictionary<string, SqsMessageAttribute> { ["source"] = new("String", "checkout", null) }, groupId);
 
     private MoveMessageToSourceCommand Command(ReceivedMessage message, string dlqUrl = DlqUrl, string sourceUrl = SourceUrl) =>
         new(_connectionId, "aws-dev", dlqUrl, "orders-dlq", sourceUrl, message);
@@ -43,7 +43,7 @@ public class MoveMessageToSourceCommandHandlerTests
         {
             _operations.SendMessageAsync(Secret, SourceUrl, Arg.Is<SendMessageRequest>(r =>
                 r.Body == "{\"orderId\":1}"
-                && r.MessageAttributes!["source"] == "checkout"
+                && r.TypedMessageAttributes!["source"].StringValue == "checkout"
                 && r.MessageGroupId == null
                 && r.MessageDeduplicationId == null
                 && r.DelaySeconds == null), Arg.Any<CancellationToken>());
@@ -138,4 +138,32 @@ public class MoveMessageToSourceCommandHandlerTests
     private static QueueDetails Detail(IReadOnlyList<string>? sources) =>
         new("orders-dlq", DlqUrl, "arn:aws:sqs:eu-west-1:123456789012:orders-dlq", false, false, 1, 0, 0, null, null,
             new Dictionary<string, string>(), null, null, sources);
+
+    [Fact]
+    public async Task Number_and_Binary_attributes_are_resent_with_their_original_types_and_values()
+    {
+        var message = Message() with
+        {
+            MessageAttributes = new Dictionary<string, SqsMessageAttribute>
+            {
+                ["count"] = new("Number", "3", null),
+                ["blob"] = new("Binary", null, [1, 2, 3]),
+            },
+        };
+
+        var request = MoveMessageToSourceCommandHandler.BuildResendRequest(message, SourceUrl);
+
+        request.MessageAttributes.Should().BeNull("the typed attributes are the only ones resent");
+        request.TypedMessageAttributes!["count"].Should().BeEquivalentTo(new SqsMessageAttribute("Number", "3", null));
+        request.TypedMessageAttributes["blob"].DataType.Should().Be("Binary");
+        request.TypedMessageAttributes["blob"].BinaryValue.Should().Equal(1, 2, 3);
+
+        var result = await Handler().HandleAsync(Command(message));
+
+        result.IsSuccess.Should().BeTrue();
+        await _operations.Received(1).SendMessageAsync(Secret, SourceUrl, Arg.Is<SendMessageRequest>(r =>
+            r.TypedMessageAttributes!["count"].DataType == "Number"
+            && r.TypedMessageAttributes["blob"].DataType == "Binary"
+            && r.TypedMessageAttributes["blob"].BinaryValue!.Length == 3), Arg.Any<CancellationToken>());
+    }
 }

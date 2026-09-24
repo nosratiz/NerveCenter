@@ -846,7 +846,7 @@ comes from the server-side `IConnectionProvider` lookup. **No SDK or schema chan
   several open `MoveToSourceDialog` to pick one; if the sources lookup fails the button is hidden and
   a caption says why. `MoveMessageToSourceCommandHandler` (`ActionRisk.Mutating`, audited
   `aws.message.move`) is **send-then-delete**: `SendMessage` to the source with the same body and
-  message attributes, then `DeleteMessage` on the DLQ with the receipt handle. A failed send deletes
+  message attributes (types and binary values preserved), then `DeleteMessage` on the DLQ with the receipt handle. A failed send deletes
   nothing; a failed delete after a successful send returns an explicit "copied … but is still in the
   DLQ — possible duplicate" error. FIFO-ness is read from the destination URL's `.fifo` suffix: FIFO
   resends reuse the original `MessageGroupId` (now carried on `ReceivedMessage`, from the
@@ -864,9 +864,12 @@ null/empty — check Kafka and match"; Kafka propagates, and the host depends on
 resolves sources via `ListDeadLetterSourceQueues`, not `ListQueuesAsync`. The detail page's query
 parameter is `?connectionId=` (the plan said `?connection=`), matching every other AWS page.
 
-**Known limitations**: Move to source loses **Binary** message attributes (`ReceivedMessage` keeps
-only `StringValue`, so a binary attribute is resent as an empty string) and resends **Number**
-attributes as `String` (`SendMessageAsync` always uses `DataType = "String"`). §6.7's prefix-filter
+**Known limitations**: *(The original "Move to source loses Binary attributes and resends Number as
+String" limitation is fixed: `ReceivedMessage.MessageAttributes` now keeps each attribute's
+`DataType`, `StringValue` and `BinaryValue` as an `SqsMessageAttribute`, and the resend passes them
+through unchanged via `SendMessageRequest.TypedMessageAttributes`; the Send dialog's plain string
+attributes still go out as `String`. Receive shows each attribute's type, and binary values as a
+byte count.)* §6.7's prefix-filter
 undercount is only partly addressed: `QueueDetail`, Receive's Move to source, and the dashboard hooks
 (unfiltered list) are correct, but `Queues.razor`'s DLQ chip and inline Redrive button still use
 `DeadLetterSourceCount` computed over the filtered list.

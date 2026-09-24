@@ -145,7 +145,8 @@ public class SqsOperationsTests
         received.SentTimestamp.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1700000000000));
         received.SenderId.Should().Be("AIDAEXAMPLE");
         received.Md5OfBody.Should().Be("abc123");
-        received.MessageAttributes.Should().Equal(new Dictionary<string, string> { ["source"] = "checkout" });
+        received.MessageAttributes.Should().ContainSingle();
+        received.MessageAttributes["source"].Should().BeEquivalentTo(new SqsMessageAttribute("String", "checkout", null));
         received.MessageGroupId.Should().BeNull("a standard-queue message carries no MessageGroupId attribute");
     }
 
@@ -311,5 +312,73 @@ public class SqsOperationsTests
 
         task.IsRunning.Should().Be(running);
         task.IsActive.Should().Be(active);
+    }
+
+    [Fact]
+    public void ToReceivedMessage_keeps_each_attribute_s_data_type_and_binary_value()
+    {
+        var message = new Amazon.SQS.Model.Message
+        {
+            MessageId = "msg-1",
+            ReceiptHandle = "handle-1",
+            Body = "{}",
+            MD5OfBody = "abc123",
+            Attributes = new Dictionary<string, string>(),
+            MessageAttributes = new Dictionary<string, Amazon.SQS.Model.MessageAttributeValue>
+            {
+                ["count"] = new() { DataType = "Number", StringValue = "3" },
+                ["price"] = new() { DataType = "Number.float", StringValue = "9.99" },
+                ["blob"] = new() { DataType = "Binary", BinaryValue = new MemoryStream([1, 2, 3]) },
+            },
+        };
+
+        var attributes = SqsOperations.ToReceivedMessage(message).MessageAttributes;
+
+        attributes["count"].Should().BeEquivalentTo(new SqsMessageAttribute("Number", "3", null));
+        attributes["price"].Should().BeEquivalentTo(new SqsMessageAttribute("Number.float", "9.99", null));
+        attributes["blob"].DataType.Should().Be("Binary");
+        attributes["blob"].StringValue.Should().BeNull();
+        attributes["blob"].BinaryValue.Should().Equal(1, 2, 3);
+        attributes["blob"].DisplayValue.Should().Be("(binary, 3 bytes)");
+        attributes["count"].DisplayValue.Should().Be("3");
+    }
+
+    [Fact]
+    public void ToSdkMessageAttributes_sends_plain_string_attributes_as_String()
+    {
+        var request = new SbConsole.Plugins.Aws.Client.SendMessageRequest("body", new Dictionary<string, string> { ["source"] = "checkout" }, null, null, null);
+
+        var sdk = SqsOperations.ToSdkMessageAttributes(request);
+
+        sdk.Should().ContainSingle();
+        sdk!["source"].DataType.Should().Be("String");
+        sdk["source"].StringValue.Should().Be("checkout");
+    }
+
+    [Fact]
+    public void ToSdkMessageAttributes_passes_typed_attributes_through_unchanged()
+    {
+        var typed = new Dictionary<string, SqsMessageAttribute>
+        {
+            ["count"] = new("Number", "3", null),
+            ["blob"] = new("Binary", null, [1, 2, 3]),
+            ["tag"] = new("String.custom", "x", null),
+        };
+        var request = new SbConsole.Plugins.Aws.Client.SendMessageRequest("body", null, null, null, null, typed);
+
+        var sdk = SqsOperations.ToSdkMessageAttributes(request)!;
+
+        sdk["count"].DataType.Should().Be("Number");
+        sdk["count"].StringValue.Should().Be("3");
+        sdk["blob"].DataType.Should().Be("Binary");
+        sdk["blob"].StringValue.Should().BeNull();
+        sdk["blob"].BinaryValue.ToArray().Should().Equal(1, 2, 3);
+        sdk["tag"].DataType.Should().Be("String.custom");
+    }
+
+    [Fact]
+    public void ToSdkMessageAttributes_is_null_when_there_are_none()
+    {
+        SqsOperations.ToSdkMessageAttributes(new SbConsole.Plugins.Aws.Client.SendMessageRequest("body", null, null, null, null)).Should().BeNull();
     }
 }

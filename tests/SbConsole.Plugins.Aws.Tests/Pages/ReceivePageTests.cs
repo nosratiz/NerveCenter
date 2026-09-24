@@ -62,7 +62,7 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
     }
 
     private static ReceivedMessage Message(string id, int receiveCount) =>
-        new(id, $"handle-{id}", $"body-{id}", receiveCount, DateTimeOffset.UtcNow, "sender", "md5", new Dictionary<string, string> { ["source"] = "checkout" });
+        new(id, $"handle-{id}", $"body-{id}", receiveCount, DateTimeOffset.UtcNow, "sender", "md5", new Dictionary<string, SqsMessageAttribute> { ["source"] = new("String", "checkout", null) });
 
     // Receive.razor's ConnectionId/QueueUrl/QueueName are all [SupplyParameterFromQuery] (they
     // arrive as real query-string values via Queues.razor's link) -- bUnit refuses
@@ -258,5 +258,24 @@ public class ReceivePageTests : BunitContext, IAsyncLifetime
 
         await _operations.DidNotReceiveWithAnyArgs().SendMessageAsync(default!, default!, default!, default);
         cut.FindAll(".message-row").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task The_detail_pane_shows_typed_and_binary_message_attributes()
+    {
+        var message = Message("m1", 1) with
+        {
+            MessageAttributes = new Dictionary<string, SqsMessageAttribute>
+            {
+                ["count"] = new("Number", "3", null),
+                ["blob"] = new("Binary", null, [1, 2, 3]),
+            },
+        };
+
+        var cut = await RenderAndReceiveAsync(message);
+
+        var attributes = cut.FindAll(".message-attribute").Select(e => e.TextContent.Trim()).ToList();
+        attributes.Should().Contain(a => a.Contains("count") && a.Contains("Number") && a.Contains('3'));
+        attributes.Should().Contain(a => a.Contains("blob") && a.Contains("(binary, 3 bytes)"));
     }
 }

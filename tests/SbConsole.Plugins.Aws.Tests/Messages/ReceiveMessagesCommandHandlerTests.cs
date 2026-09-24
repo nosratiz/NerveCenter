@@ -16,7 +16,7 @@ public class ReceiveMessagesCommandHandlerTests
         var connections = Substitute.For<IConnectionProvider>();
         connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("mode=default-chain;region=eu-west-1");
         var operations = Substitute.For<ISqsOperations>();
-        var received = new[] { new ReceivedMessage("m1", "h1", "body", 1, DateTimeOffset.UtcNow, "sender", "md5", new Dictionary<string, string>()) };
+        var received = new[] { new ReceivedMessage("m1", "h1", "body", 1, DateTimeOffset.UtcNow, "sender", "md5", new Dictionary<string, SqsMessageAttribute>()) };
         operations.ReceiveMessagesAsync("mode=default-chain;region=eu-west-1", "https://sqs/orders", 10, 30, 20, Arg.Any<CancellationToken>())
             .Returns(received);
         var audit = Substitute.For<IAuditScope>();

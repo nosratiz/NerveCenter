@@ -405,13 +405,47 @@ public sealed class SqsOperations : ISqsOperations
             ? DateTimeOffset.FromUnixTimeMilliseconds(sentMillis)
             : DateTimeOffset.MinValue;
         var senderId = attributes.GetValueOrDefault("SenderId", "");
-        var messageAttributes = message.MessageAttributes.ToDictionary(kv => kv.Key, kv => kv.Value.StringValue ?? "");
+        var messageAttributes = (message.MessageAttributes ?? []).ToDictionary(kv => kv.Key, kv => ToMessageAttribute(kv.Value));
         // Returned because ReceiveMessagesAsync requests MessageSystemAttributeName.All.
         var groupId = attributes.TryGetValue("MessageGroupId", out var group) ? group : null;
 
         return new ReceivedMessage(
             message.MessageId, message.ReceiptHandle, message.Body, receiveCount,
             sentTimestamp, senderId, message.MD5OfBody, messageAttributes, groupId);
+    }
+
+    // DataType, StringValue and BinaryValue are all kept -- flattening to StringValue would turn a
+    // Number into a String and a Binary into "" (which SQS then rejects on a resend).
+    internal static SqsMessageAttribute ToMessageAttribute(Amazon.SQS.Model.MessageAttributeValue value) =>
+        new(value.DataType ?? "String", value.StringValue, value.BinaryValue?.ToArray());
+
+    // Pure mapping for SendMessageAsync: plain string attributes go out as DataType "String"; typed
+    // ones are passed through unchanged (a typed entry wins over a plain one with the same key).
+    // Null when there are none, so the request is left exactly as it was without attributes.
+    internal static Dictionary<string, Amazon.SQS.Model.MessageAttributeValue>? ToSdkMessageAttributes(SendMessageRequest request)
+    {
+        var result = new Dictionary<string, Amazon.SQS.Model.MessageAttributeValue>(StringComparer.Ordinal);
+        foreach (var (key, value) in request.MessageAttributes ?? new Dictionary<string, string>())
+        {
+            result[key] = new Amazon.SQS.Model.MessageAttributeValue { DataType = "String", StringValue = value };
+        }
+
+        foreach (var (key, attribute) in request.TypedMessageAttributes ?? new Dictionary<string, SqsMessageAttribute>())
+        {
+            var sdkValue = new Amazon.SQS.Model.MessageAttributeValue { DataType = attribute.DataType };
+            if (attribute.BinaryValue is { } bytes)
+            {
+                sdkValue.BinaryValue = new MemoryStream(bytes, writable: false);
+            }
+            else
+            {
+                sdkValue.StringValue = attribute.StringValue;
+            }
+
+            result[key] = sdkValue;
+        }
+
+        return result.Count > 0 ? result : null;
     }
 
     public async Task DeleteMessageAsync(string secret, string queueUrl, string receiptHandle, CancellationToken ct = default)
@@ -435,11 +469,9 @@ public sealed class SqsOperations : ISqsOperations
             sqsRequest.DelaySeconds = delay;
         }
 
-        if (request.MessageAttributes is { Count: > 0 } attributes)
+        if (ToSdkMessageAttributes(request) is { } attributes)
         {
-            sqsRequest.MessageAttributes = attributes.ToDictionary(
-                kv => kv.Key,
-                kv => new Amazon.SQS.Model.MessageAttributeValue { DataType = "String", StringValue = kv.Value });
+            sqsRequest.MessageAttributes = attributes;
         }
 
         if (request.MessageGroupId is { } groupId)
