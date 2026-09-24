@@ -1,4 +1,6 @@
 @page "/p/aws/queues"
+@using System.Globalization
+@using Microsoft.Extensions.Logging
 @using SbConsole.Plugins.Aws.Client
 @using SbConsole.Plugins.Aws.Queues
 @using SbConsole.Sdk
@@ -9,6 +11,9 @@
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject TimeProvider Clock
+@inject ILogger<Queues> Logger
+@implements IDisposable
 
 <PageTitle>Queues</PageTitle>
 <h1>Queues</h1>
@@ -48,6 +53,16 @@ else
            plus explicit ValueChanged still keeps the field in sync. *@
         <MudTextField T="string" Class="prefix-filter" Label="Starts with" Value="_namePrefix" Immediate="true" DebounceInterval="300" ValueChanged="OnPrefixChanged" Style="max-width:200px" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
 
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Auto-refresh</MudText>
+            <MudButtonGroup Class="auto-refresh-picker" Variant="Variant.Outlined" Size="Size.Small">
+                @foreach (var seconds in AutoRefreshChoices)
+                {
+                    <MudButton Class="@(seconds == 0 ? "auto-refresh-off" : $"auto-refresh-{seconds}")" Variant="@(seconds == AutoRefreshSeconds ? Variant.Filled : Variant.Outlined)" OnClick="@(() => SetAutoRefreshAsync(seconds))">@AutoRefreshLabel(seconds)</MudButton>
+                }
+            </MudButtonGroup>
+        </div>
+
         <MudSpacer />
         <MudButton Class="create-queue-action" Color="Color.Primary" Variant="Variant.Outlined" OnClick="OpenCreate">+ Create queue</MudButton>
         @if (_loading)
@@ -57,7 +72,13 @@ else
     </div>
 
     <MudText Typo="Typo.caption" Class="connection-echo mud-text-secondary">@_connectionEcho</MudText>
-    <MudText Class="queues-summary mud-text-secondary mt-1" Typo="Typo.body2">@_queues.Count @(_queues.Count == 1 ? "queue" : "queues")</MudText>
+    <div class="d-flex align-baseline gap-3 mt-1">
+        <MudText Class="queues-summary mud-text-secondary" Typo="Typo.body2">@_queues.Count @(_queues.Count == 1 ? "queue" : "queues")</MudText>
+        @if (_countsReadAt is { } readAt)
+        {
+            <MudText Typo="Typo.caption" Class="counts-read-caption mud-text-secondary">counts read @readAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture)</MudText>
+        }
+    </div>
     <MudText Typo="Typo.caption" Class="refresh-cost-caption mud-text-secondary mb-2">
         <span style="font-family:monospace">ListQueues</span> filters by prefix only — no substring or regex.
         Each refresh is 1 + @_queues.Count = @(1 + _queues.Count) calls.
@@ -70,6 +91,7 @@ else
             <MudTh Style="text-align:right">~Visible</MudTh>
             <MudTh Style="text-align:right">~In flight</MudTh>
             <MudTh Style="text-align:right">~Delayed</MudTh>
+            <MudTh>Created</MudTh>
             <MudTh>Flags</MudTh>
             <MudTh>Actions</MudTh>
         </HeaderContent>
@@ -79,6 +101,7 @@ else
             <MudTd Class="approx-visible" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxVisible}")</MudTd>
             <MudTd Class="approx-in-flight" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxInFlight}")</MudTd>
             <MudTd Class="approx-delayed" Style="text-align:right;font-family:monospace">@(context.AttributesUnavailable ? "—" : $"~{context.ApproxDelayed}")</MudTd>
+            <MudTd Class="queue-created" Style="font-family:monospace">@(context.AttributesUnavailable ? "—" : context.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))</MudTd>
             <MudTd>
                 @if (context.DeadLetterSourceCount > 0)
                 {
@@ -100,8 +123,12 @@ else
                 {
                     <MudButton Class="redrive-action" OnClick="@(() => OpenRedrive(context.QueueUrl, context.QueueArn))">Redrive</MudButton>
                 }
-                <MudButton Class="purge-queue-action" Color="Color.Warning" OnClick="@(() => OpenPurge(context.QueueUrl))">Purge</MudButton>
-                <MudButton Class="delete-queue" Color="Color.Error" Disabled="@(_deletingQueue == context.QueueUrl)" OnClick="@(() => DeleteAsync(context.QueueUrl, context.Name))">Delete</MudButton>
+                @* Destructive actions sit behind a per-row overflow menu so they're never one stray
+                   click away; the confirmation flows behind them are unchanged. *@
+                <MudMenu Class="queue-row-menu" Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AriaLabel="More actions" Disabled="@(_deletingQueue == context.QueueUrl)">
+                    <MudMenuItem Class="purge-queue-action" OnClick="@(() => OpenPurge(context.QueueUrl))">Purge</MudMenuItem>
+                    <MudMenuItem Class="delete-queue" OnClick="@(() => DeleteAsync(context.QueueUrl, context.Name))">Delete</MudMenuItem>
+                </MudMenu>
                 @if (_deletingQueue == context.QueueUrl)
                 {
                     <MudProgressCircular Class="delete-queue-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
@@ -119,6 +146,23 @@ else
     private string? _deletingQueue;
     private string _namePrefix = "";
     private string _connectionEcho = "";
+    private DateTimeOffset? _countsReadAt;
+    private CancellationTokenSource? _refreshCts;
+    private bool _disposed;
+
+    private const string AutoRefreshKey = "queues.autoRefreshSeconds";
+    private static readonly int[] AutoRefreshChoices = [0, 15, 30, 60];
+
+    // Blazor's keyed property injection (InjectAttribute.Key) -- FromKeyedServicesAttribute is
+    // parameter-only. Same "aws" key AddSbConsolePlugin<TPlugin>() registers IPluginStore under.
+    [Inject(Key = "aws")]
+    private IPluginStore Store { get; set; } = default!;
+
+    // Exposed for tests: the chosen interval (0 = Off) and whether the refresh loop is alive.
+    internal int AutoRefreshSeconds { get; private set; }
+    internal bool IsAutoRefreshing => _refreshCts is not null;
+
+    private static string AutoRefreshLabel(int seconds) => seconds == 0 ? "Off" : $"{seconds}s";
 
     private ConnectionInfo? SelectedConnection => _connections.FirstOrDefault(c => c.Id == _selectedConnectionId);
 
@@ -130,7 +174,107 @@ else
             _selectedConnectionId = _connections[0].Id;
             await LoadQueuesAsync();
             await LoadEchoAsync();
+            AutoRefreshSeconds = await ReadAutoRefreshSecondsAsync();
+            RestartAutoRefresh();
         }
+    }
+
+    // A missing, unrecognised, or unreadable stored value all mean Off -- the picker is a
+    // convenience and must never break the page.
+    private async Task<int> ReadAutoRefreshSecondsAsync()
+    {
+        try
+        {
+            var stored = await Store.GetAsync(AutoRefreshKey);
+            return int.TryParse(stored, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && AutoRefreshChoices.Contains(seconds)
+                ? seconds
+                : 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Reading the queues auto-refresh setting failed; defaulting to Off.");
+            return 0;
+        }
+    }
+
+    private async Task SetAutoRefreshAsync(int seconds)
+    {
+        AutoRefreshSeconds = seconds;
+        RestartAutoRefresh();
+        try
+        {
+            await Store.SetAsync(AutoRefreshKey, seconds.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            // The choice still applies for this visit; it just won't be remembered.
+            Logger.LogWarning(ex, "Persisting the queues auto-refresh setting failed.");
+        }
+    }
+
+    // One refresh step, called by the loop below every interval -- and directly by tests instead of
+    // waiting on the real delay (same shape as QueueDetail.PollRedriveTasksAsync). Returns whether it
+    // actually reloaded: a tick that lands while a load is in flight is skipped, never overlapped.
+    internal async Task<bool> AutoRefreshTickAsync()
+    {
+        if (_loading)
+        {
+            return false;
+        }
+
+        await LoadQueuesAsync();
+        StateHasChanged();
+        return true;
+    }
+
+    private void RestartAutoRefresh()
+    {
+        StopAutoRefresh();
+        if (_disposed || AutoRefreshSeconds == 0)
+        {
+            return;
+        }
+
+        _refreshCts = new CancellationTokenSource();
+        _ = AutoRefreshLoopAsync(TimeSpan.FromSeconds(AutoRefreshSeconds), _refreshCts.Token);
+    }
+
+    private async Task AutoRefreshLoopAsync(TimeSpan interval, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(interval, ct);
+                await InvokeAsync(async () => await AutoRefreshTickAsync());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped: interval changed, turned Off, or the page was disposed.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Auto-refreshing the queues list failed; stopping auto-refresh.");
+        }
+    }
+
+    // Cancel then dispose, like QueueDetail.StopPolling: the loop only observes the token in
+    // Task.Delay and its while-condition, and a cancelled token stays readable after disposal.
+    private void StopAutoRefresh()
+    {
+        if (_refreshCts is { } cts)
+        {
+            _refreshCts = null;
+            cts.Cancel();
+            cts.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        StopAutoRefresh();
     }
 
     private async Task OnConnectionChanged(Guid connectionId)
@@ -156,6 +300,7 @@ else
             if (result.IsSuccess)
             {
                 _queues = result.Value!;
+                _countsReadAt = TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
             }
             else
             {

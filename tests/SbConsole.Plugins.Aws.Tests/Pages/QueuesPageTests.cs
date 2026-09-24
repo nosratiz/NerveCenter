@@ -1,5 +1,6 @@
 using Bunit;
 using FluentAssertions;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor;
 using MudBlazor.Services;
@@ -20,6 +21,9 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     private readonly Guid _connectionId = Guid.NewGuid();
     private readonly ConnectionInfo _connectionInfo;
     private readonly IDialogService _dialogService = Substitute.For<IDialogService>();
+    private readonly IPluginStore _store = Substitute.For<IPluginStore>();
+    private readonly MutableClock _clock = new(new DateTimeOffset(2026, 9, 24, 14, 3, 7, TimeSpan.Zero));
+    private const string Secret = "mode=default-chain;region=eu-west-1";
 
     public QueuesPageTests()
     {
@@ -41,6 +45,39 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<PurgeQueueCommandHandler>();
         Services.AddSingleton<SbConsole.Plugins.Aws.Messages.SendMessageCommandHandler>();
         Services.AddSingleton<SbConsole.Plugins.Aws.Redrive.StartRedriveCommandHandler>();
+        Services.AddKeyedSingleton<IPluginStore>("aws", _store);
+        Services.AddSingleton<TimeProvider>(_clock);
+    }
+
+    // Deterministic "now" in a UTC local zone, so the "counts read HH:mm:ss" caption is stable.
+    private sealed class MutableClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    }
+
+    // The row overflow MudMenu's items render into <MudPopoverProvider/> (hosted once by the real
+    // app's layout), so menu tests render one alongside the page -- same pattern as
+    // SbConsole.Web.Tests/ConnectionsPageTests.RenderPage.
+    private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderWithPopovers()
+    {
+        RenderFragment fragment = builder =>
+        {
+            builder.OpenComponent<MudPopoverProvider>(0);
+            builder.CloseComponent();
+            builder.OpenComponent<SbConsole.Plugins.Aws.Pages.Queues>(1);
+            builder.CloseComponent();
+        };
+
+        return Render(fragment);
+    }
+
+    private async Task OpenRowMenuAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.Find(".queue-row-menu button").ClickAsync(new());
+        await Task.Delay(30);
+        cut.Render();
     }
 
     private static QueueSummary Queue(string name, int deadLetterSourceCount = 0, bool isFifo = false) =>
@@ -215,10 +252,12 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         var confirmation = Services.GetRequiredService<IConfirmationService>();
         confirmation.ConfirmAsync("Delete", "order-events", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>()).Returns(true);
 
-        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        var cut = RenderWithPopovers();
         await Task.Delay(30);
         cut.Render();
-        cut.Find("button.delete-queue").Click();
+        cut.FindAll(".delete-queue").Should().BeEmpty("Delete lives in the row overflow menu, not inline");
+        await OpenRowMenuAsync(cut);
+        await cut.Find(".delete-queue").ClickAsync(new());
         await Task.Delay(30);
 
         await confirmation.Received(1).ConfirmAsync("Delete", "order-events", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>());
@@ -238,5 +277,183 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         link.TextContent.Should().Contain("order-events");
         link.GetAttribute("href").Should().Be(
             $"/p/aws/queues/{Uri.EscapeDataString("https://sqs/order-events")}?connectionId={_connectionId}");
+    }
+
+    [Fact]
+    public async Task Purge_lives_in_the_row_overflow_menu_and_goes_through_confirmation()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+        var confirmation = Services.GetRequiredService<IConfirmationService>();
+
+        var cut = RenderWithPopovers();
+        await Task.Delay(30);
+        cut.Render();
+        cut.FindAll(".purge-queue-action").Should().BeEmpty("Purge lives in the row overflow menu, not inline");
+        await OpenRowMenuAsync(cut);
+        await cut.Find(".purge-queue-action").ClickAsync(new());
+        await Task.Delay(30);
+
+        await confirmation.Received(1).ConfirmAsync("Purge", "order-events", _connectionInfo.IsProd, 10, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Created_column_shows_the_creation_date_and_a_dash_for_unavailable_rows()
+    {
+        var created = new DateTimeOffset(2025, 3, 14, 9, 30, 0, TimeSpan.Zero);
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary>
+            {
+                Queue("healthy-queue") with { CreatedAt = created },
+                QueueSummary.Unavailable("throttled-queue", "https://sqs/throttled-queue"),
+            });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("Created");
+        cut.FindAll(".queue-created").Select(e => e.TextContent.Trim()).Should().Equal("2025-03-14", "—");
+    }
+
+    [Fact]
+    public async Task A_counts_read_caption_shows_the_local_time_of_the_last_load()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:07");
+    }
+
+    [Fact]
+    public async Task Auto_refresh_defaults_to_Off_when_nothing_is_stored()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+
+        cut.Instance.AutoRefreshSeconds.Should().Be(0);
+        cut.Instance.IsAutoRefreshing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Choosing_an_auto_refresh_interval_persists_it_and_starts_the_timer()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        await cut.Find("button.auto-refresh-30").ClickAsync(new());
+
+        await _store.Received(1).SetAsync("queues.autoRefreshSeconds", "30", Arg.Any<CancellationToken>());
+        cut.Instance.AutoRefreshSeconds.Should().Be(30);
+        cut.Instance.IsAutoRefreshing.Should().BeTrue();
+
+        await cut.Find("button.auto-refresh-off").ClickAsync(new());
+
+        await _store.Received(1).SetAsync("queues.autoRefreshSeconds", "0", Arg.Any<CancellationToken>());
+        cut.Instance.IsAutoRefreshing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_stored_auto_refresh_interval_is_restored_on_load()
+    {
+        _store.GetAsync("queues.autoRefreshSeconds", Arg.Any<CancellationToken>()).Returns("15");
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+
+        cut.Instance.AutoRefreshSeconds.Should().Be(15);
+        cut.Instance.IsAutoRefreshing.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("7")]
+    [InlineData("not-a-number")]
+    public async Task An_unrecognised_stored_interval_falls_back_to_Off(string stored)
+    {
+        _store.GetAsync("queues.autoRefreshSeconds", Arg.Any<CancellationToken>()).Returns(stored);
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+
+        cut.Instance.AutoRefreshSeconds.Should().Be(0);
+        cut.Instance.IsAutoRefreshing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_store_read_failure_falls_back_to_Off_and_still_lists_queues()
+    {
+        _store.GetAsync("queues.autoRefreshSeconds", Arg.Any<CancellationToken>())
+            .Returns<Task<string?>>(_ => throw new InvalidOperationException("db locked"));
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Instance.AutoRefreshSeconds.Should().Be(0);
+        cut.Markup.Should().Contain("order-events");
+    }
+
+    [Fact]
+    public async Task A_refresh_tick_reloads_the_queues_and_updates_the_caption()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        _operations.ClearReceivedCalls();
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events"), Queue("billing") });
+        _clock.Now = _clock.Now.AddSeconds(30);
+
+        var refreshed = await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+
+        refreshed.Should().BeTrue();
+        await _operations.Received(1).ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>());
+        cut.Markup.Should().Contain("billing");
+        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:37");
+    }
+
+    [Fact]
+    public async Task A_refresh_tick_never_overlaps_an_in_flight_load()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        var pending = new TaskCompletionSource<IReadOnlyList<QueueSummary>>();
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(pending.Task);
+        _operations.ClearReceivedCalls();
+
+        var first = cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+        var second = await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+
+        second.Should().BeFalse("a tick that lands mid-load is skipped");
+        await _operations.Received(1).ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>());
+        pending.SetResult([]);
+        (await first).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Disposing_the_page_stops_the_auto_refresh_timer()
+    {
+        _store.GetAsync("queues.autoRefreshSeconds", Arg.Any<CancellationToken>()).Returns("60");
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(new List<QueueSummary>());
+        var page = Render<SbConsole.Plugins.Aws.Pages.Queues>().Instance;
+        await Task.Delay(30);
+        page.IsAutoRefreshing.Should().BeTrue();
+
+        await DisposeComponentsAsync();
+
+        page.IsAutoRefreshing.Should().BeFalse();
     }
 }
