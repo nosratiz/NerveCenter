@@ -230,4 +230,55 @@ public class SqsOperationsTests
         detail.IsDeadLetterQueue.Should().BeFalse();
         detail.RedrivePolicy.Should().BeNull();
     }
+
+    [Fact]
+    public void ToMessageMoveTaskSummary_maps_a_running_task_with_epoch_millis_start()
+    {
+        var entry = new ListMessageMoveTasksResultEntry
+        {
+            TaskHandle = "handle-1",
+            Status = "RUNNING",
+            SourceArn = "arn:aws:sqs:eu-west-1:123456789012:orders-dlq",
+            DestinationArn = "arn:aws:sqs:eu-west-1:123456789012:orders",
+            ApproximateNumberOfMessagesMoved = 25,
+            ApproximateNumberOfMessagesToMove = 100,
+            StartedTimestamp = 1700000000123,
+        };
+
+        var task = SqsOperations.ToMessageMoveTaskSummary(entry);
+
+        task.TaskHandle.Should().Be("handle-1");
+        task.Status.Should().Be("RUNNING");
+        task.IsRunning.Should().BeTrue();
+        task.SourceArn.Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders-dlq");
+        task.DestinationArn.Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders");
+        task.MessagesMoved.Should().Be(25);
+        task.MessagesToMove.Should().Be(100);
+        task.ProgressPercent.Should().Be(25);
+        task.FailureReason.Should().BeNull();
+        task.StartedAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1700000000123));
+    }
+
+    [Fact]
+    public void ToMessageMoveTaskSummary_treats_unset_fields_as_unknown()
+    {
+        // AWSSDK.SQS 3.7 exposes these as non-nullable longs/strings, so an absent value arrives as
+        // 0/null: TaskHandle is only returned for RUNNING tasks, and ToMove only while running.
+        var entry = new ListMessageMoveTasksResultEntry
+        {
+            Status = "FAILED",
+            SourceArn = "arn:aws:sqs:eu-west-1:123456789012:orders-dlq",
+            FailureReason = "AWS.SimpleQueueService.NonExistentQueue",
+        };
+
+        var task = SqsOperations.ToMessageMoveTaskSummary(entry);
+
+        task.TaskHandle.Should().BeNull();
+        task.IsRunning.Should().BeFalse();
+        task.DestinationArn.Should().BeNull();
+        task.MessagesToMove.Should().BeNull();
+        task.ProgressPercent.Should().BeNull();
+        task.StartedAt.Should().BeNull();
+        task.FailureReason.Should().Be("AWS.SimpleQueueService.NonExistentQueue");
+    }
 }

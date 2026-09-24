@@ -2,18 +2,24 @@
 @using System.Globalization
 @using SbConsole.Plugins.Aws.Client
 @using SbConsole.Plugins.Aws.Queues
+@using SbConsole.Plugins.Aws.Redrive
 @using SbConsole.Plugins.Aws.Subscriptions
 @using SbConsole.Sdk
 @using Microsoft.JSInterop
+@using Microsoft.Extensions.Logging
 @inject GetQueueDetailQueryHandler DetailHandler
 @inject ListQueueSnsSubscriptionsQueryHandler SnsHandler
 @inject DeleteQueueCommandHandler DeleteHandler
+@inject ListRedriveTasksQueryHandler RedriveTasksHandler
+@inject CancelRedriveCommandHandler CancelRedriveHandler
 @inject IConnectionProvider Connections
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject ILogger<QueueDetail> Logger
+@implements IDisposable
 
 <PageTitle>@QueueName</PageTitle>
 <div class="d-flex align-center gap-2 mb-2">
@@ -48,6 +54,10 @@ else
         <MudSpacer />
         <MudButton Class="receive-action" Href="@ReceiveUrl">Receive</MudButton>
         <MudButton Class="send-message-action" OnClick="OpenSend">Send</MudButton>
+        @if (_detail.IsDeadLetterQueue)
+        {
+            <MudButton Class="redrive-action" OnClick="OpenRedrive">Redrive</MudButton>
+        }
         <MudButton Class="purge-queue-action" Color="Color.Warning" OnClick="OpenPurge">Purge</MudButton>
         <MudButton Class="delete-queue" Color="Color.Error" Disabled="_deleting" OnClick="DeleteAsync">Delete</MudButton>
         @if (_deleting)
@@ -149,6 +159,53 @@ else
         </MudItem>
     </MudGrid>
 
+    @if (_detail.IsDeadLetterQueue)
+    {
+        <MudPaper Class="redrive-tasks pa-3 mb-4" Outlined="true">
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Redrive tasks</MudText>
+            @if (_redriveTasksError is not null)
+            {
+                <MudAlert Class="redrive-tasks-error mb-2" Severity="Severity.Warning" Dense="true">
+                    Couldn't list redrive tasks: @_redriveTasksError
+                </MudAlert>
+            }
+            @if (_redriveTasks.Count == 0)
+            {
+                @if (_redriveTasksError is null)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">No redrive tasks started from this queue recently.</MudText>
+                }
+            }
+            @foreach (var task in _redriveTasks)
+            {
+                <div class="redrive-task mb-3">
+                    <div class="d-flex align-center flex-wrap gap-2">
+                        <MudChip T="string" Size="Size.Small" Color="@StatusColor(task.Status)">@task.Status</MudChip>
+                        <MudText Typo="Typo.body2">
+                            to <span style="font-family:monospace">@(task.DestinationArn is { } destination ? NameFromArn(destination) : "original source queues")</span>
+                        </MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">started @FormatTimestamp(task.StartedAt)</MudText>
+                        <MudSpacer />
+                        @if (task.IsRunning && task.TaskHandle is { } handle)
+                        {
+                            <MudButton Class="cancel-redrive" Size="Size.Small" Color="Color.Warning" Disabled="@(_cancellingHandle == handle)" OnClick="@(() => CancelRedriveAsync(handle))">Cancel</MudButton>
+                        }
+                    </div>
+                    <MudProgressLinear Class="redrive-task-progress my-1" Color="@StatusColor(task.Status)"
+                                       Indeterminate="@(task.IsRunning && task.ProgressPercent is null)"
+                                       Value="@(task.ProgressPercent ?? 0)" />
+                    <MudText Typo="Typo.caption" Style="font-family:monospace">
+                        @task.MessagesMoved.ToString("N0", CultureInfo.InvariantCulture) / @(task.MessagesToMove?.ToString("N0", CultureInfo.InvariantCulture) ?? "?") moved
+                    </MudText>
+                    @if (task.FailureReason is { } reason)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block">@reason</MudText>
+                    }
+                </div>
+            }
+        </MudPaper>
+    }
+
     <MudText Typo="Typo.subtitle2" Class="mb-1">Attributes</MudText>
     <MudSimpleTable Class="attributes-table mb-4" Dense="true">
         <tbody>
@@ -201,6 +258,17 @@ else
     private string? _snsError;
     private bool _deleting;
     private ConnectionInfo? _connection;
+    private IReadOnlyList<MessageMoveTaskSummary> _redriveTasks = [];
+    private string? _redriveTasksError;
+    private bool _refreshingRedriveTasks;
+    private string? _cancellingHandle;
+    private CancellationTokenSource? _pollCts;
+    private bool _disposed;
+
+    private static readonly TimeSpan RedrivePollInterval = TimeSpan.FromSeconds(5);
+
+    // Exposed for tests: whether the 5s redrive-progress poll loop is currently alive.
+    internal bool IsPolling => _pollCts is not null;
 
     private string QueueUrl => Uri.UnescapeDataString(QueueUrlEncoded);
     private string QueueName => SqsOperations.QueueNameFromUrl(QueueUrl);
@@ -222,6 +290,8 @@ else
         await LoadAsync();
     }
 
+    // _loading spans the whole reload (not just the detail call) so a poll tick that lands while any
+    // part of it is in flight is skipped rather than overlapping it -- see PollRedriveTasksAsync.
     private async Task LoadAsync()
     {
         _loading = true;
@@ -238,15 +308,195 @@ else
                 _detail = null;
                 _error = result.Error;
             }
+
+            if (_detail is { QueueArn.Length: > 0 })
+            {
+                await LoadSubscriptionsAsync(_detail.QueueArn);
+            }
+
+            await LoadRedriveTasksAsync();
         }
         finally
         {
             _loading = false;
         }
+    }
 
-        if (_detail is { QueueArn.Length: > 0 })
+    // DLQs only: ListMessageMoveTasks requires SourceArn to be a redrive target. A failure is an
+    // inline warning in the panel (keeping the last-known tasks), never a page failure.
+    private async Task LoadRedriveTasksAsync()
+    {
+        if (_detail is not { IsDeadLetterQueue: true, QueueArn.Length: > 0 } detail)
         {
-            await LoadSubscriptionsAsync(_detail.QueueArn);
+            _redriveTasks = [];
+            _redriveTasksError = null;
+            UpdatePolling();
+            return;
+        }
+
+        if (_refreshingRedriveTasks)
+        {
+            return;
+        }
+
+        _refreshingRedriveTasks = true;
+        try
+        {
+            var result = await RedriveTasksHandler.HandleAsync(ConnectionId, detail.QueueArn);
+            if (result.IsSuccess)
+            {
+                _redriveTasks = result.Value!;
+                _redriveTasksError = null;
+            }
+            else
+            {
+                _redriveTasksError = result.Error;
+            }
+        }
+        finally
+        {
+            _refreshingRedriveTasks = false;
+        }
+
+        UpdatePolling();
+    }
+
+    // One poll step, called by the loop below every 5s -- and directly by tests instead of waiting
+    // on the real delay (NavMenu precedent, docs/design.md §8). Returns whether polling should
+    // continue. A tick that lands while a load/refresh is in flight is skipped, never overlapped.
+    internal async Task<bool> PollRedriveTasksAsync()
+    {
+        if (!_redriveTasks.Any(t => t.IsRunning))
+        {
+            return false;
+        }
+
+        if (_loading || _refreshingRedriveTasks)
+        {
+            return true;
+        }
+
+        await LoadRedriveTasksAsync();
+        StateHasChanged();
+        return _redriveTasks.Any(t => t.IsRunning);
+    }
+
+    // Starts the poll loop when a task is RUNNING and none is alive; stops it once nothing is.
+    private void UpdatePolling()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_redriveTasks.Any(t => t.IsRunning))
+        {
+            if (_pollCts is null)
+            {
+                _pollCts = new CancellationTokenSource();
+                _ = PollLoopAsync(_pollCts.Token);
+            }
+        }
+        else
+        {
+            StopPolling();
+        }
+    }
+
+    private async Task PollLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(RedrivePollInterval, ct);
+                await InvokeAsync(async () => await PollRedriveTasksAsync());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped: nothing RUNNING any more, or the page was disposed.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Polling redrive tasks for {QueueUrl} failed; stopping the poll.", QueueUrl);
+        }
+    }
+
+    // Cancel then dispose, like NavMenu.Dispose: the loop only observes the token in Task.Delay and
+    // its while-condition, and a cancelled token stays readable after its source is disposed.
+    private void StopPolling()
+    {
+        if (_pollCts is { } cts)
+        {
+            _pollCts = null;
+            cts.Cancel();
+            cts.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        StopPolling();
+    }
+
+    private static string NameFromArn(string arn) => arn[(arn.LastIndexOf(':') + 1)..];
+
+    private static Color StatusColor(string status) => status switch
+    {
+        MessageMoveTaskSummary.RunningStatus => Color.Info,
+        "COMPLETED" => Color.Success,
+        "FAILED" => Color.Error,
+        _ => Color.Default,
+    };
+
+    private async Task CancelRedriveAsync(string taskHandle)
+    {
+        _cancellingHandle = taskHandle;
+        try
+        {
+            var result = await CancelRedriveHandler.HandleAsync(new CancelRedriveCommand(ConnectionId, ConnectionName, taskHandle, QueueName));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add("Redrive cancelled. Messages already moved stay moved.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _cancellingHandle = null;
+        }
+
+        await LoadRedriveTasksAsync();
+    }
+
+    // Mirrors Queues.razor's OpenRedrive: confirmation with IsProd from the server-side connection
+    // lookup, then RedriveDialog; a started task shows up in the panel (and starts the poll) on reload.
+    private async Task OpenRedrive()
+    {
+        var detail = _detail!;
+        var confirmed = await Confirmation.ConfirmAsync("Redrive", detail.Name, IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<RedriveDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, ConnectionName },
+            { x => x.SourceQueueArn, detail.QueueArn },
+            { x => x.SourceQueueName, detail.Name },
+        };
+        var dialog = await DialogService.ShowAsync<RedriveDialog>("Redrive from DLQ", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
         }
     }
 

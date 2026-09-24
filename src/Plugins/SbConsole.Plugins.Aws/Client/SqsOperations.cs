@@ -469,4 +469,35 @@ public sealed class SqsOperations : ISqsOperations
         var response = await sqs.StartMessageMoveTaskAsync(request, ct);
         return response.TaskHandle;
     }
+
+    // MaxResults is AWS's documented maximum (default 1) -- enough history to show the task that
+    // just finished next to one that's still running.
+    private const int MaxMoveTasks = 10;
+
+    public async Task<IReadOnlyList<MessageMoveTaskSummary>> ListMessageMoveTasksAsync(string secret, string sourceQueueArn, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var response = await sqs.ListMessageMoveTasksAsync(
+            new Amazon.SQS.Model.ListMessageMoveTasksRequest { SourceArn = sourceQueueArn, MaxResults = MaxMoveTasks }, ct);
+        return (response.Results ?? []).Select(ToMessageMoveTaskSummary).ToList();
+    }
+
+    public async Task CancelMessageMoveTaskAsync(string secret, string taskHandle, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        await sqs.CancelMessageMoveTaskAsync(new Amazon.SQS.Model.CancelMessageMoveTaskRequest { TaskHandle = taskHandle }, ct);
+    }
+
+    // Pure mapping, unit-testable without AWS (same as ToReceivedMessage). AWSSDK.SQS 3.7.400 models
+    // the counts and StartedTimestamp as non-nullable longs, so "not reported" arrives as 0:
+    // StartedTimestamp is epoch *milliseconds*, and a 0 ToMove/timestamp means unknown, not zero.
+    internal static MessageMoveTaskSummary ToMessageMoveTaskSummary(Amazon.SQS.Model.ListMessageMoveTasksResultEntry entry) => new(
+        TaskHandle: string.IsNullOrEmpty(entry.TaskHandle) ? null : entry.TaskHandle,
+        Status: entry.Status ?? "",
+        SourceArn: entry.SourceArn ?? "",
+        DestinationArn: string.IsNullOrEmpty(entry.DestinationArn) ? null : entry.DestinationArn,
+        MessagesMoved: entry.ApproximateNumberOfMessagesMoved,
+        MessagesToMove: entry.ApproximateNumberOfMessagesToMove > 0 ? entry.ApproximateNumberOfMessagesToMove : null,
+        FailureReason: string.IsNullOrEmpty(entry.FailureReason) ? null : entry.FailureReason,
+        StartedAt: entry.StartedTimestamp > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(entry.StartedTimestamp) : null);
 }

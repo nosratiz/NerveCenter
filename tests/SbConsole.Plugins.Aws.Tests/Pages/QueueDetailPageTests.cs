@@ -8,6 +8,7 @@ using NSubstitute;
 using SbConsole.Plugins.Aws.Client;
 using SbConsole.Plugins.Aws.Pages;
 using SbConsole.Plugins.Aws.Queues;
+using SbConsole.Plugins.Aws.Redrive;
 using SbConsole.Plugins.Aws.Subscriptions;
 using SbConsole.Sdk;
 
@@ -48,6 +49,10 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<DeleteQueueCommandHandler>();
         Services.AddSingleton<PurgeQueueCommandHandler>();
         Services.AddSingleton<SbConsole.Plugins.Aws.Messages.SendMessageCommandHandler>();
+        Services.AddSingleton<ListRedriveTasksQueryHandler>();
+        Services.AddSingleton<CancelRedriveCommandHandler>();
+        Services.AddSingleton<StartRedriveCommandHandler>();
+        _sqs.ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(new List<MessageMoveTaskSummary>());
     }
 
     private static Dictionary<string, string> Attributes(string? redrivePolicy = null)
@@ -265,5 +270,154 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
 
         await _confirmation.Received(1).ConfirmAsync("Purge", "orders", true, 42, Arg.Any<CancellationToken>());
+    }
+
+    private const string DestinationArn = "arn:aws:sqs:eu-west-1:123456789012:orders-src";
+
+    private static MessageMoveTaskSummary MoveTask(string status, long moved, long? toMove, string? handle = "handle-1", string? failure = null) =>
+        new(handle, status, QueueArn, DestinationArn, moved, toMove, failure, DateTimeOffset.FromUnixTimeMilliseconds(1700000000000));
+
+    private void GivenTasks(params MessageMoveTaskSummary[] tasks) =>
+        _sqs.ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(tasks.ToList());
+
+    [Fact]
+    public void A_non_DLQ_has_no_redrive_tasks_panel_and_never_lists_move_tasks()
+    {
+        GivenDetail(Attributes());
+
+        var cut = RenderPage();
+
+        cut.FindAll(".redrive-tasks").Should().BeEmpty();
+        cut.FindAll("button.redrive-action").Should().BeEmpty();
+        _sqs.DidNotReceive().ListMessageMoveTasksAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void A_DLQ_renders_each_redrive_task_with_its_progress()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100), MoveTask("FAILED", 3, 10, handle: null, failure: "AccessDenied"));
+
+        var cut = RenderPage();
+
+        var rows = cut.FindAll(".redrive-task");
+        rows.Should().HaveCount(2);
+        rows[0].TextContent.Should().Contain("RUNNING").And.Contain("25").And.Contain("100").And.Contain("orders-src");
+        rows[0].QuerySelectorAll(".redrive-task-progress").Should().ContainSingle();
+        rows[1].TextContent.Should().Contain("FAILED").And.Contain("AccessDenied");
+        cut.FindAll("button.cancel-redrive").Should().ContainSingle("only a RUNNING task can be cancelled");
+    }
+
+    [Fact]
+    public void A_DLQ_without_tasks_says_so()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+
+        var cut = RenderPage();
+
+        cut.Find(".redrive-tasks").TextContent.Should().Contain("No redrive tasks");
+        cut.FindAll("button.redrive-action").Should().ContainSingle();
+    }
+
+    [Fact]
+    public void A_failed_task_listing_is_an_inline_warning_not_a_page_failure()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        _sqs.ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<MessageMoveTaskSummary>>(new InvalidOperationException("not authorized to perform sqs:ListMessageMoveTasks")));
+
+        var cut = RenderPage();
+
+        cut.FindAll(".redrive-tasks-error").Should().ContainSingle();
+        cut.FindAll(".queue-detail-error").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancel_invokes_the_cancel_handler_and_reloads_the_tasks()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+
+        var cut = RenderPage();
+        GivenTasks(MoveTask("CANCELLING", 30, 100, handle: null));
+        await cut.Find("button.cancel-redrive").ClickAsync(new());
+
+        await _sqs.Received(1).CancelMessageMoveTaskAsync(Secret, "handle-1", Arg.Any<CancellationToken>());
+        cut.WaitForAssertion(() => cut.Find(".redrive-task").TextContent.Should().Contain("CANCELLING"));
+        cut.FindAll("button.cancel-redrive").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Redrive_goes_through_confirmation_with_IsProd_from_the_connection_provider()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        _confirmation.ConfirmAsync("Redrive", "orders", true, null, Arg.Any<CancellationToken>()).Returns(false);
+
+        var cut = RenderPage();
+        await cut.Find("button.redrive-action").ClickAsync(new());
+
+        await _confirmation.Received(1).ConfirmAsync("Redrive", "orders", true, null, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Poll_refreshes_the_tasks_while_one_is_running()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+        var cut = RenderPage();
+        cut.Instance.IsPolling.Should().BeTrue();
+
+        GivenTasks(MoveTask("COMPLETED", 100, 100, handle: null));
+        var keepPolling = await cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync());
+
+        cut.Find(".redrive-task").TextContent.Should().Contain("COMPLETED");
+        keepPolling.Should().BeFalse("nothing is RUNNING any more");
+    }
+
+    [Fact]
+    public async Task Poll_does_nothing_when_no_task_is_running()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("COMPLETED", 100, 100, handle: null));
+        var cut = RenderPage();
+        cut.Instance.IsPolling.Should().BeFalse();
+        _sqs.ClearReceivedCalls();
+
+        var keepPolling = await cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync());
+
+        keepPolling.Should().BeFalse();
+        await _sqs.DidNotReceive().ListMessageMoveTasksAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Poll_never_overlaps_an_in_flight_refresh()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+        var cut = RenderPage();
+        var pending = new TaskCompletionSource<IReadOnlyList<MessageMoveTaskSummary>>();
+        _sqs.ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(pending.Task);
+        _sqs.ClearReceivedCalls();
+
+        var first = cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync());
+        var second = await cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync());
+
+        second.Should().BeTrue("the skipped tick keeps the loop alive for the next one");
+        await _sqs.Received(1).ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>());
+        pending.SetResult([MoveTask("RUNNING", 50, 100)]);
+        (await first).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Disposing_the_page_stops_polling()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+        var page = RenderPage().Instance;
+        page.IsPolling.Should().BeTrue();
+
+        await DisposeComponentsAsync();
+
+        page.IsPolling.Should().BeFalse();
     }
 }

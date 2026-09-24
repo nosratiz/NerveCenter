@@ -34,4 +34,8 @@ public interface ISqsOperations
 
     /// <summary>Native AWS move task (StartMessageMoveTask) -- destination defaults to the queue the source dead-lettered from.</summary>
     Task<string> StartRedriveTaskAsync(string secret, string sourceQueueArn, string destinationQueueArn, int? maxMessagesPerSecond, CancellationToken ct = default);
+    /// <summary>ListMessageMoveTasks for a DLQ -- the most recent move tasks (AWS returns at most 10), newest first.</summary>
+    Task<IReadOnlyList<MessageMoveTaskSummary>> ListMessageMoveTasksAsync(string secret, string sourceQueueArn, CancellationToken ct = default);
+    /// <summary>CancelMessageMoveTask -- only valid while the task is RUNNING. Messages already moved stay moved.</summary>
+    Task CancelMessageMoveTaskAsync(string secret, string taskHandle, CancellationToken ct = default);
 }
