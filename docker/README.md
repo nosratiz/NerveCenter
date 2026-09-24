@@ -150,6 +150,10 @@ deployments.
 - `sqs:ChangeMessageVisibility` — release message (reset visibility timeout)
 - `sqs:SendMessage` — send message
 - `sqs:StartMessageMoveTask` — initiate DLQ redrive task
+- `sqs:ListMessageMoveTasks` — show redrive-task progress on a DLQ's detail page
+- `sqs:CancelMessageMoveTask` — cancel a running redrive task
+- `sqs:ListQueueTags` — show a queue's tags on its detail page
+- `sqs:ListDeadLetterSourceQueues` — find a DLQ's source queues (queue detail page, and Receive's "Move to source")
 
 **SNS permissions** (Topics, Subscriptions, Publish):
 - `sns:ListTopics` — list topics
@@ -157,10 +161,16 @@ deployments.
 - `sns:CreateTopic` — create topic
 - `sns:DeleteTopic` — delete topic
 - `sns:ListSubscriptionsByTopic` — list subscriptions on a topic
+- `sns:ListSubscriptions` — list every subscription in the account, filtered client-side to find the SNS topics a queue is subscribed to (queue detail page)
 - `sns:GetSubscriptionAttributes` — fetch subscription metadata (status, filter policy)
+- `sns:SetSubscriptionAttributes` — set, change, or clear a subscription's filter policy and scope
 - `sns:Subscribe` — subscribe to topic
 - `sns:Unsubscribe` — unsubscribe from topic
 - `sns:Publish` — publish message to topic
+
+The read-only additions above (`sqs:ListMessageMoveTasks`, `sqs:ListQueueTags`,
+`sqs:ListDeadLetterSourceQueues`, `sns:ListSubscriptions`) degrade to an inline "unavailable" note
+on the page that uses them when denied, rather than failing the page.
 
 **CloudWatch permissions** (Delivery metrics):
 - `cloudwatch:GetMetricStatistics` — fetch topic delivery-failure count over last 24 hours
@@ -183,12 +193,18 @@ Example IAM policy (JSON):
         "sqs:ChangeMessageVisibility",
         "sqs:SendMessage",
         "sqs:StartMessageMoveTask",
+        "sqs:ListMessageMoveTasks",
+        "sqs:CancelMessageMoveTask",
+        "sqs:ListQueueTags",
+        "sqs:ListDeadLetterSourceQueues",
         "sns:ListTopics",
         "sns:GetTopicAttributes",
         "sns:CreateTopic",
         "sns:DeleteTopic",
         "sns:ListSubscriptionsByTopic",
+        "sns:ListSubscriptions",
         "sns:GetSubscriptionAttributes",
+        "sns:SetSubscriptionAttributes",
         "sns:Subscribe",
         "sns:Unsubscribe",
         "sns:Publish",

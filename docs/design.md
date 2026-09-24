@@ -10,7 +10,9 @@ drafted without consulting them, §6.3 new Dead-letter overview, §8 updated).
 Extended 2026-09-14 (Glass shell: §10 rewritten for the app-bar/drawer
 gradient-glass treatment). Extended 2026-09-21 (AWS plugin, Queues: §6.7 new
 plugin section). Extended 2026-09-23 (AWS SNS Topics: §6.7.1; Connections page
-redesign: §3 optional `IPlugin` form/summary hooks, new §11).
+redesign: §3 optional `IPlugin` form/summary hooks, new §11). Extended
+2026-09-24 (AWS completion pass: new §6.7.2; pointers appended to §6.7's and
+§6.7.1's deferred-scope paragraphs; §8 AWS testing bullet updated).
 SDK version: `SbConsole.Sdk` 1.3.0 — see §3 for the 2026-09-10 additions
 (`IPlugin.ConnectionKind`/`ConnectionKindDisplayName`/`Contribution`,
 `IConfirmationService`), the 2026-09-12 additions/removal
@@ -595,7 +597,12 @@ read-only/degraded-connection capability set (`TestConnectionAsync` reports rich
 only — nothing hides a button); live redrive-progress polling (`ISqsOperations` has no
 `ListMessageMoveTasks`-backed status method — the move task is started and its start/failure
 result reported, with no polling method added since nothing in this plan's UI calls one yet);
-per-message manual "redrive to source" from inside Receive.
+per-message manual "redrive to source" from inside Receive. *(2026-09-24: the dashboard/nav-badge
+integration, redrive-progress polling, and per-message "Move to source" have since shipped — see
+§6.7.2. `AwsPlugin` no longer has a trivial `GetNavBadgeAsync` no-op; it now overrides the badge,
+dashboard-metric, dashboard-problem and resource-metric hooks and leaves only
+`GetOldestDeadLetterAsync` at the SDK default. The persisted read-only capability set remains
+deliberately unbuilt — see §6.7.2's Non-goals.)*
 
 **Also not built, cut at planning time rather than during implementation** (the plan's own task
 breakdown never included these, so `PageCount` in `AwsPlugin.Contribution` is `2` — Queues and
@@ -607,7 +614,9 @@ topics" cross-reference panel the design spec described for it); the auto-refres
 explicit user action, never on a timer; a rendered `Created` column (`QueueSummary.CreatedAt` is
 fetched and stored on every row but never displayed); and an overflow menu for Delete/Purge — both
 sit inline on the row instead. None of these block the shipped functionality; they're straight
-scope cuts a future pass can pick up alongside the SNS plan or on their own.
+scope cuts a future pass can pick up alongside the SNS plan or on their own. *(2026-09-24: all of
+these — `QueueDetail.razor`, the auto-refresh picker and its caption, the `Created` column, and the
+Delete/Purge overflow menu — have since shipped; see §6.7.2.)*
 
 **Local dev**: `docker compose --profile aws up -d` runs LocalStack (`SERVICES=sqs,sns`, so the
 SNS plan needs no compose change) gated by a real `healthcheck` (`curl` against
@@ -724,7 +733,140 @@ are read-only and set via the AWS console), Access Policy tab on `TopicDetail.ra
 Attributes only, matching the deferred `QueueDetail` scope), delivery logs (needs CloudWatch Logs, a
 separate service/permission), cross-link to "Subscribed to N SNS topics" on `QueueDetail.razor` (that page
 was never built), nav-badge/dashboard integration (stays at SDK defaults), per-message manual redrive from
-any SNS-side view (redrive remains queue-level only, already shipped with SQS).
+any SNS-side view (redrive remains queue-level only, already shipped with SQS). *(2026-09-24:
+filter-policy authoring/editing, the Access policy tab (read-only), a fuller Attributes tab, the
+"Subscribed to N SNS topics" panel on the now-built `QueueDetail.razor`, and nav-badge/dashboard
+integration have since shipped — see §6.7.2. Delivery logs remain unbuilt; see §6.7.2's Non-goals.)*
+
+### 6.7.2 Completion pass (2026-09-24)
+
+A seven-task pass (plan: `docs/superpowers/plans/2026-09-24-aws-completion.md`) closing out the
+scope §6.7 ("Deferred past this plan", "Also not built") and §6.7.1 ("Out of this plan") left open,
+apart from the Non-goals below. Same conventions as before: every AWS call goes through
+`ISqsOperations`/`ISnsOperations`, handlers are plain query/command classes, commands audit success
+*and* failure via `IAuditScope` and reduce exceptions through `FriendlyAwsError`, and `IsProd` always
+comes from the server-side `IConnectionProvider` lookup. **No SDK or schema changes.**
+`AwsPlugin.Contribution` goes from 4 pages / 13 actions to **5 pages / 16 actions** (new page:
+`QueueDetail`; new actions: Cancel redrive, Move message to source, Set subscription filter policy).
+
+- **Dashboard, nav badge, resource metrics** — `AwsPlugin` now overrides `GetNavBadgeAsync`,
+  `GetDashboardMetricsAsync`, `GetResourceMetricsAsync` and `GetDashboardProblemsAsync` (replacing
+  §6.7's trivial badge no-op). All four read one **60-second static per-connection-string cache** of
+  an unfiltered `ListQueuesAsync(secret, null)`, built exactly like
+  `KafkaPlugin.GetCachedConsumerGroupsAsync` (an internal overload takes `now` and the fetch delegate
+  so reuse/expiry is unit-tested without AWS; a failed fetch throws before the cache is written, so
+  failures are never cached). A queue counts as a DLQ when `DeadLetterSourceCount > 0` and its
+  attributes were readable. The badge (only for `/p/aws/queues`) is the total `ApproxVisible` across
+  DLQs, `null` — never `0` — when nothing is dead-lettered. Dashboard metrics are `Queues` (count) and
+  `Dead-lettered` (DLQ visible total — the label `WallboardSnapshotLoader` sums). Resource metrics are
+  one row per readable queue (`ActiveCount = ApproxVisible`, `DeadLetterCount = ApproxVisible` for a
+  DLQ, else 0). Problems are one `Warning` per DLQ with visible messages, title = queue name, detail
+  `"{n} dead-lettered"`, linking to `/p/aws/queues/{escaped queue URL}?connectionId={id}`. **Failures
+  propagate** rather than being swallowed, matching Kafka: every host call site (NavMenu, Home,
+  `WallboardSnapshotLoader`, `MetricsCollectorService`) already catches and logs, and Home/Wallboard
+  use the exception to mark the connection unchecked — returning empty would show a broken
+  connection as healthy.
+
+- **Queue detail page** (`/p/aws/queues/{queue URL, escaped into one segment}?connectionId=`, the same
+  approach as `TopicDetail`'s ARN route) — the queue name on `Queues.razor` now links here. Backed by
+  `ISqsOperations.GetQueueDetailAsync` (`GetQueueDetailQueryHandler`): `GetQueueAttributes(All)` plus
+  `ListQueueTags` plus a paged `ListDeadLetterSourceQueues`. Tags and dead-letter sources each degrade
+  to `null` on failure (rendered "unavailable", never a misleading empty), while a failed attributes
+  call fails the page. Renders: DLQ/FIFO/KMS chips; Receive (link), Send, Redrive (DLQs only), Purge
+  and Delete buttons reusing the existing dialogs/handlers and confirmation flows; the ARN with a copy
+  button (`navigator.clipboard.writeText`); created/last-modified timestamps; ~Visible / ~In flight /
+  ~Delayed tiles plus a Source-queues tile on DLQs; a **Redrive out** panel from the queue's own
+  `RedrivePolicy` (`SqsOperations.ParseRedrivePolicy`, which accepts `maxReceiveCount` as a number or
+  numeric string and never throws — a missing/malformed policy is "No DLQ configured"); the full
+  sorted attribute table; and the tags table. On this page "is a DLQ" comes from
+  `ListDeadLetterSourceQueues`, so it is correct regardless of any prefix filter.
+  **"Subscribed to N SNS topics" panel**: `ISnsOperations.ListSubscriptionsForEndpointAsync` pages
+  through the account-wide `ListSubscriptions` and filters client-side on `Endpoint == queue ARN`
+  (ordinal); each row links to that topic's detail page and shows protocol and a Pending chip. A
+  failure (e.g. denied `sns:ListSubscriptions`) is an inline warning in the panel, not a page failure.
+
+- **Redrive progress + cancel** — `ISqsOperations.ListMessageMoveTasksAsync` (`ListMessageMoveTasks`,
+  `MaxResults = 10`) and `CancelMessageMoveTaskAsync`. On DLQs only, `QueueDetail` shows a **Redrive
+  tasks** panel: per task status, a progress bar (indeterminate when AWS doesn't report a total),
+  moved/to-move counts, start time and failure reason. A 5-second poll runs **only while some task is
+  `RUNNING`**, stops on its own otherwise, never overlaps an in-flight load, and is cancelled when the
+  component is disposed. Running tasks get a **Cancel** button (`CancelRedriveCommandHandler`,
+  `ActionRisk.Mutating`, audited `aws.queue.redrive.cancel`) with **no confirmation dialog** —
+  cancelling only stops further moves; messages already moved stay moved (the snackbar says so).
+  A listing failure is an inline warning that keeps the last-known tasks.
+
+- **Queues list polish** — a `Created` column (UTC date, `yyyy-MM-dd`; "—" for rows whose attributes
+  were unreadable); an **auto-refresh** picker Off/15s/30s/60s, default Off, persisted per plugin in
+  `IPluginStore` under `queues.autoRefreshSeconds` (an unreadable or unrecognised stored value means
+  Off; a failed save still applies the choice for the visit); a tick that lands mid-load is skipped,
+  never overlapped; the loop is disposed with the page. A **"counts read HH:mm:ss"** caption
+  (server-local time via `TimeProvider`) follows each load. Purge and Delete moved from inline buttons
+  into a per-row overflow `MudMenu`; their confirmation flows are unchanged (§6.7's missing Purge
+  page-level test now exists, exercising it through the menu).
+
+- **Topic attributes + access policy** — `ISnsOperations.GetTopicAttributesAsync`
+  (`GetTopicAttributesQueryHandler`). `TopicDetail`'s Attributes tab (previously ARN only, §6.7.1)
+  now shows a summary table — ARN, display name, owner, FIFO, content-based dedup, KMS key,
+  confirmed/pending/deleted subscription counts — then every remaining raw attribute. A new
+  **Access policy** tab shows `Policy`, and `DeliveryPolicy`/`EffectiveDeliveryPolicy` when present,
+  pretty-printed (non-JSON shown raw). **Read-only** — no policy editing. A denied
+  `sns:GetTopicAttributes` is an inline warning on both tabs, not a page failure.
+
+- **Filter-policy authoring** — `ISnsOperations.SetSubscriptionFilterPolicyAsync` via
+  `SetSubscriptionAttributes`. Setting a policy first reads the subscription's current
+  `FilterPolicy`/`FilterPolicyScope` (`GetSubscriptionAttributes`) because SNS sets one attribute per
+  call and validates the policy against the scope in force at that moment: `PlanFilterPolicyUpdates`
+  (pure, unit-tested) writes the scope first only when switching to `MessageBody` with a policy already
+  present, and policy-then-scope otherwise. **Clearing** is a single `FilterPolicy = ""` call (scope
+  left alone — SNS rejects a scope without a policy). `FilterPolicyValidator` runs client-side before
+  any AWS call and live in both editors: scope must be `MessageAttributes`/`MessageBody`, and the
+  policy must be a top-level JSON object (empty = clear); SNS's own operator rules are left to SNS.
+  `SetFilterPolicyCommandHandler` is `ActionRisk.Mutating` (fully reversible), audited
+  `aws.subscription.filterpolicy.set`; validation rejections aren't audited since nothing was
+  attempted. UI: `SubscribeDialog` gains an optional filter-policy toggle, scope selector and JSON
+  editor (sent as Subscribe attributes, only when a policy is given); confirmed subscription rows on
+  `TopicDetail` gain **Edit filter**, opening `FilterPolicyDialog` pre-filled from the already-loaded
+  row (pending rows can't be targeted — their ARN is the literal `PendingConfirmation`).
+
+- **Per-message "Move to source" on Receive** — on a DLQ, each received message gets **Move to
+  source**. Sources come from `GetQueueDetailAsync`'s `ListDeadLetterSourceQueues` result (one call,
+  not a scan of every queue's `RedrivePolicy` as the plan suggested); one source is used directly,
+  several open `MoveToSourceDialog` to pick one; if the sources lookup fails the button is hidden and
+  a caption says why. `MoveMessageToSourceCommandHandler` (`ActionRisk.Mutating`, audited
+  `aws.message.move`) is **send-then-delete**: `SendMessage` to the source with the same body and
+  message attributes, then `DeleteMessage` on the DLQ with the receipt handle. A failed send deletes
+  nothing; a failed delete after a successful send returns an explicit "copied … but is still in the
+  DLQ — possible duplicate" error. FIFO-ness is read from the destination URL's `.fifo` suffix: FIFO
+  resends reuse the original `MessageGroupId` (now carried on `ReceivedMessage`, from the
+  `MessageGroupId` system attribute) with the original message id as deduplication id; standard
+  queues get neither. No confirmation dialog.
+
+**New IAM permissions** (added to `docker/README.md`'s least-privilege list and JSON example):
+`sqs:ListQueueTags`, `sqs:ListDeadLetterSourceQueues`, `sqs:ListMessageMoveTasks`,
+`sqs:CancelMessageMoveTask`, `sns:ListSubscriptions`, `sns:SetSubscriptionAttributes`
+(`sns:GetSubscriptionAttributes` was already listed). Every one except `sns:SetSubscriptionAttributes`
+and `sqs:CancelMessageMoveTask` degrades to an inline "unavailable" state when denied.
+
+**Deviations from the plan**: failures in the dashboard hooks propagate (the plan said "return
+null/empty — check Kafka and match"; Kafka propagates, and the host depends on it). Move-to-source
+resolves sources via `ListDeadLetterSourceQueues`, not `ListQueuesAsync`. The detail page's query
+parameter is `?connectionId=` (the plan said `?connection=`), matching every other AWS page.
+
+**Known limitations**: Move to source loses **Binary** message attributes (`ReceivedMessage` keeps
+only `StringValue`, so a binary attribute is resent as an empty string) and resends **Number**
+attributes as `String` (`SendMessageAsync` always uses `DataType = "String"`). §6.7's prefix-filter
+undercount is only partly addressed: `QueueDetail`, Receive's Move to source, and the dashboard hooks
+(unfiltered list) are correct, but `Queues.razor`'s DLQ chip and inline Redrive button still use
+`DeadLetterSourceCount` computed over the filtered list.
+
+**Non-goals** (deliberately not built):
+- A persisted read-only / denied-actions capability set and IAM Policy Simulator integration —
+  rejected host-wide in the connections-page redesign (§11, "Out of scope"); test results stay
+  diagnostic text only and no button is hidden from them.
+- SNS delivery logs — needs CloudWatch Logs, a separate service and permission set.
+- `GetOldestDeadLetterAsync` — stays at the SDK default (`null`): SQS exposes no enqueue timestamp
+  without *receiving* a message, and a receive has a real side effect (the message goes invisible
+  for the visibility timeout), so the wallboard's oldest-message tile is not fed by this plugin.
 
 ## 7. Error handling
 
@@ -755,6 +897,10 @@ any SNS-side view (redrive remains queue-level only, already shipped with SQS).
 - AWS plugin (Queues, §6.7; Topics, §6.7.1): same deferral, same reasoning — unit tests only
   against substitutes of `ISqsOperations`/`ISnsOperations`, no Testcontainers, no real
   AWS/LocalStack traffic. LocalStack in `docker-compose.yml` is for manual local dev only.
+  The completion pass (§6.7.2) keeps the same rule; its two timer loops (Queues auto-refresh,
+  `QueueDetail`'s redrive-progress poll) are tested by calling their single step directly
+  (`AutoRefreshTickAsync`/`PollRedriveTasksAsync`), the NavMenu precedent below, and the dashboard
+  cache via its injectable-clock/fetcher overload.
 - Connections page redesign (§11): `ConnectionEditor`, `AwsConnectionFields`, and the two-pane
   `Connections.razor` are covered by bUnit only — the same pattern as every other Blazor component
   in this codebase, not a new deferral.
