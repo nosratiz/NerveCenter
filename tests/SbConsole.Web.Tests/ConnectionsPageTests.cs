@@ -287,4 +287,52 @@ public class ConnectionsPageTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("eu-west-1");
     }
+
+    [Fact]
+    public async Task Typing_in_the_filter_box_does_not_revert_the_open_editors_hydrated_name()
+    {
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = RenderPage();
+        cut.Find("button.edit-connection").Click();
+
+        cut.Find("input#connection-name").Input("sb-renamed");
+        cut.Find("input#connection-name").GetAttribute("value").Should().Be("sb-renamed");
+
+        // Typing in the page's OWN filter box (a sibling of the editor panel, not a parameter of
+        // it) forces Connections to re-render while the ConnectionEditor instance stays mounted
+        // (same @key, same Existing). If the editor's Name/Kind/Tags hydration ran in
+        // OnParametersSet instead of OnInitialized, this parent re-render would re-run it and
+        // reset _name back to Existing.Name ("sb-dev"), wiping out the in-progress edit.
+        cut.Find(".connection-filter input").Input("sb");
+
+        cut.Find("input#connection-name").GetAttribute("value").Should().Be("sb-renamed");
+    }
+
+    [Fact]
+    public async Task Testing_then_cancelling_still_refreshes_the_lists_status_column()
+    {
+        await Services.GetRequiredService<CreateConnectionCommandHandler>()
+            .HandleAsync(new CreateConnectionCommand("sb-dev", "azure-servicebus", "secret", ["dev"], "admin"));
+
+        var cut = RenderPage();
+        cut.Markup.Should().Contain("Never tested");
+
+        cut.Find("button.edit-connection").Click();
+        cut.Find("button.test-connection").Click();
+        await Task.Delay(50);
+        cut.Render();
+
+        // Test writes LastTestSucceeded/LastTestedAt straight to the DB, independent of Save --
+        // closing via Cancel (not Save) must still refresh the list so the Status column stops
+        // showing the stale "Never tested" value.
+        cut.Find("button.cancel-connection").Click();
+        await Task.Delay(50);
+        cut.Render();
+
+        cut.FindAll("input#connection-name").Should().BeEmpty();
+        cut.Markup.Should().Contain("OK");
+        cut.Markup.Should().NotContain("Never tested");
+    }
 }
