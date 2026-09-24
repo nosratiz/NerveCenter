@@ -165,6 +165,29 @@ public sealed class SnsOperations : ISnsOperations
         return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy);
     }
 
+    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default)
+    {
+        using var sns = BuildSnsClient(secret);
+        var subscriptions = new List<Subscription>();
+        string? nextToken = null;
+        do
+        {
+            var page = await sns.ListSubscriptionsAsync(new ListSubscriptionsRequest { NextToken = nextToken }, ct);
+            subscriptions.AddRange(page.Subscriptions ?? []);
+            nextToken = page.NextToken;
+        } while (!string.IsNullOrEmpty(nextToken));
+
+        return FilterSubscriptionsByEndpoint(subscriptions, endpoint);
+    }
+
+    // Pure static so the client-side endpoint filter is unit-testable without AWS. Ordinal match --
+    // SQS/Lambda ARNs and URLs are case-sensitive identifiers.
+    internal static IReadOnlyList<SubscriptionSummary> FilterSubscriptionsByEndpoint(IEnumerable<Subscription> subscriptions, string endpoint) =>
+        subscriptions
+            .Where(s => string.Equals(s.Endpoint, endpoint, StringComparison.Ordinal))
+            .Select(s => ClassifySubscription(s.SubscriptionArn, s.Protocol, s.Endpoint, new Dictionary<string, string>()) with { TopicArn = s.TopicArn })
+            .ToList();
+
     public async Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default)
     {
         using var sns = BuildSnsClient(secret);

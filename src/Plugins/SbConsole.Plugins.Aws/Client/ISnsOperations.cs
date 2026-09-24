@@ -13,6 +13,13 @@ public interface ISnsOperations
     Task DeleteTopicAsync(string secret, string topicArn, CancellationToken ct = default);
 
     Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default);
+    /// <summary>
+    /// Every subscription (any topic) whose Endpoint equals <paramref name="endpoint"/> -- e.g. a
+    /// queue ARN. SNS has no server-side filter for this, so it pages through ListSubscriptions and
+    /// filters client-side. Subscription attributes are not fetched (RawMessageDelivery/
+    /// FilterPolicyJson stay null).
+    /// </summary>
+    Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default);
     Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default);
     /// <summary>Mutating, not Destructive -- reversible by subscribing again.</summary>
     Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default);

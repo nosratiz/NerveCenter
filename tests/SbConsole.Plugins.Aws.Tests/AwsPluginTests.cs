@@ -17,7 +17,7 @@ public class AwsPluginTests
         plugin.ConnectionKindDisplayName.Should().Be("AWS SQS/SNS");
         plugin.NavItems.Should().Contain(n => n.Title == "Queues" && n.Href == "/p/aws/queues");
         plugin.NavItems.Should().Contain(n => n.Title == "Topics" && n.Href == "/p/aws/topics");
-        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 4, ActionCount: 13));
+        plugin.Contribution.Should().Be(new PluginContribution(PageCount: 5, ActionCount: 13));
     }
 
     [Fact]

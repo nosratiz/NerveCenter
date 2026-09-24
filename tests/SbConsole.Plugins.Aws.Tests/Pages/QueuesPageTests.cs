@@ -224,4 +224,19 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         await confirmation.Received(1).ConfirmAsync("Delete", "order-events", _connectionInfo.IsProd, null, Arg.Any<CancellationToken>());
         await _operations.Received(1).DeleteQueueAsync("mode=default-chain;region=eu-west-1", "https://sqs/order-events", Arg.Any<CancellationToken>());
     }
+    [Fact]
+    public async Task The_queue_name_links_to_the_queue_detail_page_for_the_selected_connection()
+    {
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        var link = cut.Find("a.queue-detail-link");
+        link.TextContent.Should().Contain("order-events");
+        link.GetAttribute("href").Should().Be(
+            $"/p/aws/queues/{Uri.EscapeDataString("https://sqs/order-events")}?connectionId={_connectionId}");
+    }
 }

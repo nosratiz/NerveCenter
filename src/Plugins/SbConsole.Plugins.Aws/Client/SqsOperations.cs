@@ -202,6 +202,119 @@ public sealed class SqsOperations : ISqsOperations
         }
     }
 
+    public async Task<QueueDetails> GetQueueDetailAsync(string secret, string queueUrl, CancellationToken ct = default)
+    {
+        using var sqs = BuildSqsClient(secret);
+        var attributesResponse = await sqs.GetQueueAttributesAsync(
+            new GetQueueAttributesRequest { QueueUrl = queueUrl, AttributeNames = ["All"] }, ct);
+
+        // Tags and dead-letter sources are secondary panels behind their own IAM permissions
+        // (sqs:ListQueueTags, sqs:ListDeadLetterSourceQueues) -- a denial there degrades that one
+        // field to null instead of failing the whole page (same partial-failure rule as
+        // ListQueuesAsync's per-queue attribute calls).
+        Dictionary<string, string>? tags;
+        try
+        {
+            var tagsResponse = await sqs.ListQueueTagsAsync(new ListQueueTagsRequest { QueueUrl = queueUrl }, ct);
+            tags = tagsResponse.Tags ?? new Dictionary<string, string>();
+        }
+        catch (Exception) when (ct.IsCancellationRequested is false)
+        {
+            tags = null;
+        }
+
+        List<string>? sources = [];
+        try
+        {
+            string? nextToken = null;
+            do
+            {
+                var page = await sqs.ListDeadLetterSourceQueuesAsync(
+                    new ListDeadLetterSourceQueuesRequest { QueueUrl = queueUrl, NextToken = nextToken }, ct);
+                sources.AddRange(page.QueueUrls ?? []);
+                nextToken = page.NextToken;
+            } while (!string.IsNullOrEmpty(nextToken));
+        }
+        catch (Exception) when (ct.IsCancellationRequested is false)
+        {
+            sources = null;
+        }
+
+        return ToQueueDetail(queueUrl, attributesResponse.Attributes ?? new Dictionary<string, string>(), tags, sources);
+    }
+
+    // Pure static, same reasoning as ToQueueSummary -- unit-testable without AWS.
+    internal static QueueDetails ToQueueDetail(
+        string queueUrl,
+        IDictionary<string, string> attributes,
+        IReadOnlyDictionary<string, string>? tags,
+        IReadOnlyList<string>? deadLetterSourceQueueUrls)
+    {
+        long GetLong(string key) => attributes.TryGetValue(key, out var value) && long.TryParse(value, out var parsed) ? parsed : 0;
+        bool GetBool(string key) => attributes.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) && parsed;
+        DateTimeOffset? GetTimestamp(string key) =>
+            attributes.TryGetValue(key, out var value) && long.TryParse(value, out var seconds) ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
+
+        return new QueueDetails(
+            Name: QueueNameFromUrl(queueUrl),
+            QueueUrl: queueUrl,
+            QueueArn: attributes.TryGetValue("QueueArn", out var queueArn) ? queueArn : "",
+            IsFifo: GetBool("FifoQueue"),
+            IsKmsEncrypted: attributes.ContainsKey("KmsMasterKeyId"),
+            ApproxVisible: GetLong("ApproximateNumberOfMessages"),
+            ApproxInFlight: GetLong("ApproximateNumberOfMessagesNotVisible"),
+            ApproxDelayed: GetLong("ApproximateNumberOfMessagesDelayed"),
+            CreatedAt: GetTimestamp("CreatedTimestamp"),
+            LastModifiedAt: GetTimestamp("LastModifiedTimestamp"),
+            Attributes: new Dictionary<string, string>(attributes),
+            Tags: tags is null ? null : new Dictionary<string, string>(tags),
+            RedrivePolicy: ParseRedrivePolicy(attributes.TryGetValue("RedrivePolicy", out var redrivePolicy) ? redrivePolicy : null),
+            DeadLetterSourceQueueUrls: deadLetterSourceQueueUrls);
+    }
+
+    // Like ExtractDeadLetterTargetArn, but also reads maxReceiveCount -- accepted as a JSON number or
+    // a numeric string, since AWS has returned both shapes. Never throws: a missing/malformed policy
+    // is "no DLQ configured", and a policy with a target but an unreadable count keeps the target.
+    internal static QueueRedrivePolicy? ParseRedrivePolicy(string? redrivePolicyJson)
+    {
+        if (string.IsNullOrEmpty(redrivePolicyJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(redrivePolicyJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("deadLetterTargetArn", out var target)
+                || target.ValueKind != JsonValueKind.String
+                || string.IsNullOrEmpty(target.GetString()))
+            {
+                return null;
+            }
+
+            int? maxReceiveCount = null;
+            if (root.TryGetProperty("maxReceiveCount", out var count))
+            {
+                if (count.ValueKind == JsonValueKind.Number && count.TryGetInt32(out var number))
+                {
+                    maxReceiveCount = number;
+                }
+                else if (count.ValueKind == JsonValueKind.String && int.TryParse(count.GetString(), out var parsed))
+                {
+                    maxReceiveCount = parsed;
+                }
+            }
+
+            return new QueueRedrivePolicy(target.GetString()!, maxReceiveCount);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public async Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default)
     {
         using var sqs = BuildSqsClient(secret);

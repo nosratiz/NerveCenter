@@ -1,0 +1,355 @@
+@page "/p/aws/queues/{QueueUrlEncoded}"
+@using System.Globalization
+@using SbConsole.Plugins.Aws.Client
+@using SbConsole.Plugins.Aws.Queues
+@using SbConsole.Plugins.Aws.Subscriptions
+@using SbConsole.Sdk
+@using Microsoft.JSInterop
+@inject GetQueueDetailQueryHandler DetailHandler
+@inject ListQueueSnsSubscriptionsQueryHandler SnsHandler
+@inject DeleteQueueCommandHandler DeleteHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>@QueueName</PageTitle>
+<div class="d-flex align-center gap-2 mb-2">
+    <MudLink Href="/p/aws/queues">Queues</MudLink>
+    <MudText>/</MudText>
+    <MudText Class="queue-name" Style="font-family:monospace">@QueueName</MudText>
+</div>
+
+@if (_loading && _detail is null)
+{
+    <MudProgressCircular Class="queue-detail-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_detail is null)
+{
+    <MudAlert Class="queue-detail-error" Severity="Severity.Error">@(_error ?? "Queue could not be loaded.")</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-2 mb-1">
+        @if (_detail.IsDeadLetterQueue)
+        {
+            <MudChip T="string" Class="dlq-flag" Color="Color.Error" Size="Size.Small">DLQ</MudChip>
+        }
+        @if (_detail.IsFifo)
+        {
+            <MudChip T="string" Class="fifo-flag" Size="Size.Small">FIFO</MudChip>
+        }
+        @if (_detail.IsKmsEncrypted)
+        {
+            <MudChip T="string" Class="kms-flag" Size="Size.Small" Variant="Variant.Outlined">KMS</MudChip>
+        }
+        <MudSpacer />
+        <MudButton Class="receive-action" Href="@ReceiveUrl">Receive</MudButton>
+        <MudButton Class="send-message-action" OnClick="OpenSend">Send</MudButton>
+        <MudButton Class="purge-queue-action" Color="Color.Warning" OnClick="OpenPurge">Purge</MudButton>
+        <MudButton Class="delete-queue" Color="Color.Error" Disabled="_deleting" OnClick="DeleteAsync">Delete</MudButton>
+        @if (_deleting)
+        {
+            <MudProgressCircular Class="delete-queue-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+    <div class="d-flex align-center gap-1 mb-1">
+        <MudText Typo="Typo.caption" Class="queue-arn mud-text-secondary" Style="font-family:monospace">@_detail.QueueArn</MudText>
+        <MudTooltip Text="Copy ARN">
+            <MudIconButton Class="copy-arn" Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small" OnClick="CopyArnAsync" aria-label="Copy ARN" />
+        </MudTooltip>
+    </div>
+    <MudText Typo="Typo.caption" Class="queue-timestamps mud-text-secondary d-block mb-4">
+        Created @FormatTimestamp(_detail.CreatedAt) · Last modified @FormatTimestamp(_detail.LastModifiedAt)
+    </MudText>
+
+    <MudGrid Spacing="2" Class="mb-4">
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="tile-visible pa-3" Outlined="true">
+                <MudText Typo="Typo.overline" Class="mud-text-secondary">~Visible</MudText>
+                <MudText Typo="Typo.h5" Style="font-family:monospace">@_detail.ApproxVisible.ToString("N0", CultureInfo.InvariantCulture)</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="tile-in-flight pa-3" Outlined="true">
+                <MudText Typo="Typo.overline" Class="mud-text-secondary">~In flight</MudText>
+                <MudText Typo="Typo.h5" Style="font-family:monospace">@_detail.ApproxInFlight.ToString("N0", CultureInfo.InvariantCulture)</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="tile-delayed pa-3" Outlined="true">
+                <MudText Typo="Typo.overline" Class="mud-text-secondary">~Delayed</MudText>
+                <MudText Typo="Typo.h5" Style="font-family:monospace">@_detail.ApproxDelayed.ToString("N0", CultureInfo.InvariantCulture)</MudText>
+            </MudPaper>
+        </MudItem>
+        @if (_detail.IsDeadLetterQueue)
+        {
+            <MudItem xs="6" sm="3">
+                <MudPaper Class="tile-sources pa-3" Outlined="true">
+                    <MudText Typo="Typo.overline" Class="mud-text-secondary">Source queues</MudText>
+                    <MudText Typo="Typo.h5" Style="font-family:monospace">@_detail.DeadLetterSourceQueueUrls!.Count</MudText>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+
+    <MudGrid Spacing="2" Class="mb-4">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="redrive-out pa-3" Outlined="true">
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Redrive out</MudText>
+                @if (_detail.RedrivePolicy is { } policy)
+                {
+                    <MudText Typo="Typo.body2">
+                        Dead-letters to <span class="redrive-target" style="font-family:monospace">@policy.DeadLetterTargetName</span>
+                        after <span class="redrive-max-receives" style="font-family:monospace">@(policy.MaxReceiveCount?.ToString(CultureInfo.InvariantCulture) ?? "?")</span> receives.
+                    </MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace">@policy.DeadLetterTargetArn</MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">No DLQ configured.</MudText>
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="sns-subscriptions pa-3" Outlined="true">
+                @if (_snsLoading)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">SNS subscriptions</MudText>
+                    <MudProgressCircular Class="sns-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                }
+                else if (_snsError is not null)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">SNS subscriptions</MudText>
+                    <MudAlert Class="sns-subscriptions-error" Severity="Severity.Warning" Dense="true">
+                        Couldn't list SNS subscriptions: @_snsError
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Subscribed to @_subscriptions.Count SNS @(_subscriptions.Count == 1 ? "topic" : "topics")</MudText>
+                    @foreach (var subscription in _subscriptions)
+                    {
+                        <div class="d-flex align-center gap-2">
+                            @if (subscription.TopicArn is { } topicArn)
+                            {
+                                <MudLink Class="sns-topic-link" Href="@TopicUrl(topicArn)" Style="font-family:monospace">@subscription.TopicName</MudLink>
+                            }
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@subscription.Protocol</MudText>
+                            @if (subscription.IsPending)
+                            {
+                                <MudChip T="string" Color="Color.Warning" Size="Size.Small">Pending</MudChip>
+                            }
+                        </div>
+                    }
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.subtitle2" Class="mb-1">Attributes</MudText>
+    <MudSimpleTable Class="attributes-table mb-4" Dense="true">
+        <tbody>
+            @foreach (var entry in _detail.Attributes.OrderBy(a => a.Key, StringComparer.Ordinal))
+            {
+                <tr>
+                    <td class="attribute-name">@entry.Key</td>
+                    <td style="font-family:monospace;word-break:break-all">@entry.Value</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+
+    <MudText Typo="Typo.subtitle2" Class="mb-1">Tags</MudText>
+    @if (_detail.Tags is null)
+    {
+        <MudText Typo="Typo.body2" Class="tags-unavailable mud-text-secondary">Tags unavailable (ListQueueTags failed or is not permitted).</MudText>
+    }
+    else if (_detail.Tags.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Class="tags-empty mud-text-secondary">No tags.</MudText>
+    }
+    else
+    {
+        <MudSimpleTable Class="tags-table" Dense="true">
+            <tbody>
+                @foreach (var tag in _detail.Tags.OrderBy(t => t.Key, StringComparer.Ordinal))
+                {
+                    <tr>
+                        <td class="tag-key">@tag.Key</td>
+                        <td style="font-family:monospace">@tag.Value</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+
+@code {
+    // Encoded as a single route segment (a queue URL contains '/'), same approach as
+    // TopicDetail.razor's ARN route and AwsPlugin.BuildQueueProblemLink.
+    [Parameter] public string QueueUrlEncoded { get; set; } = "";
+    [SupplyParameterFromQuery] public Guid ConnectionId { get; set; }
+
+    private QueueDetails? _detail;
+    private bool _loading;
+    private string? _error;
+    private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
+    private bool _snsLoading;
+    private string? _snsError;
+    private bool _deleting;
+    private ConnectionInfo? _connection;
+
+    private string QueueUrl => Uri.UnescapeDataString(QueueUrlEncoded);
+    private string QueueName => SqsOperations.QueueNameFromUrl(QueueUrl);
+    // IsProd comes from the server-side connection lookup, never from the URL (CLAUDE.md).
+    private string ConnectionName => _connection?.Name ?? "";
+    private bool IsProd => _connection?.IsProd ?? false;
+
+    private string ReceiveUrl =>
+        $"/p/aws/queues/receive?connectionId={ConnectionId}&queueUrl={Uri.EscapeDataString(QueueUrl)}&queueName={Uri.EscapeDataString(QueueName)}";
+
+    private string TopicUrl(string topicArn) => $"/p/aws/topics/{Uri.EscapeDataString(topicArn)}?connectionId={ConnectionId}";
+
+    private static string FormatTimestamp(DateTimeOffset? value) =>
+        value is { } timestamp ? timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "—";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connection = (await Connections.ListAsync("aws")).FirstOrDefault(c => c.Id == ConnectionId);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await DetailHandler.HandleAsync(ConnectionId, QueueUrl);
+            if (result.IsSuccess)
+            {
+                _detail = result.Value!;
+                _error = null;
+            }
+            else
+            {
+                _detail = null;
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        if (_detail is { QueueArn.Length: > 0 })
+        {
+            await LoadSubscriptionsAsync(_detail.QueueArn);
+        }
+    }
+
+    // Separate from the detail load on purpose: SNS is a different service with its own IAM
+    // permissions, so a denial here is an inline warning in its panel, never a page failure.
+    private async Task LoadSubscriptionsAsync(string queueArn)
+    {
+        _snsLoading = true;
+        try
+        {
+            var result = await SnsHandler.HandleAsync(ConnectionId, queueArn);
+            _subscriptions = result.IsSuccess ? result.Value! : [];
+            _snsError = result.IsSuccess ? null : result.Error;
+        }
+        finally
+        {
+            _snsLoading = false;
+        }
+    }
+
+    private async Task CopyArnAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _detail!.QueueArn);
+            Snackbar.Add("ARN copied.", Severity.Success);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Couldn't copy to the clipboard.", Severity.Warning);
+        }
+    }
+
+    private async Task OpenSend()
+    {
+        var detail = _detail!;
+        var parameters = new DialogParameters<SendMessageDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, ConnectionName },
+            { x => x.QueueUrl, detail.QueueUrl },
+            { x => x.QueueName, detail.Name },
+            { x => x.IsFifo, detail.IsFifo },
+            { x => x.ContentBasedDeduplication, detail.Attributes.TryGetValue("ContentBasedDeduplication", out var dedup) && dedup == "true" },
+        };
+        var dialog = await DialogService.ShowAsync<SendMessageDialog>("Send message", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task OpenPurge()
+    {
+        var detail = _detail!;
+        var confirmed = await Confirmation.ConfirmAsync("Purge", detail.Name, IsProd, count: (int)Math.Min(detail.ApproxVisible, int.MaxValue));
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<PurgeQueueDialog>
+        {
+            { x => x.ConnectionId, ConnectionId },
+            { x => x.ConnectionName, ConnectionName },
+            { x => x.QueueUrl, detail.QueueUrl },
+            { x => x.QueueName, detail.Name },
+            { x => x.ApproxVisibleCount, detail.ApproxVisible },
+        };
+        var dialog = await DialogService.ShowAsync<PurgeQueueDialog>("Purge queue", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        var detail = _detail!;
+        var confirmed = await Confirmation.ConfirmAsync("Delete", detail.Name, IsProd);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _deleting = true;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(ConnectionId, ConnectionName, detail.QueueUrl, detail.Name));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+                return;
+            }
+        }
+        finally
+        {
+            _deleting = false;
+        }
+
+        Snackbar.Add($"Deleted {detail.Name}.", Severity.Success);
+        Nav.NavigateTo("/p/aws/queues");
+    }
+}

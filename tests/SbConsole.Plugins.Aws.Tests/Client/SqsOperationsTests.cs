@@ -147,4 +147,87 @@ public class SqsOperationsTests
         received.Md5OfBody.Should().Be("abc123");
         received.MessageAttributes.Should().Equal(new Dictionary<string, string> { ["source"] = "checkout" });
     }
+    [Fact]
+    public void ParseRedrivePolicy_parses_target_arn_and_numeric_maxReceiveCount()
+    {
+        var policy = SqsOperations.ParseRedrivePolicy(
+            "{\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-1:123456789012:orders-dlq\",\"maxReceiveCount\":5}");
+
+        policy.Should().NotBeNull();
+        policy!.DeadLetterTargetArn.Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders-dlq");
+        policy.DeadLetterTargetName.Should().Be("orders-dlq");
+        policy.MaxReceiveCount.Should().Be(5);
+    }
+
+    [Fact]
+    public void ParseRedrivePolicy_accepts_a_string_maxReceiveCount()
+    {
+        // AWS has historically returned maxReceiveCount as a JSON string ("5") on some queues.
+        var policy = SqsOperations.ParseRedrivePolicy(
+            "{\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-1:1:orders-dlq\",\"maxReceiveCount\":\"7\"}");
+
+        policy!.MaxReceiveCount.Should().Be(7);
+    }
+
+    [Fact]
+    public void ParseRedrivePolicy_leaves_maxReceiveCount_null_when_missing()
+    {
+        var policy = SqsOperations.ParseRedrivePolicy("{\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-1:1:orders-dlq\"}");
+
+        policy!.MaxReceiveCount.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    [InlineData("{\"maxReceiveCount\":5}")]
+    public void ParseRedrivePolicy_returns_null_for_missing_or_malformed_input(string? json)
+    {
+        SqsOperations.ParseRedrivePolicy(json).Should().BeNull();
+    }
+
+    [Fact]
+    public void ToQueueDetail_maps_attributes_tags_redrive_policy_and_sources()
+    {
+        var attributes = FullAttributes();
+        attributes["ApproximateNumberOfMessagesDelayed"] = "3";
+        attributes["LastModifiedTimestamp"] = "1700000500";
+        var tags = new Dictionary<string, string> { ["team"] = "payments" };
+
+        var detail = SqsOperations.ToQueueDetail(
+            "https://sqs.eu-west-1.amazonaws.com/123456789012/orders", attributes, tags, ["https://sqs/orders-src"]);
+
+        detail.Name.Should().Be("orders");
+        detail.QueueArn.Should().Be("arn:aws:sqs:eu-west-1:123456789012:orders");
+        detail.IsFifo.Should().BeFalse();
+        detail.IsKmsEncrypted.Should().BeTrue();
+        detail.ApproxVisible.Should().Be(1204);
+        detail.ApproxInFlight.Should().Be(18);
+        detail.ApproxDelayed.Should().Be(3);
+        detail.CreatedAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1700000000));
+        detail.LastModifiedAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1700000500));
+        detail.Attributes.Should().ContainKey("QueueArn");
+        detail.Tags.Should().Equal(tags);
+        detail.RedrivePolicy!.DeadLetterTargetName.Should().Be("orders-dlq");
+        detail.RedrivePolicy.MaxReceiveCount.Should().Be(5);
+        detail.DeadLetterSourceQueueUrls.Should().Equal("https://sqs/orders-src");
+        detail.IsDeadLetterQueue.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ToQueueDetail_keeps_unavailable_tags_and_sources_as_null_and_missing_timestamps_as_null()
+    {
+        var detail = SqsOperations.ToQueueDetail(
+            "https://sqs/orders.fifo", new Dictionary<string, string> { ["FifoQueue"] = "true" }, tags: null, deadLetterSourceQueueUrls: null);
+
+        detail.IsFifo.Should().BeTrue();
+        detail.CreatedAt.Should().BeNull();
+        detail.LastModifiedAt.Should().BeNull();
+        detail.Tags.Should().BeNull();
+        detail.DeadLetterSourceQueueUrls.Should().BeNull();
+        detail.IsDeadLetterQueue.Should().BeFalse();
+        detail.RedrivePolicy.Should().BeNull();
+    }
 }

@@ -13,6 +13,11 @@ public interface ISqsOperations
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
 
     Task<IReadOnlyList<QueueSummary>> ListQueuesAsync(string secret, string? namePrefix, CancellationToken ct = default);
+    /// <summary>
+    /// GetQueueAttributes(All) + ListQueueTags + ListDeadLetterSourceQueues for one queue. Only the
+    /// attributes call is required -- a failed tags/sources call degrades that field to null.
+    /// </summary>
+    Task<QueueDetails> GetQueueDetailAsync(string secret, string queueUrl, CancellationToken ct = default);
     Task<string> CreateQueueAsync(string secret, CreateQueueRequest request, CancellationToken ct = default);
     /// <summary>Destructive.</summary>
     Task DeleteQueueAsync(string secret, string queueUrl, CancellationToken ct = default);

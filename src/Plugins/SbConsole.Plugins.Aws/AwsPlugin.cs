@@ -32,8 +32,9 @@ public sealed class AwsPlugin : IPlugin
 
     // Queues: Create/Delete/Purge queue, Receive, Delete message, Release message, Send, Redrive (8).
     // Topics: Create/Delete topic, Subscribe/Unsubscribe, Publish (5).
-    // Pages: Queues, Receive, Topics, TopicDetail (4).
-    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 13);
+    // Pages: Queues, QueueDetail, Receive, Topics, TopicDetail (5). QueueDetail adds no new action --
+    // its Send/Purge/Delete buttons reuse the existing handlers above.
+    public PluginContribution Contribution => new(PageCount: 5, ActionCount: 13);
 
     // The Queues/Messages/Redrive command and query handlers are added to this project one at a
     // time by Tasks 4, 7, 8, 9, 10, 12, 13 -- registering them here in Task 3 (as the plan's
@@ -45,6 +46,8 @@ public sealed class AwsPlugin : IPlugin
         services.AddSingleton<ISqsOperations, SqsOperations>();
         services.AddSingleton<ISnsOperations, SnsOperations>();
         services.AddScoped<ListQueuesQueryHandler>();
+        services.AddScoped<GetQueueDetailQueryHandler>();
+        services.AddScoped<ListQueueSnsSubscriptionsQueryHandler>();
         services.AddScoped<ListTopicsQueryHandler>();
         services.AddScoped<CreateTopicCommandHandler>();
         services.AddScoped<DeleteTopicCommandHandler>();

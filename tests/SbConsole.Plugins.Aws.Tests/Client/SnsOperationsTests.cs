@@ -105,4 +105,21 @@ public class SnsOperationsTests
     {
         SnsOperations.EvaluateFilterMatch("""{"region":"uk"}""", new Dictionary<string, string> { ["region"] = "uk" }).Should().BeFalse();
     }
+    [Fact]
+    public void FilterSubscriptionsByEndpoint_keeps_only_exact_endpoint_matches_and_carries_the_topic_arn()
+    {
+        var subscriptions = new List<Amazon.SimpleNotificationService.Model.Subscription>
+        {
+            new() { SubscriptionArn = "arn:sub-1", Protocol = "sqs", Endpoint = "arn:aws:sqs:eu-west-1:1:orders", TopicArn = "arn:aws:sns:eu-west-1:1:order-events" },
+            new() { SubscriptionArn = "arn:sub-2", Protocol = "sqs", Endpoint = "arn:aws:sqs:eu-west-1:1:orders-dlq", TopicArn = "arn:aws:sns:eu-west-1:1:order-events" },
+            new() { SubscriptionArn = "PendingConfirmation", Protocol = "sqs", Endpoint = "arn:aws:sqs:eu-west-1:1:orders", TopicArn = "arn:aws:sns:eu-west-1:1:billing" },
+        };
+
+        var matches = SnsOperations.FilterSubscriptionsByEndpoint(subscriptions, "arn:aws:sqs:eu-west-1:1:orders");
+
+        matches.Should().HaveCount(2);
+        matches.Select(m => m.TopicArn).Should().Equal("arn:aws:sns:eu-west-1:1:order-events", "arn:aws:sns:eu-west-1:1:billing");
+        matches[0].TopicName.Should().Be("order-events");
+        matches[1].IsPending.Should().BeTrue();
+    }
 }

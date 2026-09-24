@@ -154,6 +154,9 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         public Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default)
             => throw new NotSupportedException();
 
