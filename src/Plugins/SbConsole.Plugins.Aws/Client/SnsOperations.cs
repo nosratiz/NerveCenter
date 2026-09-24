@@ -173,19 +173,42 @@ public sealed class SnsOperations : ISnsOperations
         return new SubscriptionSummary(subscriptionArn, protocol, endpoint, isPending, rawDelivery, filterPolicy, FilterPolicyScope: filterPolicyScope);
     }
 
-    public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default)
+    // ListSubscriptions returns up to 100 per page, so 20 pages = the first 2,000 subscriptions in
+    // the account. Past that the scan stops and says so rather than walking an unbounded account.
+    internal const int MaxEndpointScanPages = 20;
+
+    public async Task<EndpointSubscriptions> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default)
     {
         using var sns = BuildSnsClient(secret);
+        return await ScanSubscriptionsForEndpointAsync(
+            async (nextToken, token) =>
+            {
+                var page = await sns.ListSubscriptionsAsync(new ListSubscriptionsRequest { NextToken = nextToken }, token);
+                return (page.Subscriptions ?? [], page.NextToken);
+            },
+            endpoint, MaxEndpointScanPages, ct);
+    }
+
+    // The paging loop, with the page fetch injected so the cap is unit-testable without AWS.
+    internal static async Task<EndpointSubscriptions> ScanSubscriptionsForEndpointAsync(
+        Func<string?, CancellationToken, Task<(IReadOnlyList<Subscription> Page, string? NextToken)>> fetchPage,
+        string endpoint, int maxPages, CancellationToken ct)
+    {
         var subscriptions = new List<Subscription>();
         string? nextToken = null;
+        var pages = 0;
         do
         {
-            var page = await sns.ListSubscriptionsAsync(new ListSubscriptionsRequest { NextToken = nextToken }, ct);
-            subscriptions.AddRange(page.Subscriptions ?? []);
-            nextToken = page.NextToken;
-        } while (!string.IsNullOrEmpty(nextToken));
+            var (page, next) = await fetchPage(nextToken, ct);
+            subscriptions.AddRange(page);
+            nextToken = next;
+            pages++;
+        } while (!string.IsNullOrEmpty(nextToken) && pages < maxPages);
 
-        return FilterSubscriptionsByEndpoint(subscriptions, endpoint);
+        return new EndpointSubscriptions(
+            FilterSubscriptionsByEndpoint(subscriptions, endpoint),
+            IsTruncated: !string.IsNullOrEmpty(nextToken),
+            ScannedCount: subscriptions.Count);
     }
 
     // Pure static so the client-side endpoint filter is unit-testable without AWS. Ordinal match --

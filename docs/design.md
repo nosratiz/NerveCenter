@@ -784,13 +784,22 @@ comes from the server-side `IConnectionProvider` lookup. **No SDK or schema chan
   through the account-wide `ListSubscriptions` and filters client-side on `Endpoint == queue ARN`
   (ordinal); each row links to that topic's detail page and shows protocol and a Pending chip. A
   failure (e.g. denied `sns:ListSubscriptions`) is an inline warning in the panel, not a page failure.
+  The scan is **capped at 20 pages (the first 2,000 subscriptions)** — past that the result
+  (`EndpointSubscriptions.IsTruncated`) makes the panel say it is partial and how many were scanned.
+  It runs **once per queue**, concurrently with (not blocking) the rest of the load, and is not
+  repeated by the reloads after Send/Purge/Redrive. The page loads in `OnParametersSetAsync`, so
+  navigating to another queue (or connection) on the same component instance resets everything —
+  detail, SNS panel, redrive tasks and their poll — and discards any load still in flight for the
+  previous queue.
 
 - **Redrive progress + cancel** — `ISqsOperations.ListMessageMoveTasksAsync` (`ListMessageMoveTasks`,
   `MaxResults = 10`) and `CancelMessageMoveTaskAsync`. On DLQs only, `QueueDetail` shows a **Redrive
   tasks** panel: per task status, a progress bar (indeterminate when AWS doesn't report a total),
   moved/to-move counts, start time and failure reason. A 5-second poll runs **only while some task is
-  `RUNNING`**, stops on its own otherwise, never overlaps an in-flight load, and is cancelled when the
-  component is disposed. Running tasks get a **Cancel** button (`CancelRedriveCommandHandler`,
+  active — `RUNNING` or `CANCELLING`** (`MessageMoveTaskSummary.IsActive`), stops on its own otherwise,
+  never overlaps an in-flight load, and is cancelled when the component is disposed. A refresh
+  requested while one is in flight (e.g. right after Cancel) is queued and re-run when the in-flight
+  one finishes, so a stale `RUNNING` can't stick. Only `RUNNING` tasks get a **Cancel** button (`CancelRedriveCommandHandler`,
   `ActionRisk.Mutating`, audited `aws.queue.redrive.cancel`) with **no confirmation dialog** —
   cancelling only stops further moves; messages already moved stay moved (the snackbar says so).
   A listing failure is an inline warning that keeps the last-known tasks.

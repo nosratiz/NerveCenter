@@ -140,6 +140,12 @@ else
                 else
                 {
                     <MudText Typo="Typo.subtitle2" Class="mb-2">Subscribed to @_subscriptions.Count SNS @(_subscriptions.Count == 1 ? "topic" : "topics")</MudText>
+                    @if (_snsScan is { IsTruncated: true } scan)
+                    {
+                        <MudText Typo="Typo.caption" Class="sns-scan-truncated mud-text-secondary d-block mb-1">
+                            Partial — scanned only the first @scan.ScannedCount.ToString("N0", CultureInfo.InvariantCulture) subscriptions in the account; this queue may have more.
+                        </MudText>
+                    }
                     @foreach (var subscription in _subscriptions)
                     {
                         <div class="d-flex align-center gap-2">
@@ -186,13 +192,14 @@ else
                         </MudText>
                         <MudText Typo="Typo.caption" Class="mud-text-secondary">started @FormatTimestamp(task.StartedAt)</MudText>
                         <MudSpacer />
+                        @* Cancel only while RUNNING; CANCELLING is still active (polled) but not cancellable. *@
                         @if (task.IsRunning && task.TaskHandle is { } handle)
                         {
                             <MudButton Class="cancel-redrive" Size="Size.Small" Color="Color.Warning" Disabled="@(_cancellingHandle == handle)" OnClick="@(() => CancelRedriveAsync(handle))">Cancel</MudButton>
                         }
                     </div>
                     <MudProgressLinear Class="redrive-task-progress my-1" Color="@StatusColor(task.Status)"
-                                       Indeterminate="@(task.IsRunning && task.ProgressPercent is null)"
+                                       Indeterminate="@(task.IsActive && task.ProgressPercent is null)"
                                        Value="@(task.ProgressPercent ?? 0)" />
                     <MudText Typo="Typo.caption" Style="font-family:monospace">
                         @task.MessagesMoved.ToString("N0", CultureInfo.InvariantCulture) / @(task.MessagesToMove?.ToString("N0", CultureInfo.InvariantCulture) ?? "?") moved
@@ -254,13 +261,23 @@ else
     private bool _loading;
     private string? _error;
     private IReadOnlyList<SubscriptionSummary> _subscriptions = [];
+    private EndpointSubscriptions? _snsScan;
     private bool _snsLoading;
     private string? _snsError;
+    // The queue ARN the SNS panel was (or is being) loaded for. The account-wide subscription scan
+    // runs once per queue -- on first load / parameter change -- never on post-action reloads.
+    private string? _snsLoadedFor;
     private bool _deleting;
     private ConnectionInfo? _connection;
     private IReadOnlyList<MessageMoveTaskSummary> _redriveTasks = [];
     private string? _redriveTasksError;
     private bool _refreshingRedriveTasks;
+    // Set when a refresh was requested while one was in flight (e.g. Cancel during a poll): the
+    // in-flight refresh runs once more when it finishes, so a stale RUNNING can't stick.
+    private bool _redriveRefreshPending;
+    // "{ConnectionId}|{QueueUrlEncoded}" of the queue currently shown. Bumped on parameter change;
+    // any load that completes for an older key is discarded.
+    private string? _pageKey;
     private string? _cancellingHandle;
     private CancellationTokenSource? _pollCts;
     private bool _disposed;
@@ -284,20 +301,58 @@ else
     private static string FormatTimestamp(DateTimeOffset? value) =>
         value is { } timestamp ? timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "—";
 
-    protected override async Task OnInitializedAsync()
+    private string PageKey => $"{ConnectionId}|{QueueUrlEncoded}";
+
+    // Loads on first render and again whenever the route's queue or ?connectionId= changes (Blazor
+    // reuses this component instance when navigating between two queue detail URLs): everything
+    // from the previous queue -- detail, SNS panel, redrive tasks and their poll -- is reset first.
+    protected override async Task OnParametersSetAsync()
     {
-        _connection = (await Connections.ListAsync("aws")).FirstOrDefault(c => c.Id == ConnectionId);
+        var key = PageKey;
+        if (key == _pageKey)
+        {
+            return;
+        }
+
+        _pageKey = key;
+        StopPolling();
+        _detail = null;
+        _error = null;
+        _subscriptions = [];
+        _snsScan = null;
+        _snsError = null;
+        _snsLoading = false;
+        _snsLoadedFor = null;
+        _redriveTasks = [];
+        _redriveTasksError = null;
+        _redriveRefreshPending = false;
+        _refreshingRedriveTasks = false;
+
+        var connection = (await Connections.ListAsync("aws")).FirstOrDefault(c => c.Id == ConnectionId);
+        if (key != _pageKey)
+        {
+            return;
+        }
+
+        _connection = connection;
         await LoadAsync();
     }
 
-    // _loading spans the whole reload (not just the detail call) so a poll tick that lands while any
-    // part of it is in flight is skipped rather than overlapping it -- see PollRedriveTasksAsync.
+    // _loading spans the detail + redrive reload so a poll tick that lands while any part of it is
+    // in flight is skipped rather than overlapping it -- see PollRedriveTasksAsync. The SNS panel is
+    // not part of it: it's started (once per queue) without being awaited, see StartSubscriptionsLoad.
     private async Task LoadAsync()
     {
+        var key = _pageKey;
         _loading = true;
         try
         {
             var result = await DetailHandler.HandleAsync(ConnectionId, QueueUrl);
+            if (key != _pageKey)
+            {
+                return;
+            }
+
             if (result.IsSuccess)
             {
                 _detail = result.Value!;
@@ -309,16 +364,19 @@ else
                 _error = result.Error;
             }
 
-            if (_detail is { QueueArn.Length: > 0 })
+            if (_detail is { QueueArn.Length: > 0 } detail && detail.QueueArn != _snsLoadedFor)
             {
-                await LoadSubscriptionsAsync(_detail.QueueArn);
+                StartSubscriptionsLoad(detail.QueueArn);
             }
 
             await LoadRedriveTasksAsync();
         }
         finally
         {
-            _loading = false;
+            if (key == _pageKey)
+            {
+                _loading = false;
+            }
         }
     }
 
@@ -336,26 +394,40 @@ else
 
         if (_refreshingRedriveTasks)
         {
+            _redriveRefreshPending = true;
             return;
         }
 
+        var key = _pageKey;
         _refreshingRedriveTasks = true;
         try
         {
-            var result = await RedriveTasksHandler.HandleAsync(ConnectionId, detail.QueueArn);
-            if (result.IsSuccess)
+            do
             {
-                _redriveTasks = result.Value!;
-                _redriveTasksError = null;
-            }
-            else
-            {
-                _redriveTasksError = result.Error;
-            }
+                _redriveRefreshPending = false;
+                var result = await RedriveTasksHandler.HandleAsync(ConnectionId, detail.QueueArn);
+                if (key != _pageKey)
+                {
+                    return;
+                }
+
+                if (result.IsSuccess)
+                {
+                    _redriveTasks = result.Value!;
+                    _redriveTasksError = null;
+                }
+                else
+                {
+                    _redriveTasksError = result.Error;
+                }
+            } while (_redriveRefreshPending);
         }
         finally
         {
-            _refreshingRedriveTasks = false;
+            if (key == _pageKey)
+            {
+                _refreshingRedriveTasks = false;
+            }
         }
 
         UpdatePolling();
@@ -364,9 +436,10 @@ else
     // One poll step, called by the loop below every 5s -- and directly by tests instead of waiting
     // on the real delay (NavMenu precedent, docs/design.md §8). Returns whether polling should
     // continue. A tick that lands while a load/refresh is in flight is skipped, never overlapped.
+    // Polls while any task is active (RUNNING or CANCELLING), so a cancel is followed to CANCELLED.
     internal async Task<bool> PollRedriveTasksAsync()
     {
-        if (!_redriveTasks.Any(t => t.IsRunning))
+        if (!_redriveTasks.Any(t => t.IsActive))
         {
             return false;
         }
@@ -378,10 +451,10 @@ else
 
         await LoadRedriveTasksAsync();
         StateHasChanged();
-        return _redriveTasks.Any(t => t.IsRunning);
+        return _redriveTasks.Any(t => t.IsActive);
     }
 
-    // Starts the poll loop when a task is RUNNING and none is alive; stops it once nothing is.
+    // Starts the poll loop when a task is active and none is alive; stops it once nothing is.
     private void UpdatePolling()
     {
         if (_disposed)
@@ -389,7 +462,7 @@ else
             return;
         }
 
-        if (_redriveTasks.Any(t => t.IsRunning))
+        if (_redriveTasks.Any(t => t.IsActive))
         {
             if (_pollCts is null)
             {
@@ -415,7 +488,7 @@ else
         }
         catch (OperationCanceledException)
         {
-            // Stopped: nothing RUNNING any more, or the page was disposed.
+            // Stopped: nothing active any more, another queue was opened, or the page was disposed.
         }
         catch (Exception ex)
         {
@@ -501,19 +574,36 @@ else
     }
 
     // Separate from the detail load on purpose: SNS is a different service with its own IAM
-    // permissions, so a denial here is an inline warning in its panel, never a page failure.
-    private async Task LoadSubscriptionsAsync(string queueArn)
+    // permissions, so a denial here is an inline warning in its panel, never a page failure. And
+    // the account-wide ListSubscriptions scan can be slow, so it runs concurrently with the rest of
+    // the load (not awaited) and only once per queue -- a Send/Purge/Redrive reload never repeats it.
+    private void StartSubscriptionsLoad(string queueArn)
     {
+        _snsLoadedFor = queueArn;
         _snsLoading = true;
+        _ = LoadSubscriptionsAsync(_pageKey, queueArn);
+    }
+
+    private async Task LoadSubscriptionsAsync(string? key, string queueArn)
+    {
         try
         {
             var result = await SnsHandler.HandleAsync(ConnectionId, queueArn);
-            _subscriptions = result.IsSuccess ? result.Value! : [];
+            if (key != _pageKey || _disposed)
+            {
+                return;
+            }
+
+            _snsScan = result.IsSuccess ? result.Value! : null;
+            _subscriptions = result.IsSuccess ? result.Value!.Subscriptions : [];
             _snsError = result.IsSuccess ? null : result.Error;
-        }
-        finally
-        {
             _snsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            // The handler already reduces failures to a result; this only guards the fire-and-forget.
+            Logger.LogWarning(ex, "Loading SNS subscriptions for {QueueUrl} failed.", QueueUrl);
         }
     }
 

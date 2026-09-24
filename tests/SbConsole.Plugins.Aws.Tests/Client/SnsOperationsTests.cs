@@ -197,4 +197,53 @@ public class SnsOperationsTests
         matches[0].TopicName.Should().Be("order-events");
         matches[1].IsPending.Should().BeTrue();
     }
+
+    private static Func<string?, CancellationToken, Task<(IReadOnlyList<Amazon.SimpleNotificationService.Model.Subscription> Page, string? NextToken)>> Pages(
+        int totalPages, List<string?> requestedTokens, string matchingEndpoint)
+    {
+        return (token, _) =>
+        {
+            requestedTokens.Add(token);
+            var index = token is null ? 0 : int.Parse(token, System.Globalization.CultureInfo.InvariantCulture);
+            IReadOnlyList<Amazon.SimpleNotificationService.Model.Subscription> page =
+            [
+                new() { SubscriptionArn = $"arn:sub-{index}", Protocol = "sqs", Endpoint = index == 0 ? matchingEndpoint : "arn:other", TopicArn = "arn:aws:sns:eu-west-1:1:t" },
+                new() { SubscriptionArn = $"arn:sub-{index}b", Protocol = "sqs", Endpoint = "arn:other", TopicArn = "arn:aws:sns:eu-west-1:1:t" },
+            ];
+            var next = index + 1 < totalPages ? (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+            return Task.FromResult((page, next));
+        };
+    }
+
+    [Fact]
+    public async Task ScanSubscriptionsForEndpoint_reads_every_page_when_under_the_cap()
+    {
+        var tokens = new List<string?>();
+
+        var result = await SnsOperations.ScanSubscriptionsForEndpointAsync(Pages(3, tokens, "arn:q"), "arn:q", maxPages: 5, CancellationToken.None);
+
+        tokens.Should().Equal(null, "1", "2");
+        result.IsTruncated.Should().BeFalse();
+        result.ScannedCount.Should().Be(6);
+        result.Subscriptions.Should().ContainSingle(s => s.SubscriptionArn == "arn:sub-0");
+    }
+
+    [Fact]
+    public async Task ScanSubscriptionsForEndpoint_stops_at_the_page_cap_and_reports_truncation()
+    {
+        var tokens = new List<string?>();
+
+        var result = await SnsOperations.ScanSubscriptionsForEndpointAsync(Pages(50, tokens, "arn:q"), "arn:q", maxPages: 4, CancellationToken.None);
+
+        tokens.Should().HaveCount(4, "the scan never reads past the cap");
+        result.IsTruncated.Should().BeTrue();
+        result.ScannedCount.Should().Be(8);
+        result.Subscriptions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void The_endpoint_scan_cap_is_20_pages()
+    {
+        SnsOperations.MaxEndpointScanPages.Should().Be(20);
+    }
 }

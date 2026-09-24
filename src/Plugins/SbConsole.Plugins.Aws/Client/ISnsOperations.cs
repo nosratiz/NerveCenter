@@ -19,10 +19,11 @@ public interface ISnsOperations
     /// <summary>
     /// Every subscription (any topic) whose Endpoint equals <paramref name="endpoint"/> -- e.g. a
     /// queue ARN. SNS has no server-side filter for this, so it pages through ListSubscriptions and
-    /// filters client-side. Subscription attributes are not fetched (RawMessageDelivery/
-    /// FilterPolicyJson stay null).
+    /// filters client-side, stopping after SnsOperations.MaxEndpointScanPages pages (reported via
+    /// EndpointSubscriptions.IsTruncated). Subscription attributes are not fetched
+    /// (RawMessageDelivery/FilterPolicyJson stay null).
     /// </summary>
-    Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default);
+    Task<EndpointSubscriptions> ListSubscriptionsForEndpointAsync(string secret, string endpoint, CancellationToken ct = default);
     Task<string> SubscribeAsync(string secret, SubscribeRequest request, CancellationToken ct = default);
     /// <summary>Mutating, not Destructive -- reversible by subscribing again.</summary>
     Task UnsubscribeAsync(string secret, string subscriptionArn, CancellationToken ct = default);

@@ -298,4 +298,18 @@ public class SqsOperationsTests
         task.StartedAt.Should().BeNull();
         task.FailureReason.Should().Be("AWS.SimpleQueueService.NonExistentQueue");
     }
+
+    [Theory]
+    [InlineData("RUNNING", true, true)]
+    [InlineData("CANCELLING", false, true)]
+    [InlineData("COMPLETED", false, false)]
+    [InlineData("CANCELLED", false, false)]
+    [InlineData("FAILED", false, false)]
+    public void A_move_task_is_active_while_running_or_cancelling_but_only_cancellable_while_running(string status, bool running, bool active)
+    {
+        var task = new MessageMoveTaskSummary("h", status, "arn:src", null, 0, null, null, null);
+
+        task.IsRunning.Should().Be(running);
+        task.IsActive.Should().Be(active);
+    }
 }

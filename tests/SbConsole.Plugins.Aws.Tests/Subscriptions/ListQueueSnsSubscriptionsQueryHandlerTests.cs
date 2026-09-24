@@ -29,12 +29,14 @@ public class ListQueueSnsSubscriptionsQueryHandlerTests
             new("arn:sub-1", "sqs", "arn:aws:sqs:eu-west-1:1:orders", false, null, null, "arn:aws:sns:eu-west-1:1:order-events"),
         };
         _operations.ListSubscriptionsForEndpointAsync("mode=default-chain;region=eu-west-1", "arn:aws:sqs:eu-west-1:1:orders", Arg.Any<CancellationToken>())
-            .Returns(subs);
+            .Returns(new EndpointSubscriptions(subs, IsTruncated: true, ScannedCount: 2000));
 
         var result = await Handler().HandleAsync(_connectionId, "arn:aws:sqs:eu-west-1:1:orders");
 
         result.IsSuccess.Should().BeTrue();
-        result.Value.Should().BeEquivalentTo(subs);
+        result.Value!.Subscriptions.Should().BeEquivalentTo(subs);
+        result.Value.IsTruncated.Should().BeTrue();
+        result.Value.ScannedCount.Should().Be(2000);
     }
 
     [Fact]
@@ -53,7 +55,7 @@ public class ListQueueSnsSubscriptionsQueryHandlerTests
     public async Task Operation_failure_is_reduced_to_a_friendly_error()
     {
         _operations.ListSubscriptionsForEndpointAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<SubscriptionSummary>>(new InvalidOperationException("AuthorizationError")));
+            .Returns(Task.FromException<EndpointSubscriptions>(new InvalidOperationException("AuthorizationError")));
 
         var result = await Handler().HandleAsync(_connectionId, "arn:aws:sqs:eu-west-1:1:orders");
 

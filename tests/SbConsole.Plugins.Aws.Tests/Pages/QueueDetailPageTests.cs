@@ -28,6 +28,7 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
     private readonly IConnectionProvider _connections = Substitute.For<IConnectionProvider>();
     private readonly IConfirmationService _confirmation = Substitute.For<IConfirmationService>();
     private readonly Guid _connectionId = Guid.NewGuid();
+    private readonly IDialogService _dialogs = Substitute.For<IDialogService>();
 
     public QueueDetailPageTests()
     {
@@ -36,13 +37,13 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
         _connections.ListAsync("aws", Arg.Any<CancellationToken>())
             .Returns(new List<ConnectionInfo> { new(_connectionId, "aws-prod", "aws", ["prod"]) });
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns(Secret);
-        _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(new List<SubscriptionSummary>());
+        _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(new EndpointSubscriptions([], false, 0));
         Services.AddSingleton(_connections);
         Services.AddSingleton(_sqs);
         Services.AddSingleton(_sns);
         Services.AddSingleton(_confirmation);
         Services.AddSingleton(Substitute.For<IAuditScope>());
-        Services.AddSingleton(Substitute.For<IDialogService>());
+        Services.AddSingleton(_dialogs);
         Services.AddLogging();
         Services.AddSingleton<GetQueueDetailQueryHandler>();
         Services.AddSingleton<ListQueueSnsSubscriptionsQueryHandler>();
@@ -155,10 +156,10 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
     {
         GivenDetail(Attributes());
         _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>())
-            .Returns(new List<SubscriptionSummary>
-            {
+            .Returns(new EndpointSubscriptions(
+            [
                 new("arn:sub-1", "sqs", QueueArn, false, null, null, "arn:aws:sns:eu-west-1:123456789012:order-events"),
-            });
+            ], IsTruncated: false, ScannedCount: 1));
 
         var cut = RenderPage();
 
@@ -176,7 +177,7 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
     {
         GivenDetail(Attributes());
         _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<SubscriptionSummary>>(new InvalidOperationException("not authorized to perform sns:ListSubscriptions")));
+            .Returns(Task.FromException<EndpointSubscriptions>(new InvalidOperationException("not authorized to perform sns:ListSubscriptions")));
 
         var cut = RenderPage();
 
@@ -344,6 +345,34 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
 
         await _sqs.Received(1).CancelMessageMoveTaskAsync(Secret, "handle-1", Arg.Any<CancellationToken>());
         cut.WaitForAssertion(() => cut.Find(".redrive-task").TextContent.Should().Contain("CANCELLING"));
+        cut.FindAll("button.cancel-redrive").Should().BeEmpty("only a RUNNING task can be cancelled");
+        cut.Instance.IsPolling.Should().BeTrue("a CANCELLING task is still moving messages until it settles");
+
+        GivenTasks(MoveTask("CANCELLING", 35, 100, handle: null));
+        (await cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync())).Should().BeTrue();
+        cut.Instance.IsPolling.Should().BeTrue();
+
+        GivenTasks(MoveTask("CANCELLED", 35, 100, handle: null));
+        (await cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync())).Should().BeFalse();
+        cut.Instance.IsPolling.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Cancel_while_a_poll_refresh_is_in_flight_re_runs_the_refresh_afterwards()
+    {
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+        var cut = RenderPage();
+        var pending = new TaskCompletionSource<IReadOnlyList<MessageMoveTaskSummary>>();
+        _sqs.ListMessageMoveTasksAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(pending.Task);
+        var poll = cut.InvokeAsync(() => cut.Instance.PollRedriveTasksAsync());
+
+        GivenTasks(MoveTask("CANCELLING", 30, 100, handle: null));
+        await cut.Find("button.cancel-redrive").ClickAsync(new());
+        pending.SetResult([MoveTask("RUNNING", 26, 100)]);
+        await poll;
+
+        cut.WaitForAssertion(() => cut.Find(".redrive-task").TextContent.Should().Contain("CANCELLING"));
         cut.FindAll("button.cancel-redrive").Should().BeEmpty();
     }
 
@@ -372,6 +401,7 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
 
         cut.Find(".redrive-task").TextContent.Should().Contain("COMPLETED");
         keepPolling.Should().BeFalse("nothing is RUNNING any more");
+        cut.Instance.IsPolling.Should().BeFalse("the loop stops once no task is active");
     }
 
     [Fact]
@@ -419,5 +449,74 @@ public class QueueDetailPageTests : BunitContext, IAsyncLifetime
         await DisposeComponentsAsync();
 
         page.IsPolling.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_capped_SNS_scan_says_the_list_is_partial()
+    {
+        GivenDetail(Attributes());
+        _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>())
+            .Returns(new EndpointSubscriptions([], IsTruncated: true, ScannedCount: 2000));
+
+        var cut = RenderPage();
+
+        cut.Find(".sns-scan-truncated").TextContent.Should().Contain("2,000");
+    }
+
+    [Fact]
+    public void The_detail_renders_without_waiting_for_the_SNS_scan()
+    {
+        GivenDetail(Attributes());
+        var sns = new TaskCompletionSource<EndpointSubscriptions>();
+        _sns.ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>()).Returns(sns.Task);
+
+        var cut = RenderPage();
+
+        cut.Find(".tile-visible").TextContent.Should().Contain("42");
+        cut.FindAll(".sns-busy").Should().ContainSingle();
+        sns.SetResult(new EndpointSubscriptions(
+            [new("arn:sub-1", "sqs", QueueArn, false, null, null, "arn:aws:sns:eu-west-1:123456789012:order-events")], false, 1));
+        cut.WaitForAssertion(() => cut.Find(".sns-subscriptions").TextContent.Should().Contain("order-events"));
+    }
+
+    [Fact]
+    public async Task A_post_action_reload_does_not_rescan_SNS_subscriptions()
+    {
+        GivenDetail(Attributes());
+        var dialog = Substitute.For<IDialogReference>();
+        dialog.Result.Returns(Task.FromResult<DialogResult?>(DialogResult.Ok(true)));
+        _dialogs.ShowAsync<SendMessageDialog>(Arg.Any<string>(), Arg.Any<DialogParameters>()).Returns(dialog);
+        var cut = RenderPage();
+        _sqs.ClearReceivedCalls();
+
+        await cut.Find("button.send-message-action").ClickAsync(new());
+
+        await _sqs.Received(1).GetQueueDetailAsync(Secret, QueueUrl, Arg.Any<CancellationToken>());
+        await _sns.Received(1).ListSubscriptionsForEndpointAsync(Secret, QueueArn, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Navigating_to_another_queue_reloads_the_page_and_resets_polling()
+    {
+        const string OtherUrl = "https://sqs.eu-west-1.amazonaws.com/123456789012/billing";
+        GivenDetail(Attributes(), sources: ["https://sqs/a"]);
+        GivenTasks(MoveTask("RUNNING", 25, 100));
+        var otherAttributes = Attributes();
+        otherAttributes["QueueArn"] = "arn:aws:sqs:eu-west-1:123456789012:billing";
+        otherAttributes["ApproximateNumberOfMessages"] = "5";
+        _sqs.GetQueueDetailAsync(Secret, OtherUrl, Arg.Any<CancellationToken>())
+            .Returns(SqsOperations.ToQueueDetail(OtherUrl, otherAttributes, new Dictionary<string, string>(), []));
+        _sns.ListSubscriptionsForEndpointAsync(Secret, "arn:aws:sqs:eu-west-1:123456789012:billing", Arg.Any<CancellationToken>())
+            .Returns(new EndpointSubscriptions([], false, 0));
+        var cut = RenderPage();
+        cut.Instance.IsPolling.Should().BeTrue();
+
+        cut.Render(parameters => parameters.Add(p => p.QueueUrlEncoded, Uri.EscapeDataString(OtherUrl)));
+
+        cut.WaitForAssertion(() => cut.Find(".tile-visible").TextContent.Should().Contain("5"));
+        cut.Find(".queue-name").TextContent.Should().Contain("billing");
+        cut.FindAll(".redrive-tasks").Should().BeEmpty();
+        cut.Instance.IsPolling.Should().BeFalse("the previous queue's redrive poll must not keep running");
+        _sns.Received(1).ListSubscriptionsForEndpointAsync(Secret, "arn:aws:sqs:eu-west-1:123456789012:billing", Arg.Any<CancellationToken>());
     }
 }
