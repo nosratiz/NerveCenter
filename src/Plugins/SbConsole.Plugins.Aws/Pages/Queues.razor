@@ -76,9 +76,13 @@ else
         <MudText Class="queues-summary mud-text-secondary" Typo="Typo.body2">@_queues.Count @(_queues.Count == 1 ? "queue" : "queues")</MudText>
         @if (_countsReadAt is { } readAt)
         {
-            <MudText Typo="Typo.caption" Class="counts-read-caption mud-text-secondary">counts read @readAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture)</MudText>
+            <MudText Typo="Typo.caption" Class="counts-read-caption mud-text-secondary">counts read @readAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture) @ZoneLabel(readAt.Offset)</MudText>
         }
     </div>
+    @if (_loadError is not null)
+    {
+        <MudAlert Class="queues-load-error my-2" Severity="Severity.Error" Dense="true">Couldn't list queues: @_loadError</MudAlert>
+    }
     <MudText Typo="Typo.caption" Class="refresh-cost-caption mud-text-secondary mb-2">
         <span style="font-family:monospace">ListQueues</span> filters by prefix only — no substring or regex.
         Each refresh is 1 + @_queues.Count = @(1 + _queues.Count) calls.
@@ -147,6 +151,12 @@ else
     private string _namePrefix = "";
     private string _connectionEcho = "";
     private DateTimeOffset? _countsReadAt;
+    private string? _loadError;
+    // Bumped by every LoadQueuesAsync/LoadEchoAsync start. A load whose generation is no longer the
+    // latest when it completes is stale (the connection or prefix changed while it was in flight):
+    // its result is discarded, so connection A's queues can never render under connection B.
+    private int _loadGeneration;
+    private int _echoGeneration;
     private CancellationTokenSource? _refreshCts;
     private bool _disposed;
 
@@ -222,7 +232,7 @@ else
             return false;
         }
 
-        await LoadQueuesAsync();
+        await LoadQueuesAsync(fromAutoRefresh: true);
         StateHasChanged();
         return true;
     }
@@ -290,35 +300,66 @@ else
         await LoadQueuesAsync();
     }
 
-    private async Task LoadQueuesAsync()
+    // Only the latest generation applies its result and clears _loading -- see _loadGeneration.
+    // A failure clears the "counts read" caption (the counts are no longer current) and shows an
+    // inline error; the snackbar fires for user-initiated loads and for the first failure of an
+    // auto-refresh streak, never once per failing tick.
+    private async Task LoadQueuesAsync(bool fromAutoRefresh = false)
     {
+        var generation = ++_loadGeneration;
+        var connectionId = _selectedConnectionId;
+        var prefix = string.IsNullOrWhiteSpace(_namePrefix) ? null : _namePrefix;
         _loading = true;
         try
         {
-            var prefix = string.IsNullOrWhiteSpace(_namePrefix) ? null : _namePrefix;
-            var result = await ListHandler.HandleAsync(_selectedConnectionId, prefix);
+            var result = await ListHandler.HandleAsync(connectionId, prefix);
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
             if (result.IsSuccess)
             {
                 _queues = result.Value!;
                 _countsReadAt = TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+                _loadError = null;
             }
             else
             {
+                var alreadyFailing = _loadError is not null;
                 _queues = [];
-                Snackbar.Add(result.Error!, Severity.Error);
+                _countsReadAt = null;
+                _loadError = result.Error!;
+                if (!(fromAutoRefresh && alreadyFailing))
+                {
+                    Snackbar.Add(result.Error!, Severity.Error);
+                }
             }
         }
         finally
         {
-            _loading = false;
+            if (generation == _loadGeneration)
+            {
+                _loading = false;
+            }
         }
     }
 
     private async Task LoadEchoAsync()
     {
+        var generation = ++_echoGeneration;
         var result = await EchoHandler.HandleAsync(_selectedConnectionId);
-        _connectionEcho = result.IsSuccess ? result.Value! : "";
+        if (generation == _echoGeneration)
+        {
+            _connectionEcho = result.IsSuccess ? result.Value! : "";
+        }
     }
+
+    // TimeZoneInfo has no portable abbreviation, so the zone is labelled by its offset.
+    private static string ZoneLabel(TimeSpan offset) =>
+        offset == TimeSpan.Zero
+            ? "UTC"
+            : $"UTC{(offset < TimeSpan.Zero ? "-" : "+")}{offset.Duration():hh\\:mm}";
 
     // Same shape as AwsPlugin.BuildQueueProblemLink -- QueueDetail.razor's route takes the queue URL
     // escaped into a single segment plus ?connectionId=.

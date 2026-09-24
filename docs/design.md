@@ -800,7 +800,10 @@ comes from the server-side `IConnectionProvider` lookup. **No SDK or schema chan
   `IPluginStore` under `queues.autoRefreshSeconds` (an unreadable or unrecognised stored value means
   Off; a failed save still applies the choice for the visit); a tick that lands mid-load is skipped,
   never overlapped; the loop is disposed with the page. A **"counts read HH:mm:ss"** caption
-  (server-local time via `TimeProvider`) follows each load. Purge and Delete moved from inline buttons
+  (server-local time via `TimeProvider`, labelled `UTC` / `UTC±hh:mm`) follows each successful load;
+  a failed load clears it and shows an inline error, and a failing auto-refresh streak raises one
+  snackbar, not one per tick. Loads carry a generation number: a load that completes after the
+  connection or prefix changed is discarded, so one account's queues never render under another. Purge and Delete moved from inline buttons
   into a per-row overflow `MudMenu`; their confirmation flows are unchanged (§6.7's missing Purge
   page-level test now exists, exercising it through the menu).
 

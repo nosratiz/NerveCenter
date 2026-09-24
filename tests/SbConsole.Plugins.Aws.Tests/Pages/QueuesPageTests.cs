@@ -53,8 +53,9 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     private sealed class MutableClock(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;
+        public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
         public override DateTimeOffset GetUtcNow() => Now;
-        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+        public override TimeZoneInfo LocalTimeZone => Zone;
     }
 
     // The row overflow MudMenu's items render into <MudPopoverProvider/> (hosted once by the real
@@ -326,7 +327,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         await Task.Delay(30);
         cut.Render();
 
-        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:07");
+        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:07 UTC");
     }
 
     [Fact]
@@ -421,7 +422,7 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         refreshed.Should().BeTrue();
         await _operations.Received(1).ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>());
         cut.Markup.Should().Contain("billing");
-        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:37");
+        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 14:03:37 UTC");
     }
 
     [Fact]
@@ -455,5 +456,93 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
         await DisposeComponentsAsync();
 
         page.IsAutoRefreshing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task The_counts_read_caption_labels_a_non_UTC_zone_with_its_offset()
+    {
+        _clock.Zone = TimeZoneInfo.CreateCustomTimeZone("Test+2", TimeSpan.FromHours(2), "Test+2", "Test+2");
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Find(".counts-read-caption").TextContent.Trim().Should().Be("counts read 16:03:07 UTC+02:00");
+    }
+
+    [Fact]
+    public async Task A_failed_refresh_clears_the_counts_read_caption_and_shows_an_inline_error()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.FindAll(".counts-read-caption").Should().ContainSingle();
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<QueueSummary>>(new InvalidOperationException("throttled")));
+
+        await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+
+        cut.FindAll(".counts-read-caption").Should().BeEmpty("a failed read must not keep advertising stale counts");
+        cut.FindAll(".queues-load-error").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_failing_auto_refresh_streak_raises_one_snackbar_not_one_per_tick()
+    {
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        var snackbar = Services.GetRequiredService<ISnackbar>();
+        // A distinct message per tick, so MudBlazor's duplicate-snackbar suppression can't mask a
+        // snackbar-per-tick regression.
+        var tick = 0;
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<IReadOnlyList<QueueSummary>>(new InvalidOperationException($"throttled #{++tick}")));
+
+        await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+        await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+        await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+
+        snackbar.ShownSnackbars.Should().ContainSingle("the streak's first failure is announced once");
+        cut.FindAll(".queues-load-error").Should().ContainSingle();
+
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("order-events") });
+        await cut.InvokeAsync(() => cut.Instance.AutoRefreshTickAsync());
+        cut.FindAll(".queues-load-error").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_slow_load_for_the_previous_connection_never_overwrites_the_newly_selected_one()
+    {
+        const string SecretB = "mode=default-chain;region=us-east-1";
+        var connectionB = new ConnectionInfo(Guid.NewGuid(), "aws-prod", "aws", ["prod"]);
+        _connections.ListAsync("aws", Arg.Any<CancellationToken>()).Returns(new List<ConnectionInfo> { _connectionInfo, connectionB });
+        _connections.GetSecretAsync(connectionB.Id, Arg.Any<CancellationToken>()).Returns(SecretB);
+        var loadA = new TaskCompletionSource<IReadOnlyList<QueueSummary>>();
+        var loadB = new TaskCompletionSource<IReadOnlyList<QueueSummary>>();
+        _operations.ListQueuesAsync(Secret, null, Arg.Any<CancellationToken>()).Returns(loadA.Task);
+        _operations.ListQueuesAsync(SecretB, null, Arg.Any<CancellationToken>()).Returns(loadB.Task);
+
+        var cut = RenderWithPopovers();
+        await Task.Delay(30);
+        await cut.Find(".connection-menu .mud-menu-activator").KeyDownAsync(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        await Task.Delay(30);
+        cut.Render();
+        var switchTask = cut.FindAll(".connection-option").Single(e => e.TextContent.Contains("aws-prod")).ClickAsync(new());
+
+        loadB.SetResult([Queue("prod-orders")]);
+        await switchTask;
+        loadA.SetResult([Queue("dev-orders")]);
+        await Task.Delay(30);
+        cut.Render();
+
+        cut.Markup.Should().Contain("prod-orders");
+        cut.Markup.Should().NotContain("dev-orders", "connection A's late result must be discarded");
+        cut.FindAll(".queues-busy").Should().BeEmpty();
     }
 }
