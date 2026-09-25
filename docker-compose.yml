@@ -82,8 +82,9 @@ services:
 
   # ---------------------------------------------------------------------------------------
   # LocalStack (profile: aws) -- SQS + SNS emulator for manual testing of the AWS plugin.
-  # SNS is enabled now (not just SQS) so the SNS plan (docs/superpowers/specs/
-  # 2026-09-21-aws-sqs-plugin-design.md §1) needs no compose change later.
+  # STS backs the plugin's Test connection (GetCallerIdentity); CloudWatch backs the topic
+  # delivery-failure count and the oldest-dead-letter tile; Logs backs the SNS delivery-logs tab.
+  # Without sts, every Test connection against this emulator fails.
   # ---------------------------------------------------------------------------------------
   localstack:
     image: localstack/localstack:3
@@ -92,7 +93,7 @@ services:
     ports:
       - "${LOCALSTACK_PORT:-4566}:4566"
     environment:
-      SERVICES: sqs,sns
+      SERVICES: sqs,sns,sts,cloudwatch,logs
       DEBUG: 0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
