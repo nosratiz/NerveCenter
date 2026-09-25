@@ -38,4 +38,12 @@ public interface ISqsOperations
     Task<IReadOnlyList<MessageMoveTaskSummary>> ListMessageMoveTasksAsync(string secret, string sourceQueueArn, CancellationToken ct = default);
     /// <summary>CancelMessageMoveTask -- only valid while the task is RUNNING. Messages already moved stay moved.</summary>
     Task CancelMessageMoveTaskAsync(string secret, string taskHandle, CancellationToken ct = default);
+
+    /// <summary>
+    /// CloudWatch AWS/SQS ApproximateAgeOfOldestMessage (Maximum, latest datapoint in a recent
+    /// window) for one queue -- a read with no side effect on the queue, unlike ReceiveMessage.
+    /// null when CloudWatch has no recent datapoint (metric lag, or an emulator that publishes none).
+    /// Needs cloudwatch:GetMetricStatistics.
+    /// </summary>
+    Task<TimeSpan?> GetOldestMessageAgeAsync(string secret, string queueName, CancellationToken ct = default);
 }

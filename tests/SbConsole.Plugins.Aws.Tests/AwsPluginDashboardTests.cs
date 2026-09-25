@@ -191,4 +191,112 @@ public class AwsPluginDashboardTests
         link.Should().Be($"/p/aws/queues/{Uri.EscapeDataString(queueUrl)}?connectionId={connectionId}");
         link.Should().NotContain("https://");
     }
+
+    [Fact]
+    public void PickOldestDeadLetter_picks_the_queue_with_the_largest_age_and_derives_EnqueuedTime_from_now()
+    {
+        var now = new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
+        var result = AwsPlugin.PickOldestDeadLetter(
+            [
+                (Queue("a-dlq", 3, deadLetterSources: 1), TimeSpan.FromMinutes(5)),
+                (Queue("b-dlq", 7, deadLetterSources: 1), TimeSpan.FromHours(2)),
+                (Queue("c-dlq", 11, deadLetterSources: 1), TimeSpan.FromMinutes(30)),
+            ],
+            now);
+
+        // DeadLetterCount is the chosen queue's own count, not a total across DLQs -- same
+        // semantics as KafkaPlugin/ServiceBusPlugin.
+        result.Should().Be(new OldestDeadLetterEntry("b-dlq", now - TimeSpan.FromHours(2), 7));
+    }
+
+    [Fact]
+    public void PickOldestDeadLetter_skips_queues_without_an_age()
+    {
+        var now = new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
+        var result = AwsPlugin.PickOldestDeadLetter(
+            [
+                (Queue("no-metrics-dlq", 50, deadLetterSources: 1), null),
+                (Queue("b-dlq", 7, deadLetterSources: 1), TimeSpan.FromSeconds(90)),
+            ],
+            now);
+
+        result.Should().Be(new OldestDeadLetterEntry("b-dlq", now.AddSeconds(-90), 7));
+    }
+
+    [Fact]
+    public void PickOldestDeadLetter_is_null_when_no_queue_has_an_age()
+    {
+        AwsPlugin.PickOldestDeadLetter([(Queue("a-dlq", 3, deadLetterSources: 1), null)], DateTimeOffset.UtcNow)
+            .Should().BeNull();
+        AwsPlugin.PickOldestDeadLetter([], DateTimeOffset.UtcNow).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ComputeOldestDeadLetterAsync_queries_only_dead_letter_queues_with_messages()
+    {
+        var now = new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
+        var queried = new List<string>();
+        Task<TimeSpan?> GetAge(string queueName, CancellationToken ct)
+        {
+            lock (queried)
+            {
+                queried.Add(queueName);
+            }
+
+            return Task.FromResult<TimeSpan?>(TimeSpan.FromMinutes(queueName.Length));
+        }
+
+        var result = await AwsPlugin.ComputeOldestDeadLetterAsync(
+            [
+                Queue("orders", 100),
+                Queue("empty-dlq", 0, deadLetterSources: 1),
+                Queue("orders-dlq", 4, deadLetterSources: 1),
+                Queue("broken-dlq", 0, deadLetterSources: 1, unavailable: true),
+            ],
+            now, GetAge, CancellationToken.None);
+
+        queried.Should().BeEquivalentTo(["orders-dlq"]);
+        result.Should().Be(new OldestDeadLetterEntry("orders-dlq", now - TimeSpan.FromMinutes("orders-dlq".Length), 4));
+    }
+
+    [Fact]
+    public async Task ComputeOldestDeadLetterAsync_returns_null_without_any_metric_call_when_no_dead_letter_queue_has_messages()
+    {
+        var calls = 0;
+        var result = await AwsPlugin.ComputeOldestDeadLetterAsync(
+            [Queue("orders", 100), Queue("orders-dlq", 0, deadLetterSources: 1)],
+            DateTimeOffset.UtcNow,
+            (_, _) => { calls++; return Task.FromResult<TimeSpan?>(TimeSpan.FromMinutes(1)); },
+            CancellationToken.None);
+
+        result.Should().BeNull();
+        calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ComputeOldestDeadLetterAsync_skips_a_single_failing_queue_when_another_succeeds()
+    {
+        var now = new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
+        var result = await AwsPlugin.ComputeOldestDeadLetterAsync(
+            [Queue("a-dlq", 2, deadLetterSources: 1), Queue("b-dlq", 5, deadLetterSources: 1)],
+            now,
+            (name, _) => name == "a-dlq"
+                ? Task.FromException<TimeSpan?>(new InvalidOperationException("throttled"))
+                : Task.FromResult<TimeSpan?>(TimeSpan.FromMinutes(10)),
+            CancellationToken.None);
+
+        result.Should().Be(new OldestDeadLetterEntry("b-dlq", now.AddMinutes(-10), 5));
+    }
+
+    [Fact]
+    public async Task ComputeOldestDeadLetterAsync_propagates_when_every_metric_call_fails()
+    {
+        var act = () => AwsPlugin.ComputeOldestDeadLetterAsync(
+            [Queue("a-dlq", 2, deadLetterSources: 1), Queue("b-dlq", 5, deadLetterSources: 1)],
+            DateTimeOffset.UtcNow,
+            (_, _) => Task.FromException<TimeSpan?>(new InvalidOperationException("AccessDenied")),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("AccessDenied");
+    }
 }

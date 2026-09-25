@@ -593,4 +593,44 @@ public sealed class SqsOperations : ISqsOperations
         MessagesToMove: entry.ApproximateNumberOfMessagesToMove > 0 ? entry.ApproximateNumberOfMessagesToMove : null,
         FailureReason: string.IsNullOrEmpty(entry.FailureReason) ? null : entry.FailureReason,
         StartedAt: entry.StartedTimestamp > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(entry.StartedTimestamp) : null);
+
+    // ApproximateAgeOfOldestMessage is published per queue at 1-minute resolution, but CloudWatch
+    // typically lags a few minutes behind -- a 15-minute window at a 60s period reliably contains
+    // the most recent datapoint without pulling stale history.
+    internal static readonly TimeSpan OldestMessageAgeWindow = TimeSpan.FromMinutes(15);
+
+    private const int OldestMessageAgePeriodSeconds = 60;
+
+    public async Task<TimeSpan?> GetOldestMessageAgeAsync(string secret, string queueName, CancellationToken ct = default)
+    {
+        using var cloudWatch = CloudWatchClientFactory.Build(secret);
+        var now = DateTime.UtcNow;
+        var response = await cloudWatch.GetMetricStatisticsAsync(new Amazon.CloudWatch.Model.GetMetricStatisticsRequest
+        {
+            Namespace = "AWS/SQS",
+            MetricName = "ApproximateAgeOfOldestMessage",
+            Dimensions = [new Amazon.CloudWatch.Model.Dimension { Name = "QueueName", Value = queueName }],
+            StartTimeUtc = now - OldestMessageAgeWindow,
+            EndTimeUtc = now,
+            Period = OldestMessageAgePeriodSeconds,
+            Statistics = ["Maximum"],
+        }, ct);
+
+        return LatestMaximumAge(response.Datapoints ?? []);
+    }
+
+    // Pure, unit-testable without AWS. CloudWatch returns datapoints in no guaranteed order, so the
+    // latest *timestamp* wins (not the largest value -- an older, larger age has since been
+    // consumed/redriven). No datapoints (metric lag, an idle queue CloudWatch hasn't reported yet,
+    // or an emulator like LocalStack that publishes no SQS metrics) means "unknown", not zero.
+    internal static TimeSpan? LatestMaximumAge(IReadOnlyCollection<Amazon.CloudWatch.Model.Datapoint> datapoints)
+    {
+        if (datapoints.Count == 0)
+        {
+            return null;
+        }
+
+        var latest = datapoints.MaxBy(d => d.Timestamp)!;
+        return TimeSpan.FromSeconds(latest.Maximum);
+    }
 }

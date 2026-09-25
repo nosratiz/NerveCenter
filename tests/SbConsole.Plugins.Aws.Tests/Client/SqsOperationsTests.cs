@@ -509,4 +509,25 @@ public class SqsOperationsTests
     {
         SqsOperations.IsNamePrefixApplied(prefix).Should().Be(expected);
     }
+
+    [Fact]
+    public void LatestMaximumAge_takes_the_Maximum_of_the_datapoint_with_the_latest_timestamp()
+    {
+        var t0 = new DateTime(2026, 9, 25, 12, 0, 0, DateTimeKind.Utc);
+        // Out of timestamp order on purpose -- CloudWatch does not guarantee datapoint ordering.
+        List<Amazon.CloudWatch.Model.Datapoint> datapoints =
+        [
+            new() { Timestamp = t0.AddMinutes(1), Maximum = 500 },
+            new() { Timestamp = t0.AddMinutes(3), Maximum = 740 },
+            new() { Timestamp = t0, Maximum = 9999 },
+        ];
+
+        SqsOperations.LatestMaximumAge(datapoints).Should().Be(TimeSpan.FromSeconds(740));
+    }
+
+    [Fact]
+    public void LatestMaximumAge_is_null_when_there_are_no_datapoints()
+    {
+        SqsOperations.LatestMaximumAge([]).Should().BeNull();
+    }
 }

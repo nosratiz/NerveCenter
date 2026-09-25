@@ -174,6 +174,7 @@ on the page that uses them when denied, rather than failing the page.
 
 **CloudWatch permissions** (Delivery metrics):
 - `cloudwatch:GetMetricStatistics` — fetch topic delivery-failure count over last 24 hours
+  and each dead-letter queue's `ApproximateAgeOfOldestMessage` (wallboard "Oldest message" tile)
 
 Example IAM policy (JSON):
 ```json

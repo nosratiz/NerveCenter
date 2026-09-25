@@ -602,7 +602,8 @@ per-message manual "redrive to source" from inside Receive. *(2026-09-24: the da
 integration, redrive-progress polling, and per-message "Move to source" have since shipped — see
 §6.7.2. `AwsPlugin` no longer has a trivial `GetNavBadgeAsync` no-op; it now overrides the badge,
 dashboard-metric, dashboard-problem and resource-metric hooks and leaves only
-`GetOldestDeadLetterAsync` at the SDK default. The persisted read-only capability set remains
+`GetOldestDeadLetterAsync` at the SDK default. 2026-09-25: `GetOldestDeadLetterAsync` is now implemented too, via
+CloudWatch — see §6.7.2's Non-goals note. The persisted read-only capability set remains
 deliberately unbuilt — see §6.7.2's Non-goals.)*
 
 **Also not built, cut at planning time rather than during implementation** (the plan's own task
@@ -892,6 +893,22 @@ count for that row only. The refresh-cost caption says `1 + 2 × n` under a pref
 - `GetOldestDeadLetterAsync` — stays at the SDK default (`null`): SQS exposes no enqueue timestamp
   without *receiving* a message, and a receive has a real side effect (the message goes invisible
   for the visibility timeout), so the wallboard's oldest-message tile is not fed by this plugin.
+  *(2026-09-25: resolved — no longer a non-goal. `AwsPlugin.GetOldestDeadLetterAsync` now feeds the
+  tile without receiving anything: for each dead-letter queue (`IsDeadLetterQueue`, over the same
+  60s queue-list cache as the other dashboard hooks) with `ApproxVisible > 0` it reads CloudWatch's
+  `AWS/SQS` `ApproximateAgeOfOldestMessage` (`ISqsOperations.GetOldestMessageAgeAsync`: statistic
+  `Maximum`, dimension `QueueName`, last 15 minutes at a 60s period, latest-timestamp datapoint).
+  That is a pure metrics read, so the side-effect objection above no longer applies. The queue with
+  the largest age wins; `EnqueuedTime = now − age` (approximate: CloudWatch's 1-minute resolution
+  plus a few minutes' publishing lag); `DeadLetterCount` is that queue's own `ApproxVisible`,
+  matching the Kafka/Service Bus implementations (the oldest resource's count, not a total). A
+  queue with no recent datapoint — metric lag, or LocalStack, which publishes no SQS metrics — is
+  skipped, so against the local emulator the tile stays empty. Calls are bounded to DLQs with
+  messages, at most 8 in flight. Failure policy: if every metric call fails (e.g.
+  `cloudwatch:GetMetricStatistics` denied) the first failure propagates to the host like the other
+  dashboard hooks; if only some fail, those queues are skipped so one throttled call doesn't blank
+  the tile or mark an otherwise-healthy connection unchecked. No new IAM permission —
+  `cloudwatch:GetMetricStatistics` was already required for SNS delivery-failure counts.)*
 
 ## 7. Error handling
 

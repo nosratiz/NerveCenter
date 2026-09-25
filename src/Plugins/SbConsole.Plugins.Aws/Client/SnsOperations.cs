@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Amazon.CloudWatch;
 using Amazon.CloudWatch.Model;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
@@ -29,22 +28,6 @@ public sealed class SnsOperations : ISnsOperations
         };
         var credentials = AwsCredentialsFactory.BuildCredentials(parsed);
         return credentials is null ? new AmazonSimpleNotificationServiceClient(snsConfig) : new AmazonSimpleNotificationServiceClient(credentials, snsConfig);
-    }
-
-    private static AmazonCloudWatchClient BuildCloudWatchClient(string secret)
-    {
-        var parsed = AwsConfigParser.Parse(secret);
-        var sqsConfig = AwsCredentialsFactory.BuildConfig(parsed);
-        var cwConfig = new AmazonCloudWatchConfig
-        {
-            RegionEndpoint = sqsConfig.RegionEndpoint,
-            Timeout = sqsConfig.Timeout,
-            MaxErrorRetry = sqsConfig.MaxErrorRetry,
-            ServiceURL = sqsConfig.ServiceURL,
-            UseHttp = sqsConfig.UseHttp,
-        };
-        var credentials = AwsCredentialsFactory.BuildCredentials(parsed);
-        return credentials is null ? new AmazonCloudWatchClient(cwConfig) : new AmazonCloudWatchClient(credentials, cwConfig);
     }
 
     internal static string TopicNameFromArn(string topicArn) => topicArn[(topicArn.LastIndexOf(':') + 1)..];
@@ -432,7 +415,7 @@ public sealed class SnsOperations : ISnsOperations
 
     public async Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default)
     {
-        using var cloudWatch = BuildCloudWatchClient(secret);
+        using var cloudWatch = CloudWatchClientFactory.Build(secret);
         var now = DateTime.UtcNow;
         var response = await cloudWatch.GetMetricStatisticsAsync(new GetMetricStatisticsRequest
         {

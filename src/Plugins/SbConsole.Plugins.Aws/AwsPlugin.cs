@@ -78,7 +78,8 @@ public sealed class AwsPlugin : IPlugin
         new SqsOperations().TestConnectionAsync(secret, ct);
 
     // Short-lived cache for ListQueuesAsync's result, shared by GetNavBadgeAsync,
-    // GetDashboardMetricsAsync, GetDashboardProblemsAsync and GetResourceMetricsAsync -- built exactly
+    // GetDashboardMetricsAsync, GetDashboardProblemsAsync, GetResourceMetricsAsync and
+    // GetOldestDeadLetterAsync -- built exactly
     // like KafkaPlugin.GetCachedConsumerGroupsAsync. ListQueuesAsync is ListQueues plus one
     // GetQueueAttributes round-trip per queue, and NavMenu.razor polls the badge every 60s per open
     // circuit, Home.razor/the Wallboard call the dashboard hooks on every render/refresh, and
@@ -189,7 +190,93 @@ public sealed class AwsPlugin : IPlugin
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
         BuildDashboardProblems(connectionId, await GetCachedQueuesAsync(connectionString, ct));
 
-    // GetOldestDeadLetterAsync: SDK default (null). SQS exposes no enqueue timestamp without
-    // *receiving* a message, and a receive has a real side effect (the message goes invisible), so
-    // the wallboard's "Oldest message" tile is deliberately not fed by this plugin.
+    // Feeds the wallboard's "Oldest message" tile WITHOUT receiving: SQS exposes no enqueue timestamp
+    // except on a received message, and a receive hides the message for the visibility timeout (and
+    // bumps its receive count, which on a DLQ with its own redrive policy can move it again). Instead
+    // this reads CloudWatch's AWS/SQS ApproximateAgeOfOldestMessage per dead-letter queue -- a pure
+    // metrics read. EnqueuedTime is therefore approximate (now - age, at CloudWatch's 1-minute
+    // resolution and a few minutes' lag), which is fine for a "how long has this been sitting there"
+    // tile. Queue list comes from the same 60s cache as the other dashboard hooks.
+    public async Task<OldestDeadLetterEntry?> GetOldestDeadLetterAsync(
+        Guid connectionId, string connectionString, CancellationToken ct = default)
+    {
+        var queues = await GetCachedQueuesAsync(connectionString, ct);
+        var ops = new SqsOperations();
+        return await ComputeOldestDeadLetterAsync(
+            queues,
+            DateTimeOffset.UtcNow,
+            (queueName, t) => ops.GetOldestMessageAgeAsync(connectionString, queueName, t),
+            ct);
+    }
+
+    // Bounds the CloudWatch fan-out: one GetMetricStatistics call per DLQ with messages, at most this
+    // many in flight -- same shape and reason as ServiceBusPlugin's MaxConcurrentPeeks.
+    private const int MaxConcurrentMetricCalls = 8;
+
+    // `now` and `getAge` are parameters so the selection, the "only DLQs with messages" bound and the
+    // failure policy are unit-testable without AWS (same approach as GetCachedQueuesAsync).
+    //
+    // Failure policy: if EVERY metric call fails, the first failure propagates -- exactly the other
+    // dashboard hooks' policy (see the comment above GetNavBadgeAsync): the host catches and logs it,
+    // and e.g. a missing cloudwatch:GetMetricStatistics permission is visible in the logs rather than
+    // silently reported as "nothing dead-lettered". If only SOME calls fail (one throttled request
+    // among many DLQs), those queues are skipped and the oldest of the rest is returned: the tile
+    // then shows a real, if possibly not the very oldest, message instead of nothing at all, and the
+    // wallboard doesn't mark a connection whose SQS data loaded fine as "unchecked" over one
+    // transient CloudWatch hiccup. Cancellation always propagates.
+    internal static async Task<OldestDeadLetterEntry?> ComputeOldestDeadLetterAsync(
+        IReadOnlyList<QueueSummary> queues,
+        DateTimeOffset now,
+        Func<string, CancellationToken, Task<TimeSpan?>> getAge,
+        CancellationToken ct)
+    {
+        var candidates = queues.Where(q => IsDeadLetterQueue(q) && q.ApproxVisible > 0).ToList();
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        using var throttle = new SemaphoreSlim(MaxConcurrentMetricCalls);
+        var results = await Task.WhenAll(candidates.Select(async q =>
+        {
+            await throttle.WaitAsync(ct);
+            try
+            {
+                return (Queue: q, Age: await getAge(q.Name, ct), Error: (Exception?)null);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                return (Queue: q, Age: (TimeSpan?)null, Error: ex);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        }));
+
+        if (results.All(r => r.Error is not null))
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(results[0].Error!).Throw();
+        }
+
+        return PickOldestDeadLetter(results.Select(r => (r.Queue, r.Age)).ToList(), now);
+    }
+
+    // Largest age wins; a queue with no age (no recent CloudWatch datapoint) is skipped.
+    // DeadLetterCount is the chosen queue's own ApproxVisible -- matching KafkaPlugin/ServiceBusPlugin,
+    // which report the oldest resource's own count, not a total across every DLQ.
+    internal static OldestDeadLetterEntry? PickOldestDeadLetter(
+        IReadOnlyList<(QueueSummary Queue, TimeSpan? Age)> ages, DateTimeOffset now)
+    {
+        (QueueSummary Queue, TimeSpan Age)? oldest = null;
+        foreach (var (queue, age) in ages)
+        {
+            if (age is { } a && (oldest is null || a > oldest.Value.Age))
+            {
+                oldest = (queue, a);
+            }
+        }
+
+        return oldest is { } o ? new OldestDeadLetterEntry(o.Queue.Name, now - o.Age, o.Queue.ApproxVisible) : null;
+    }
 }
