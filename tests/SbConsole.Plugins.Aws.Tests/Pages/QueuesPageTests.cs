@@ -148,6 +148,35 @@ public class QueuesPageTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public async Task Refresh_call_count_caption_reflects_the_extra_dead_letter_lookup_under_a_prefix()
+    {
+        // With a prefix, each returned queue also gets a ListDeadLetterSourceQueues call so a DLQ
+        // whose sources the prefix excluded is still detected (design doc §6.7.2).
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", null, Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("a") });
+        _operations.ListQueuesAsync("mode=default-chain;region=eu-west-1", "orders", Arg.Any<CancellationToken>())
+            .Returns(new List<QueueSummary> { Queue("orders"), Queue("orders-dlq", deadLetterSourceCount: 1), Queue("orders-x") });
+
+        var cut = Render<SbConsole.Plugins.Aws.Pages.Queues>();
+        await Task.Delay(30);
+        cut.Render();
+        cut.Find(".prefix-filter input").Input("orders");
+        await Task.Delay(400);
+        cut.Render();
+
+        cut.Find(".refresh-cost-caption").TextContent.Should().Contain("1 + 2 × 3 = 7");
+    }
+
+    [Theory]
+    [InlineData(0, false, "1 + 0 = 1")]
+    [InlineData(3, false, "1 + 3 = 4")]
+    [InlineData(3, true, "1 + 2 × 3 = 7")]
+    public void RefreshCostFormula_matches_the_calls_ListQueuesAsync_makes(int queueCount, bool prefixApplied, string expected)
+    {
+        SbConsole.Plugins.Aws.Pages.Queues.RefreshCostFormula(queueCount, prefixApplied).Should().Be(expected);
+    }
+
+    [Fact]
     public async Task Connection_echo_renders_safe_fields_and_never_leaks_credentials()
     {
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>())

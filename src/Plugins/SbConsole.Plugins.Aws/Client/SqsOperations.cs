@@ -93,9 +93,8 @@ public sealed class SqsOperations : ISqsOperations
         } while (!string.IsNullOrEmpty(nextToken));
 
         // First pass: fetch every queue's attributes in one call each (AttributeNames=[All]) and
-        // cache them, so the target-ARN counting pass below doesn't need a second round-trip per
-        // queue -- ListQueuesAsync already fetches this data, DLQ-ness is purely a client-side
-        // computation over it.
+        // cache them, so BuildQueueSummariesAsync's target-ARN counting doesn't need a second
+        // round-trip per queue.
         //
         // Sequential, deliberately -- fan-out here is a separate (optional) performance concern.
         // Each call is wrapped individually: a single queue's GetQueueAttributes failing (e.g. mid-
@@ -117,11 +116,42 @@ public sealed class SqsOperations : ISqsOperations
             }
         }
 
-        // Count, per target ARN, how many queues' RedrivePolicy points at it -- that count is what
-        // makes a queue an actual dead-letter target (AWS's StartMessageMoveTask requires SourceArn
-        // to be a queue that other queues redrive into), not merely having a RedrivePolicy of its
-        // own (that just means it dead-letters TO somewhere else).
-        var deadLetterSourceCounts = new Dictionary<string, int>();
+        return await BuildQueueSummariesAsync(
+            queueUrls, attributesByUrl, IsNamePrefixApplied(namePrefix),
+            (queueUrl, token) => CountDeadLetterSourcesAsync(sqs, queueUrl, token), ct);
+    }
+
+    // An empty QueueNamePrefix is "no filter" to SQS, same as null.
+    internal static bool IsNamePrefixApplied(string? namePrefix) => !string.IsNullOrEmpty(namePrefix);
+
+    // Turns the listed URLs plus their already-fetched attributes into summaries, deciding each
+    // queue's DeadLetterSourceCount. Internal static with the AWS lookup passed in as a delegate so
+    // the decision logic is unit-testable without AWS.
+    //
+    // DLQ-ness is "how many queues' RedrivePolicy targets this queue's ARN" (AWS's
+    // StartMessageMoveTask requires SourceArn to be such a redrive target) -- not merely having a
+    // RedrivePolicy of its own, which means the queue dead-letters TO somewhere else.
+    //
+    // - No prefix: every queue in the account was listed and its RedrivePolicy is already in hand,
+    //   so counting target ARNs client-side is complete and costs zero extra calls.
+    // - Prefix applied: the listed set can exclude a DLQ's source queues (prefix "orders-dlq"
+    //   matches the DLQ but not "orders"), so local counting undercounts -- to zero in that case,
+    //   hiding the DLQ chip and Redrive button. The cheapest correct fix is SQS's native
+    //   ListDeadLetterSourceQueues, once per *returned* queue (+n calls), rather than listing and
+    //   fetching attributes for every queue in the account just to count redrive targets. The full
+    //   count (not just "> 0") is fetched because Queues.razor displays it as "DLQ ×N".
+    //   A failed lookup (e.g. sqs:ListDeadLetterSourceQueues denied, throttling) degrades only that
+    //   row, back to the local count -- a lower bound that is still exact whenever the prefix also
+    //   covered the sources. Rows whose attributes were unreadable are skipped: they render as
+    //   Unavailable (no ARN, so no Redrive) whatever the lookup says.
+    internal static async Task<IReadOnlyList<QueueSummary>> BuildQueueSummariesAsync(
+        IReadOnlyList<string> queueUrls,
+        IReadOnlyDictionary<string, IDictionary<string, string>> attributesByUrl,
+        bool namePrefixApplied,
+        Func<string, CancellationToken, Task<int>> countDeadLetterSourcesAsync,
+        CancellationToken ct)
+    {
+        var localCounts = new Dictionary<string, int>();
         foreach (var attributes in attributesByUrl.Values)
         {
             var targetArn = attributes.TryGetValue("RedrivePolicy", out var redrivePolicy)
@@ -129,7 +159,7 @@ public sealed class SqsOperations : ISqsOperations
                 : null;
             if (targetArn is not null)
             {
-                deadLetterSourceCounts[targetArn] = deadLetterSourceCounts.GetValueOrDefault(targetArn) + 1;
+                localCounts[targetArn] = localCounts.GetValueOrDefault(targetArn) + 1;
             }
         }
 
@@ -144,11 +174,40 @@ public sealed class SqsOperations : ISqsOperations
             }
 
             var queueArn = attributes.TryGetValue("QueueArn", out var arn) ? arn : "";
-            var deadLetterSourceCount = deadLetterSourceCounts.GetValueOrDefault(queueArn);
+            var deadLetterSourceCount = localCounts.GetValueOrDefault(queueArn);
+            if (namePrefixApplied)
+            {
+                try
+                {
+                    deadLetterSourceCount = await countDeadLetterSourcesAsync(queueUrl, ct);
+                }
+                catch (Exception) when (ct.IsCancellationRequested is false)
+                {
+                    // Keep the local count for this row only.
+                }
+            }
+
             summaries.Add(ToQueueSummary(name, queueUrl, attributes, deadLetterSourceCount));
         }
 
         return summaries;
+    }
+
+    // Pages through ListDeadLetterSourceQueues at its maximum page size (1,000), so this is one call
+    // per queue in practice.
+    private static async Task<int> CountDeadLetterSourcesAsync(AmazonSQSClient sqs, string queueUrl, CancellationToken ct)
+    {
+        var count = 0;
+        string? nextToken = null;
+        do
+        {
+            var page = await sqs.ListDeadLetterSourceQueuesAsync(
+                new ListDeadLetterSourceQueuesRequest { QueueUrl = queueUrl, MaxResults = 1000, NextToken = nextToken }, ct);
+            count += page.QueueUrls?.Count ?? 0;
+            nextToken = page.NextToken;
+        } while (!string.IsNullOrEmpty(nextToken));
+
+        return count;
     }
 
     // Extracted as a pure static function so the attribute-dictionary-to-QueueSummary mapping is

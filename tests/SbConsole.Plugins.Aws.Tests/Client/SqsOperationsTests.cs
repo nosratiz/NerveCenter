@@ -381,4 +381,132 @@ public class SqsOperationsTests
     {
         SqsOperations.ToSdkMessageAttributes(new SbConsole.Plugins.Aws.Client.SendMessageRequest("body", null, null, null, null)).Should().BeNull();
     }
+
+    // --- BuildQueueSummariesAsync: DLQ detection under a name-prefix filter (design doc §6.7.2) ---
+
+    private const string SourceUrl = "https://sqs.eu-west-1.amazonaws.com/123456789012/orders";
+    private const string DlqUrl = "https://sqs.eu-west-1.amazonaws.com/123456789012/orders-dlq";
+    private const string BrokenUrl = "https://sqs.eu-west-1.amazonaws.com/123456789012/orders-broken";
+
+    private static Dictionary<string, string> DlqAttributes() => new()
+    {
+        ["QueueArn"] = "arn:aws:sqs:eu-west-1:123456789012:orders-dlq",
+        ["ApproximateNumberOfMessages"] = "3",
+        ["CreatedTimestamp"] = "1700000000",
+    };
+
+    [Fact]
+    public async Task BuildQueueSummaries_without_a_prefix_counts_locally_and_makes_no_extra_calls()
+    {
+        var calls = new List<string>();
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>>
+        {
+            [SourceUrl] = FullAttributes(),
+            [DlqUrl] = DlqAttributes(),
+        };
+
+        var summaries = await SqsOperations.BuildQueueSummariesAsync(
+            [SourceUrl, DlqUrl], attributesByUrl, namePrefixApplied: false,
+            (url, _) => { calls.Add(url); return Task.FromResult(99); }, CancellationToken.None);
+
+        calls.Should().BeEmpty();
+        summaries.Single(s => s.Name == "orders-dlq").DeadLetterSourceCount.Should().Be(1);
+        summaries.Single(s => s.Name == "orders").DeadLetterSourceCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildQueueSummaries_with_a_prefix_that_excludes_the_source_still_flags_the_DLQ()
+    {
+        // The regression: prefix "orders-dlq" returns only the DLQ, so local RedrivePolicy counting
+        // sees no source and yields 0. The native ListDeadLetterSourceQueues lookup is authoritative.
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>> { [DlqUrl] = DlqAttributes() };
+
+        var summaries = await SqsOperations.BuildQueueSummariesAsync(
+            [DlqUrl], attributesByUrl, namePrefixApplied: true,
+            (url, _) => Task.FromResult(url == DlqUrl ? 2 : 0), CancellationToken.None);
+
+        summaries.Should().ContainSingle().Which.DeadLetterSourceCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task BuildQueueSummaries_with_a_prefix_uses_the_native_count_even_when_local_counting_sees_some_sources()
+    {
+        // Prefix "orders" returns the DLQ and one of its three sources: local counting says 1, the
+        // real count (shown as "DLQ ×N") is 3.
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>>
+        {
+            [SourceUrl] = FullAttributes(),
+            [DlqUrl] = DlqAttributes(),
+        };
+
+        var summaries = await SqsOperations.BuildQueueSummariesAsync(
+            [SourceUrl, DlqUrl], attributesByUrl, namePrefixApplied: true,
+            (url, _) => Task.FromResult(url == DlqUrl ? 3 : 0), CancellationToken.None);
+
+        summaries.Single(s => s.Name == "orders-dlq").DeadLetterSourceCount.Should().Be(3);
+        summaries.Single(s => s.Name == "orders").DeadLetterSourceCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildQueueSummaries_a_failing_lookup_degrades_only_that_row_to_the_local_count()
+    {
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>>
+        {
+            [SourceUrl] = FullAttributes(),
+            [DlqUrl] = DlqAttributes(),
+        };
+
+        var summaries = await SqsOperations.BuildQueueSummariesAsync(
+            [SourceUrl, DlqUrl], attributesByUrl, namePrefixApplied: true,
+            (url, _) => url == DlqUrl
+                ? Task.FromException<int>(new InvalidOperationException("AccessDenied"))
+                : Task.FromResult(4),
+            CancellationToken.None);
+
+        // DLQ falls back to the local count (its one visible source); the other row still gets its
+        // native count.
+        summaries.Single(s => s.Name == "orders-dlq").DeadLetterSourceCount.Should().Be(1);
+        summaries.Single(s => s.Name == "orders").DeadLetterSourceCount.Should().Be(4);
+        summaries.Should().OnlyContain(s => !s.AttributesUnavailable);
+    }
+
+    [Fact]
+    public async Task BuildQueueSummaries_does_not_look_up_sources_for_rows_whose_attributes_were_unreadable()
+    {
+        var calls = new List<string>();
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>> { [DlqUrl] = DlqAttributes() };
+
+        var summaries = await SqsOperations.BuildQueueSummariesAsync(
+            [BrokenUrl, DlqUrl], attributesByUrl, namePrefixApplied: true,
+            (url, _) => { calls.Add(url); return Task.FromResult(1); }, CancellationToken.None);
+
+        calls.Should().Equal(DlqUrl);
+        var broken = summaries.Single(s => s.Name == "orders-broken");
+        broken.AttributesUnavailable.Should().BeTrue();
+        broken.DeadLetterSourceCount.Should().Be(0);
+        summaries.Select(s => s.Name).Should().Equal("orders-broken", "orders-dlq");
+    }
+
+    [Fact]
+    public async Task BuildQueueSummaries_propagates_cancellation_instead_of_falling_back()
+    {
+        using var cts = new CancellationTokenSource();
+        var attributesByUrl = new Dictionary<string, IDictionary<string, string>> { [DlqUrl] = DlqAttributes() };
+
+        var act = () => SqsOperations.BuildQueueSummariesAsync(
+            [DlqUrl], attributesByUrl, namePrefixApplied: true,
+            (_, token) => { cts.Cancel(); token.ThrowIfCancellationRequested(); return Task.FromResult(1); },
+            cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("orders-dlq", true)]
+    public void IsNamePrefixApplied_is_true_only_for_a_non_empty_prefix(string? prefix, bool expected)
+    {
+        SqsOperations.IsNamePrefixApplied(prefix).Should().Be(expected);
+    }
 }

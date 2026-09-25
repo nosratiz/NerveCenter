@@ -85,7 +85,7 @@ else
     }
     <MudText Typo="Typo.caption" Class="refresh-cost-caption mud-text-secondary mb-2">
         <span style="font-family:monospace">ListQueues</span> filters by prefix only — no substring or regex.
-        Each refresh is 1 + @_queues.Count = @(1 + _queues.Count) calls.
+        Each refresh is @RefreshCostFormula(_queues.Count, _loadedWithPrefix) calls@(_loadedWithPrefix ? " — with a prefix, each queue also gets a ListDeadLetterSourceQueues lookup so a DLQ is found even when its sources don't match" : "").
     </MudText>
 
     <MudTable Items="_queues">
@@ -152,6 +152,9 @@ else
     private string _connectionEcho = "";
     private DateTimeOffset? _countsReadAt;
     private string? _loadError;
+    // Whether the rows currently shown were loaded under a prefix -- the refresh-cost caption
+    // describes the load that produced them, not whatever is typed in the field right now.
+    private bool _loadedWithPrefix;
     // Bumped by every LoadQueuesAsync/LoadEchoAsync start. A load whose generation is no longer the
     // latest when it completes is stale (the connection or prefix changed while it was in flight):
     // its result is discarded, so connection A's queues can never render under connection B.
@@ -171,6 +174,13 @@ else
     // Exposed for tests: the chosen interval (0 = Off) and whether the refresh loop is alive.
     internal int AutoRefreshSeconds { get; private set; }
     internal bool IsAutoRefreshing => _refreshCts is not null;
+
+    // Mirrors SqsOperations.ListQueuesAsync: one ListQueues page plus one GetQueueAttributes per
+    // queue, and -- only under a prefix -- one ListDeadLetterSourceQueues per queue as well (see
+    // SqsOperations.BuildQueueSummariesAsync for why).
+    internal static string RefreshCostFormula(int queueCount, bool prefixApplied) => prefixApplied
+        ? $"1 + 2 × {queueCount} = {1 + 2 * queueCount}"
+        : $"1 + {queueCount} = {1 + queueCount}";
 
     private static string AutoRefreshLabel(int seconds) => seconds == 0 ? "Off" : $"{seconds}s";
 
@@ -321,6 +331,7 @@ else
             if (result.IsSuccess)
             {
                 _queues = result.Value!;
+                _loadedWithPrefix = prefix is not null;
                 _countsReadAt = TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
                 _loadError = null;
             }

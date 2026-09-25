@@ -577,7 +577,8 @@ over the queues the current "Starts with" prefix filter returned, so filtering d
 name prefix (excluding its source queues) undercounts it to zero and hides both the chip and the
 Redrive button for the one queue you filtered to find — a `ListDeadLetterSourceQueuesAsync` call
 (or computing the count over an unfiltered list regardless of the display filter) would fix this
-properly; not done here since it wasn't the shape of the original bug. Also not yet covered: a
+properly; not done here since it wasn't the shape of the original bug. *(2026-09-25: fixed with
+per-queue `ListDeadLetterSourceQueues` under a prefix — see §6.7.2's Known limitations.)* Also not yet covered: a
 page-level test for Purge's confirm-then-dialog wiring (Delete has one, Purge — also `Destructive`
 and prod-gated — doesn't).
 
@@ -872,10 +873,16 @@ String" limitation is fixed: `ReceivedMessage.MessageAttributes` now keeps each 
 `DataType`, `StringValue` and `BinaryValue` as an `SqsMessageAttribute`, and the resend passes them
 through unchanged via `SendMessageRequest.TypedMessageAttributes`; the Send dialog's plain string
 attributes still go out as `String`. Receive shows each attribute's type, and binary values as a
-byte count.)* §6.7's prefix-filter
-undercount is only partly addressed: `QueueDetail`, Receive's Move to source, and the dashboard hooks
-(unfiltered list) are correct, but `Queues.razor`'s DLQ chip and inline Redrive button still use
-`DeadLetterSourceCount` computed over the filtered list.
+byte count.)* *(The §6.7 prefix-filter
+undercount is fixed (2026-09-25): `QueueDetail`, Receive's Move to source and the dashboard hooks
+(unfiltered list) were already correct, and `Queues.razor`'s DLQ chip and inline Redrive button now
+are too. `SqsOperations.ListQueuesAsync` keeps the zero-extra-call local `RedrivePolicy` count when no
+prefix is applied (every queue is listed, so it is complete); under a prefix, the pure
+`BuildQueueSummariesAsync` calls `ListDeadLetterSourceQueues` (`MaxResults = 1000`, paged) once per
+returned queue with readable attributes and uses that as `DeadLetterSourceCount` — the full count,
+since the chip shows "DLQ ×N". That is +n calls, cheaper than listing and reading attributes for the
+whole account. A failed lookup (e.g. `sqs:ListDeadLetterSourceQueues` denied) falls back to the local
+count for that row only. The refresh-cost caption says `1 + 2 × n` under a prefix, `1 + n` without.)*
 
 **Non-goals** (deliberately not built):
 - A persisted read-only / denied-actions capability set and IAM Policy Simulator integration —
