@@ -41,6 +41,11 @@ public static class FriendlyRabbitError
 
     private static string FromManagement(ManagementApiException m) => m.StatusCode switch
     {
+        // The broker also answers 401 (not 403) for a vhost the user has no permission on, with
+        // reason "User not authorised to access virtual host" -- the credentials themselves are
+        // fine there, so say what is actually missing.
+        401 when m.Reason?.Contains("virtual host", StringComparison.OrdinalIgnoreCase) == true =>
+            $"User has no permission on this vhost ({m.Method} {m.Path} → 401)",
         401 => "Management API rejected the credentials",
         403 => $"User lacks permission or the monitoring/management tag for this vhost ({m.Method} {m.Path} → 403)",
         404 => $"Not found ({m.Method} {m.Path} → 404)",

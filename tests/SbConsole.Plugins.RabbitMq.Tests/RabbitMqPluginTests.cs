@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using SbConsole.Plugins.RabbitMq.Client;
 using SbConsole.Plugins.RabbitMq;
 
 namespace SbConsole.Plugins.RabbitMq.Tests;
@@ -30,13 +32,25 @@ public class RabbitMqPluginTests
     }
 
     [Fact]
-    public async Task TestConnectionAsync_is_a_non_throwing_placeholder_until_the_operations_seam_exists()
+    public async Task TestConnectionAsync_reports_an_unparseable_secret_without_throwing()
     {
         var plugin = new RabbitMqPlugin();
 
-        var result = await plugin.TestConnectionAsync("host=localhost;username=guest;password=guest");
+        var result = await plugin.TestConnectionAsync("username=guest;password=guest");
 
         result.Success.Should().BeFalse();
-        result.ErrorMessage.Should().Be("Not implemented");
+        result.ErrorMessage.Should().Be("Connection is missing 'host'.");
+    }
+
+    [Fact]
+    public void ConfigureServices_registers_the_operations_seam_as_a_singleton()
+    {
+        var services = new ServiceCollection();
+
+        new RabbitMqPlugin().ConfigureServices(services);
+
+        services.Should().ContainSingle(d => d.ServiceType == typeof(IRabbitOperations))
+            .Which.Should().Match<ServiceDescriptor>(d =>
+                d.Lifetime == ServiceLifetime.Singleton && d.ImplementationType == typeof(RabbitOperations));
     }
 }

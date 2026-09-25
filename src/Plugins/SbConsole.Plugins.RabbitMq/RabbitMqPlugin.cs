@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using SbConsole.Plugins.RabbitMq.Client;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.RabbitMq;
@@ -22,15 +23,16 @@ public sealed class RabbitMqPlugin : IPlugin
     // and handler exists.
     public PluginContribution Contribution => new(PageCount: 0, ActionCount: 0);
 
-    // Empty for now: Task 3 registers IRabbitOperations and Task 5 the query/command handlers
-    // (one scoped registration per handler class, same as AwsPlugin).
+    // Task 5 adds the query/command handlers (one scoped registration per handler class, same as
+    // AwsPlugin). RabbitOperations is stateless, so one instance serves every connection.
     public void ConfigureServices(IServiceCollection services)
     {
+        services.AddSingleton<IRabbitOperations, RabbitOperations>();
     }
 
-    // Placeholder until Task 3 wires RabbitOperations' split AMQP/management test. Deliberately a
-    // failed result rather than NotImplementedException: the host's connection editor must never
-    // see an exception from this call.
+    // The host calls this on a new()'d plugin, outside DI (AwsPlugin precedent), so it builds its
+    // own RabbitOperations. The split AMQP/management result never throws for a bad secret or an
+    // unreachable broker -- both come back as a failed ConnectionTestResult.
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
-        Task.FromResult(new ConnectionTestResult(false, "Not implemented"));
+        new RabbitOperations().TestConnectionAsync(secret, ct);
 }

@@ -26,6 +26,18 @@ public class FriendlyRabbitErrorTests
             .Should().Be("Management API rejected the credentials");
     }
 
+    [Theory]
+    [InlineData("User not authorised to access virtual host")]
+    [InlineData("user not authorised to access Virtual Host")]
+    public void Management_401_for_a_vhost_without_permissions_maps_to_the_permission_message(string reason)
+    {
+        // RabbitMQ 3.13 answers GET /api/exchanges/{vhost} for a vhost the user has no permission
+        // on with 401 {"error":"not_authorised","reason":"User not authorised to access virtual
+        // host"} -- the credentials are fine, so "rejected the credentials" would mislead.
+        FriendlyRabbitError.From(new ManagementApiException(401, "GET", "/api/exchanges/%2F", reason))
+            .Should().Be("User has no permission on this vhost (GET /api/exchanges/%2F → 401)");
+    }
+
     [Fact]
     public void Management_403_names_the_missing_permission_or_tag()
     {
