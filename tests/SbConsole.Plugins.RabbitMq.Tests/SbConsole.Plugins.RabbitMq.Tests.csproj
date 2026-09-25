@@ -22,6 +22,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Real management-API responses captured from a RabbitMQ 3.13.7 broker (docker profile). -->
+    <None Include="Client\Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
   </ItemGroup>
 
