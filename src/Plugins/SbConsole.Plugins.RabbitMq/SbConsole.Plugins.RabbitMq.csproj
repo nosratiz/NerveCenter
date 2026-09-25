@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Internal seams (probe/handler factories, mapping helpers) are exercised directly by unit
+         tests, since there is no broker in the unit-test run - same reason Aws.Tests needs this. -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.RabbitMq.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.9.0" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pages/*.razor need Razor component + [Authorize] support, which live in the ASP.NET Core
+         shared framework, not a NuGet package. Same pattern the other plugins use. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

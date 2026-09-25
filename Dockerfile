@@ -12,6 +12,7 @@ COPY src/SbConsole.Core/SbConsole.Core.csproj                           src/SbCo
 COPY src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj src/Plugins/SbConsole.Plugins.ServiceBus/
 COPY src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj           src/Plugins/SbConsole.Plugins.Kafka/
 COPY src/Plugins/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj               src/Plugins/SbConsole.Plugins.Aws/
+COPY src/Plugins/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq.csproj     src/Plugins/SbConsole.Plugins.RabbitMq/
 COPY src/SbConsole.Web/SbConsole.Web.csproj                             src/SbConsole.Web/
 RUN dotnet restore src/SbConsole.Web/SbConsole.Web.csproj
 

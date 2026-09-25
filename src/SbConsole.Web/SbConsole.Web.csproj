@@ -6,6 +6,7 @@
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.Aws\SbConsole.Plugins.Aws.csproj" />
+    <ProjectReference Include="..\Plugins\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
   </ItemGroup>
 
   <ItemGroup>

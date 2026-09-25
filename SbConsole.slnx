@@ -3,6 +3,7 @@
     <Project Path="src/SbConsole.Core/SbConsole.Core.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj" />
+    <Project Path="src/Plugins/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
     <Project Path="src/SbConsole.Sdk/SbConsole.Sdk.csproj" />
     <Project Path="src/SbConsole.Web/SbConsole.Web.csproj" />
@@ -11,6 +12,7 @@
     <Project Path="tests/SbConsole.Core.Tests/SbConsole.Core.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.Aws.Tests/SbConsole.Plugins.Aws.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.Kafka.Tests/SbConsole.Plugins.Kafka.Tests.csproj" />
+    <Project Path="tests/SbConsole.Plugins.RabbitMq.Tests/SbConsole.Plugins.RabbitMq.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.ServiceBus.Tests/SbConsole.Plugins.ServiceBus.Tests.csproj" />
     <Project Path="tests/SbConsole.Web.Tests/SbConsole.Web.Tests.csproj" />
   </Folder>
