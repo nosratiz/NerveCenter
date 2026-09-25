@@ -206,9 +206,11 @@ Key record fields (anything not listed is the implementer's call):
   the UI hides it).
 - `BindingInfo`: `Source`, `Destination`, `DestinationType` (`queue`/`exchange`), `RoutingKey`,
   `Arguments`, `PropertiesKey`.
+- Restart is `DELETE /api/shovels/vhost/{vhost}/{name}/restart`; create/delete are
+  `PUT`/`DELETE /api/parameters/shovel/{vhost}/{name}` with body `{"value": {...}}`.
 - `ShovelInfo`: `Name`, `State` (`running`/`starting`/`terminated`/`unknown`), `Reason?`,
   `SourceQueue?`/`SourceExchange?`, `SourceUri`, `DestinationQueue?`/`DestinationExchange?`,
-  `DestinationUri`, `AckMode`, `Timestamp?` — merged from `/api/shovels/vhost/{vhost}` (status)
+  `DestinationUri`, `AckMode`, `Timestamp?` — merged from `/api/shovels/{vhost}` (status)
   and `/api/parameters/shovel/{vhost}` (definition). A shovel with a definition but no status row
   is `State = "starting"`.
 - `PolicyInfo`: `Name`, `Pattern`, `ApplyTo`, `Priority`, `Definition`
@@ -410,7 +412,7 @@ destination URIs default `amqp://` = this broker, "delete after: never/queue-len
 own explanation row: "{name} failed {ago} — {reason}. {ready} messages holding in {src queue}."
 *Deviation:* the mockup's per-shovel rate and Pause/Resume are not built — the shovel status API
 reports no transfer rate, and pause/resume is `rabbitmqctl`-only (no HTTP endpoint) on 3.13.
-Shovel plugin missing (404 on `/api/shovels`) → info alert "The shovel management plugin isn't
+Shovel plugin missing (404 on `/api/shovels/{vhost}`) → info alert "The shovel management plugin isn't
 enabled on this broker (rabbitmq-plugins enable rabbitmq_shovel_management)." rather than an error.
 Policies (read-only): Policy, Pattern (mono), Applies (queues/exchanges/all), Definition
 (`k: v · k: v`), Matches (count of queues/exchanges whose name matches the pattern, computed
