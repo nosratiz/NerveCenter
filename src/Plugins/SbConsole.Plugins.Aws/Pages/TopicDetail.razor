@@ -6,6 +6,7 @@
 @using SbConsole.Sdk
 @inject ListSubscriptionsQueryHandler ListHandler
 @inject GetTopicAttributesQueryHandler AttributesHandler
+@inject GetTopicDeliveryLogsQueryHandler DeliveryLogsHandler
 @inject SubscribeCommandHandler SubscribeHandler
 @inject UnsubscribeCommandHandler UnsubscribeHandler
 @inject IConnectionProvider Connections
@@ -21,7 +22,7 @@
     <MudText Style="font-family:monospace">@TopicName</MudText>
 </div>
 
-<MudTabs>
+<MudTabs ActivePanelIndex="_activeTab" ActivePanelIndexChanged="OnActiveTabChangedAsync">
     <MudTabPanel Text="Subscriptions">
         <div class="d-flex align-center gap-2 mb-2">
             <MudText Typo="Typo.caption" Class="topic-arn mud-text-secondary" Style="font-family:monospace">@TopicArn</MudText>
@@ -147,6 +148,113 @@
             }
         }
     </MudTabPanel>
+    <MudTabPanel Text="Delivery logs">
+        @* Read-only. Loaded on first open of this tab only (CloudWatch Logs calls cost time and money,
+           so a plain page load never makes them); window changes and Refresh reload. *@
+        <div class="d-flex align-center flex-wrap gap-2 mb-2">
+            <MudButtonGroup OverrideStyles="false" Size="Size.Small">
+                @foreach (var option in WindowOptions)
+                {
+                    <MudButton Class="@($"delivery-logs-window-{option.Label}")" Size="Size.Small" Color="Color.Primary"
+                               Variant="@(option.Window == _logsWindow ? Variant.Filled : Variant.Outlined)"
+                               OnClick="@(() => SelectWindowAsync(option.Window))">@option.Label</MudButton>
+                }
+            </MudButtonGroup>
+            <MudButtonGroup OverrideStyles="false" Size="Size.Small">
+                <MudButton Class="delivery-logs-status-all" Size="Size.Small" Color="Color.Primary"
+                           Variant="@(_failuresOnly ? Variant.Outlined : Variant.Filled)" OnClick="@(() => _failuresOnly = false)">All</MudButton>
+                <MudButton Class="delivery-logs-status-failures" Size="Size.Small" Color="Color.Error"
+                           Variant="@(_failuresOnly ? Variant.Filled : Variant.Outlined)" OnClick="@(() => _failuresOnly = true)">Failures</MudButton>
+            </MudButtonGroup>
+            <MudSpacer />
+            <MudButton Class="delivery-logs-refresh" Size="Size.Small" Disabled="_logsLoading" OnClick="LoadDeliveryLogsAsync">Refresh</MudButton>
+        </div>
+        @if (_logsLoading)
+        {
+            <MudProgressCircular Class="delivery-logs-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else if (_logsError is not null)
+        {
+            <MudAlert Class="delivery-logs-error" Severity="Severity.Warning" Dense="true">
+                Couldn't load delivery logs: @_logsError
+            </MudAlert>
+        }
+        else if (_logs is { LoggingNotConfigured: true })
+        {
+            <MudAlert Class="delivery-logs-not-configured" Severity="Severity.Info" Dense="true">
+                @if (HasDeliveryStatusRoles)
+                {
+                    <text>Delivery status logging is configured on this topic, but no delivery status logs have been written yet
+                    (no <code>@SuccessLogGroup</code> or <code>/Failure</code> log group exists). Logs appear after the next delivery attempt.</text>
+                }
+                else
+                {
+                    <text>Delivery status logging isn't enabled for this topic. Enable it under <b>Delivery status logging</b> when
+                    editing the topic in the SNS console, or set the topic's per-protocol <code>&lt;Protocol&gt;SuccessFeedbackRoleArn</code> /
+                    <code>&lt;Protocol&gt;FailureFeedbackRoleArn</code> attributes (e.g. <code>SQSFailureFeedbackRoleArn</code>). SNS then writes to
+                    the <code>@SuccessLogGroup</code> and <code>@(SuccessLogGroup)/Failure</code> CloudWatch Logs groups.</text>
+                }
+            </MudAlert>
+        }
+        else if (_logs is not null)
+        {
+            var rows = _failuresOnly ? _logs.Entries.Where(e => e.IsFailure).ToList() : _logs.Entries;
+            @if (rows.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="delivery-logs-empty mud-text-secondary">
+                    No delivery status log events@(_failuresOnly ? " for failed deliveries" : "") in the last @WindowLabel(_logsWindow).
+                </MudText>
+            }
+            else
+            {
+                <MudSimpleTable Class="delivery-logs-table" Dense="true" Hover="true">
+                    <thead>
+                        <tr>
+                            <th>Time (UTC)</th>
+                            <th>Status</th>
+                            <th>Destination</th>
+                            <th>Status code</th>
+                            <th>Provider response</th>
+                            <th>Dwell (ms)</th>
+                            <th>Attempts</th>
+                            <th>Message ID</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in rows)
+                        {
+                            <tr>
+                                <td style="white-space:nowrap">@entry.Timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                <td>
+                                    <MudChip T="string" Size="Size.Small" Color="@(entry.IsFailure ? Color.Error : Color.Success)">@entry.Status</MudChip>
+                                </td>
+                                @if (entry.RawMessage is not null)
+                                {
+                                    @* Unparseable event: show the raw text rather than drop it. *@
+                                    <td colspan="6" class="delivery-log-raw" style="font-family:monospace;white-space:pre-wrap;word-break:break-all">@entry.RawMessage</td>
+                                }
+                                else
+                                {
+                                    <td style="font-family:monospace;word-break:break-all">@(entry.Destination ?? "n/a")</td>
+                                    <td>@(entry.StatusCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")</td>
+                                    <td style="font-family:monospace;word-break:break-all">@(entry.ProviderResponse ?? "n/a")</td>
+                                    <td>@(entry.DwellTimeMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")</td>
+                                    <td>@(entry.Attempts?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")</td>
+                                    <td style="font-family:monospace">@(entry.MessageId ?? "n/a")</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+            @if (_logs.IsTruncated)
+            {
+                <MudText Typo="Typo.caption" Class="delivery-logs-truncated mud-text-secondary">
+                    Showing the newest @_logs.Entries.Count events found; the window may hold more. Narrow the window to see older events.
+                </MudText>
+            }
+        }
+    </MudTabPanel>
 </MudTabs>
 
 @code {
@@ -182,6 +290,72 @@
         </MudPaper>
     };
     private string _connectionName = "";
+
+    // Delivery logs tab (index 3): lazily loaded, state kept across tab switches.
+    private const int DeliveryLogsTabIndex = 3;
+    private static readonly (string Label, TimeSpan Window)[] WindowOptions =
+        [("1h", TimeSpan.FromHours(1)), ("24h", TimeSpan.FromHours(24)), ("7d", TimeSpan.FromDays(7))];
+    private int _activeTab;
+    private TimeSpan _logsWindow = TimeSpan.FromHours(24);
+    private bool _failuresOnly;
+    private bool _logsRequested;
+    private bool _logsLoading;
+    private string? _logsError;
+    private DeliveryLogsResult? _logs;
+    private int _logsGeneration;
+
+    private static string WindowLabel(TimeSpan window) => WindowOptions.FirstOrDefault(o => o.Window == window).Label ?? window.ToString();
+
+    // Attributes are loaded with the page anyway; used only to word the not-configured message.
+    private bool HasDeliveryStatusRoles => _attributes.Any(a => a.Key.EndsWith("FeedbackRoleArn", StringComparison.Ordinal) && a.Value.Length > 0);
+
+    private string SuccessLogGroup
+    {
+        get
+        {
+            var parts = TopicArn.Split(':');
+            return parts.Length == 6 ? $"sns/{parts[3]}/{parts[4]}/{parts[5]}" : $"sns/<region>/<account-id>/{TopicName}";
+        }
+    }
+
+    private async Task OnActiveTabChangedAsync(int index)
+    {
+        _activeTab = index;
+        if (index == DeliveryLogsTabIndex && !_logsRequested)
+        {
+            await LoadDeliveryLogsAsync();
+        }
+    }
+
+    private async Task SelectWindowAsync(TimeSpan window)
+    {
+        if (window == _logsWindow && _logs is not null)
+        {
+            return;
+        }
+
+        _logsWindow = window;
+        await LoadDeliveryLogsAsync();
+    }
+
+    // Its own error state: a denied logs:FilterLogEvents is an inline warning on this tab only. The
+    // generation check drops a slower, older load that finishes after a newer one (e.g. 7d then 1h).
+    private async Task LoadDeliveryLogsAsync()
+    {
+        var generation = ++_logsGeneration;
+        _logsRequested = true;
+        _logsLoading = true;
+        StateHasChanged();
+        var result = await DeliveryLogsHandler.HandleAsync(ConnectionId, TopicArn, _logsWindow);
+        if (generation != _logsGeneration)
+        {
+            return;
+        }
+
+        _logs = result.IsSuccess ? result.Value : null;
+        _logsError = result.IsSuccess ? null : result.Error;
+        _logsLoading = false;
+    }
 
     private string TopicArn => Uri.UnescapeDataString(TopicArnEncoded);
     private string TopicName => TopicArn[(TopicArn.LastIndexOf(':') + 1)..];

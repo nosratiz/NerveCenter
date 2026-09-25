@@ -35,6 +35,7 @@ public sealed class AwsPlugin : IPlugin
     // Topics: Create/Delete topic, Subscribe/Unsubscribe, Publish, Set subscription filter policy (6).
     // Pages: Queues, QueueDetail, Receive, Topics, TopicDetail (5). QueueDetail's Send/Purge/Delete/
     // Redrive buttons reuse the existing handlers above; its only new action is Cancel redrive.
+    // TopicDetail's read-only Delivery logs tab is a query, not an action, and not a separate page.
     public PluginContribution Contribution => new(PageCount: 5, ActionCount: 16);
 
     // One scoped registration per handler class; pages resolve handlers by concrete type (no
@@ -56,6 +57,7 @@ public sealed class AwsPlugin : IPlugin
         services.AddScoped<PublishCommandHandler>();
         services.AddScoped<GetSubscriptionFilterPoliciesQueryHandler>();
         services.AddScoped<GetTopicDeliveryFailureCountQueryHandler>();
+        services.AddScoped<GetTopicDeliveryLogsQueryHandler>();
         services.AddScoped<GetTopicAttributesQueryHandler>();
         services.AddScoped<GetConnectionEchoQueryHandler>();
         services.AddScoped<Queues.DeleteQueueCommandHandler>();

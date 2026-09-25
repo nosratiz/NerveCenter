@@ -172,6 +172,9 @@ public class TopicsPageTests : BunitContext, IAsyncLifetime
         public Task PublishAsync(string secret, string topicArn, SnsPublishRequest request, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public Task<DeliveryLogsResult> GetDeliveryLogsAsync(string secret, string topicArn, TimeSpan window, int limit, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public async Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default)
         {
             if (Interlocked.Increment(ref _failureCountCalls) == 1)

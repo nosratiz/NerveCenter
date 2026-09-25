@@ -1,4 +1,5 @@
 using Amazon.CloudWatch;
+using Amazon.CloudWatchLogs;
 using Amazon.SecurityToken;
 using Amazon.SimpleNotificationService;
 using Amazon.SQS;
@@ -30,6 +31,10 @@ public static class FriendlyAwsError
         AmazonSimpleNotificationServiceException { ErrorCode: "AuthorizationError" } => "Access denied — check IAM permissions",
         AmazonSimpleNotificationServiceException { ErrorCode: "NotFound" } => "Topic or subscription not found",
         AmazonCloudWatchException { ErrorCode: "AccessDenied" } => "Access denied — check IAM permissions for cloudwatch:GetMetricStatistics",
+        // FilterLogEvents is the only CloudWatch Logs call this plugin makes. ResourceNotFound (no log
+        // group) never gets here -- SnsDeliveryLogs.ScanAsync turns it into "logging not configured".
+        Amazon.CloudWatchLogs.Model.AccessDeniedException => "Access denied — check IAM permissions for logs:FilterLogEvents",
+        AmazonCloudWatchLogsException { ErrorCode: "AccessDeniedException" } => "Access denied — check IAM permissions for logs:FilterLogEvents",
         _ => FriendlyError.From(ex),
     };
 }

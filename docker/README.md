@@ -176,6 +176,13 @@ on the page that uses them when denied, rather than failing the page.
 - `cloudwatch:GetMetricStatistics` — fetch topic delivery-failure count over last 24 hours
   and each dead-letter queue's `ApproximateAgeOfOldestMessage` (wallboard "Oldest message" tile)
 
+**CloudWatch Logs permissions** (Topic detail's Delivery logs tab):
+- `logs:FilterLogEvents` — read SNS delivery-status logs from the topic's `sns/{region}/{account-id}/{topic-name}`
+  and `sns/{region}/{account-id}/{topic-name}/Failure` log groups. Can be scoped to
+  `arn:aws:logs:*:*:log-group:sns/*`. When denied, only the Delivery logs tab shows an inline warning.
+  The logs exist only for topics with delivery status logging enabled (the per-protocol
+  `<Protocol>SuccessFeedbackRoleArn` / `<Protocol>FailureFeedbackRoleArn` topic attributes).
+
 Example IAM policy (JSON):
 ```json
 {
@@ -212,6 +219,13 @@ Example IAM policy (JSON):
         "cloudwatch:GetMetricStatistics"
       ],
       "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:FilterLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:sns/*"
     }
   ]
 }

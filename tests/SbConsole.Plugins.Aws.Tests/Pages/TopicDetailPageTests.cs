@@ -32,6 +32,7 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
         Services.AddSingleton<SubscribeCommandHandler>();
         Services.AddSingleton<UnsubscribeCommandHandler>();
         Services.AddSingleton<GetTopicAttributesQueryHandler>();
+        Services.AddSingleton<GetTopicDeliveryLogsQueryHandler>();
         _snsOperations.GetTopicAttributesAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new Dictionary<string, string>());
         Services.AddSingleton(Substitute.For<IAuditScope>());
@@ -259,6 +260,160 @@ public class TopicDetailPageTests : BunitContext, IAsyncLifetime
         cut.Find(".topic-attributes-error").TextContent.Should().Contain("AccessDenied");
         ActivateTab(cut, "Access policy");
         cut.Find(".topic-attributes-error").TextContent.Should().Contain("AccessDenied");
+    }
+
+    // --- Delivery logs tab -----------------------------------------------------------------------
+
+    private static readonly DateTimeOffset LogTime = new(2026, 9, 25, 11, 0, 0, TimeSpan.Zero);
+
+    private void GivenDeliveryLogs(DeliveryLogsResult result) =>
+        _snsOperations.GetDeliveryLogsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<TimeSpan>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(result);
+
+    private static DeliveryLogsResult TwoLogRows(bool isTruncated = false) => new(
+    [
+        new DeliveryLogEntry(LogTime, "FAILURE", "m-fail", "https://hooks.example.com/orders", 500, "Internal Server Error", 1200, 3),
+        new DeliveryLogEntry(LogTime.AddMinutes(-5), "SUCCESS", "m-ok", "arn:aws:sqs:us-east-1:123456789012:orders-queue", 200, "{\"sqsRequestId\":\"r\"}", 21, 1),
+    ], LoggingNotConfigured: false, IsTruncated: isTruncated);
+
+    [Fact]
+    public void Delivery_logs_are_only_fetched_when_the_tab_is_first_opened()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(TwoLogRows());
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Attributes");
+
+        _snsOperations.DidNotReceiveWithAnyArgs().GetDeliveryLogsAsync(default!, default!, default, default, default);
+
+        ActivateTab(cut, "Delivery logs");
+        cut.WaitForAssertion(() => cut.FindAll(".delivery-logs-table tbody tr").Should().HaveCount(2));
+        ActivateTab(cut, "Subscriptions");
+        ActivateTab(cut, "Delivery logs");
+
+        // Default window is 24h; re-opening the tab reuses what was loaded.
+        _snsOperations.Received(1).GetDeliveryLogsAsync("mode=access-keys;region=us-east-1", AttributesTopicArn, TimeSpan.FromHours(24), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Delivery_logs_render_status_destination_code_response_dwell_and_attempts()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(TwoLogRows());
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.FindAll(".delivery-logs-table tbody tr").Should().HaveCount(2));
+        var first = cut.FindAll(".delivery-logs-table tbody tr")[0].TextContent;
+        first.Should().Contain("FAILURE").And.Contain("https://hooks.example.com/orders").And.Contain("500")
+            .And.Contain("Internal Server Error").And.Contain("1200").And.Contain("3").And.Contain("m-fail");
+        cut.FindAll(".delivery-logs-table tbody tr")[1].TextContent.Should().Contain("SUCCESS");
+    }
+
+    [Fact]
+    public void Failures_filter_hides_successful_deliveries_without_refetching()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(TwoLogRows());
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+        cut.WaitForAssertion(() => cut.FindAll(".delivery-logs-table tbody tr").Should().HaveCount(2));
+
+        cut.Find("button.delivery-logs-status-failures").Click();
+
+        cut.FindAll(".delivery-logs-table tbody tr").Should().ContainSingle().Which.TextContent.Should().Contain("m-fail");
+        _snsOperations.ReceivedWithAnyArgs(1).GetDeliveryLogsAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
+    public void Changing_the_window_reloads_with_that_window()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(TwoLogRows());
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+        cut.WaitForAssertion(() => cut.FindAll(".delivery-logs-table tbody tr").Should().HaveCount(2));
+
+        cut.Find("button.delivery-logs-window-7d").Click();
+
+        cut.WaitForAssertion(() => _snsOperations.Received(1).GetDeliveryLogsAsync(
+            Arg.Any<string>(), AttributesTopicArn, TimeSpan.FromDays(7), Arg.Any<int>(), Arg.Any<CancellationToken>()));
+    }
+
+    [Fact]
+    public void Not_configured_logging_shows_an_info_alert_naming_the_topic_attributes()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(new DeliveryLogsResult([], LoggingNotConfigured: true, IsTruncated: false));
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.Find(".delivery-logs-not-configured").TextContent
+            .Should().Contain("Delivery status logging isn't enabled for this topic").And.Contain("FeedbackRoleArn"));
+        cut.FindAll(".delivery-logs-table").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Configured_feedback_roles_without_any_log_groups_yet_say_no_logs_have_been_written()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        _snsOperations.GetTopicAttributesAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, string> { ["SQSFailureFeedbackRoleArn"] = "arn:aws:iam::123456789012:role/sns-logs" });
+        GivenDeliveryLogs(new DeliveryLogsResult([], LoggingNotConfigured: true, IsTruncated: false));
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.Find(".delivery-logs-not-configured").TextContent
+            .Should().Contain("no delivery status logs have been written yet"));
+    }
+
+    [Fact]
+    public void A_failed_delivery_logs_load_is_an_inline_warning_and_other_tabs_are_unaffected()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>())
+            .Returns([new SubscriptionSummary("arn:sub-1", "sqs", "shipment-updates", false, false, null)]);
+        _snsOperations.GetDeliveryLogsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<TimeSpan>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DeliveryLogsResult>(new Amazon.CloudWatchLogs.Model.AccessDeniedException("denied")));
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.Find(".delivery-logs-error").TextContent.Should().Contain("logs:FilterLogEvents"));
+        ActivateTab(cut, "Subscriptions");
+        cut.Find("td.sub-state").TextContent.Should().Contain("Confirmed");
+    }
+
+    [Fact]
+    public void An_unparsed_event_shows_its_raw_text_and_truncation_is_noted()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(new DeliveryLogsResult(
+            [new DeliveryLogEntry(LogTime, "FAILURE", null, null, null, null, null, null, RawMessage: "garbled {")],
+            LoggingNotConfigured: false, IsTruncated: true));
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.Find(".delivery-logs-table .delivery-log-raw").TextContent.Should().Contain("garbled {"));
+        cut.Find(".delivery-logs-truncated").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void An_empty_window_says_so()
+    {
+        _snsOperations.ListSubscriptionsAsync(Arg.Any<string>(), AttributesTopicArn, Arg.Any<CancellationToken>()).Returns([]);
+        GivenDeliveryLogs(new DeliveryLogsResult([], LoggingNotConfigured: false, IsTruncated: false));
+
+        var cut = RenderTopic(AttributesTopicArn);
+        ActivateTab(cut, "Delivery logs");
+
+        cut.WaitForAssertion(() => cut.Find(".delivery-logs-empty").TextContent.Should().Contain("No delivery status log events"));
     }
 
     [Theory]

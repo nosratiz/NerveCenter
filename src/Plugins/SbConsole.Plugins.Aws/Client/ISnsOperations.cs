@@ -2,7 +2,7 @@ namespace SbConsole.Plugins.Aws.Client;
 
 /// <summary>
 /// The seam between the plugin's handlers and the real AWSSDK.SimpleNotificationService/
-/// AWSSDK.CloudWatch clients. Every method takes the connection secret as a parameter -- mirrors
+/// AWSSDK.CloudWatch/AWSSDK.CloudWatchLogs clients. Every method takes the connection secret as a parameter -- mirrors
 /// SbConsole.Plugins.Aws.Client.ISqsOperations exactly.
 /// </summary>
 public interface ISnsOperations
@@ -40,4 +40,12 @@ public interface ISnsOperations
 
     /// <summary>Sum of NumberOfNotificationsFailed over the trailing 24h, via CloudWatch GetMetricStatistics. Zero datapoints means zero failures, not an error.</summary>
     Task<long> GetDeliveryFailureCountAsync(string secret, string topicName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Read-only. The newest (at most <paramref name="limit"/>) SNS delivery-status log events for the
+    /// topic within the trailing <paramref name="window"/>, from CloudWatch Logs FilterLogEvents over
+    /// the topic's success and /Failure log groups (named from the ARN's region/account/name), newest
+    /// first. Neither group existing is reported as DeliveryLogsResult.LoggingNotConfigured, not an error.
+    /// </summary>
+    Task<DeliveryLogsResult> GetDeliveryLogsAsync(string secret, string topicArn, TimeSpan window, int limit, CancellationToken ct = default);
 }

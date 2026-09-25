@@ -738,7 +738,8 @@ was never built), nav-badge/dashboard integration (stays at SDK defaults), per-m
 any SNS-side view (redrive remains queue-level only, already shipped with SQS). *(2026-09-24:
 filter-policy authoring/editing, the Access policy tab (read-only), a fuller Attributes tab, the
 "Subscribed to N SNS topics" panel on the now-built `QueueDetail.razor`, and nav-badge/dashboard
-integration have since shipped — see §6.7.2. Delivery logs remain unbuilt; see §6.7.2's Non-goals.)*
+integration have since shipped — see §6.7.2. Delivery logs remain unbuilt; see §6.7.2's Non-goals.)* *(2026-09-25: delivery logs have
+since shipped too — see §6.7.2's Non-goals.)*
 
 ### 6.7.2 Completion pass (2026-09-24)
 
@@ -890,6 +891,29 @@ count for that row only. The refresh-cost caption says `1 + 2 × n` under a pref
   rejected host-wide in the connections-page redesign (§11, "Out of scope"); test results stay
   diagnostic text only and no button is hidden from them.
 - SNS delivery logs — needs CloudWatch Logs, a separate service and permission set.
+  *(2026-09-25: resolved — no longer a non-goal. `TopicDetail.razor` has a read-only **Delivery logs**
+  tab backed by `GetTopicDeliveryLogsQueryHandler` (a query: no audit row) →
+  `ISnsOperations.GetDeliveryLogsAsync(secret, topicArn, window, limit)`, using the new
+  `AWSSDK.CloudWatchLogs` 3.7.404 package (client built by `CloudWatchLogsClientFactory`, same
+  ServiceURL/UseHttp forwarding as `CloudWatchClientFactory`). SNS writes delivery-status logs, for
+  topics with a `<Protocol>SuccessFeedbackRoleArn`/`<Protocol>FailureFeedbackRoleArn` set, to
+  `sns/{region}/{account}/{topicName}` and `.../{topicName}/Failure`, both derived from the topic ARN.
+  `SnsDeliveryLogs.ScanAsync` (pure, page fetch injected) runs `FilterLogEvents` on both groups over
+  non-overlapping time slices walked newest-first (1h, 6h, 24h, 7d edges clipped to the window),
+  because `FilterLogEvents` only pages oldest-first; it stops once `limit` (200) events are in hand or
+  after 10 calls in total (1,000 events per page), and says so via `IsTruncated`. Results are merged
+  newest-first. `ResourceNotFoundException` on a group skips it; both missing is reported as
+  `LoggingNotConfigured` (an info alert naming the topic attributes / console setting, reworded when
+  the topic already has feedback roles, since SNS creates each group on its first write), not an error.
+  Each event is parsed by a pure helper (`notification.messageId`, `delivery.destination`/
+  `statusCode`/`providerResponse`/`dwellTimeMs`/`attempts`, `status`); fields are optional because the
+  shape varies by protocol (SMS logs have no `statusCode`/`attempts`), and an unparseable event is kept
+  with its raw text and a status from its group, never dropped. The tab loads only when first opened,
+  offers 1h/24h/7d windows (default 24h) and an All/Failures filter (client-side, no refetch), and a
+  failure is an inline warning on that tab only. `FriendlyAwsError` maps CloudWatch Logs
+  `AccessDeniedException` to "check IAM permissions for logs:FilterLogEvents". **New IAM permission**:
+  `logs:FilterLogEvents`, scopable to `arn:aws:logs:*:*:log-group:sns/*` (added to
+  `docker/README.md`). No page/action count change: it is a read-only tab on an existing page.)*
 - `GetOldestDeadLetterAsync` — stays at the SDK default (`null`): SQS exposes no enqueue timestamp
   without *receiving* a message, and a receive has a real side effect (the message goes invisible
   for the visibility timeout), so the wallboard's oldest-message tile is not fed by this plugin.

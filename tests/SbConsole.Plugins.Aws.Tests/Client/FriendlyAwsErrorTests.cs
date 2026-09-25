@@ -1,3 +1,4 @@
+using Amazon.CloudWatchLogs;
 using Amazon.SecurityToken;
 using Amazon.SQS;
 using Amazon.SQS.Model;
@@ -72,6 +73,16 @@ public class FriendlyAwsErrorTests
         var ex = new AmazonSQSException("raw text") { ErrorCode = "AccessDenied" };
 
         FriendlyAwsError.From(ex).Should().Be("Access denied — check IAM permissions");
+    }
+
+    [Fact]
+    public void AccessDeniedException_on_CloudWatch_Logs_names_the_missing_permission()
+    {
+        var typed = new Amazon.CloudWatchLogs.Model.AccessDeniedException("raw text");
+        var coded = new AmazonCloudWatchLogsException("raw text") { ErrorCode = "AccessDeniedException" };
+
+        FriendlyAwsError.From(typed).Should().Be("Access denied — check IAM permissions for logs:FilterLogEvents");
+        FriendlyAwsError.From(coded).Should().Be("Access denied — check IAM permissions for logs:FilterLogEvents");
     }
 
     [Fact]

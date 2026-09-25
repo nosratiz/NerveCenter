@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Amazon.CloudWatch.Model;
+using Amazon.CloudWatchLogs.Model;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using CreateTopicRequest_ = Amazon.SimpleNotificationService.Model.CreateTopicRequest;
@@ -431,5 +432,28 @@ public sealed class SnsOperations : ISnsOperations
         // No datapoints means no failures were reported in the window, not an error -- CloudWatch
         // simply has nothing to return when a metric never fired.
         return response.Datapoints.Count == 0 ? 0 : (long)response.Datapoints.Sum(d => d.Sum);
+    }
+
+    public async Task<DeliveryLogsResult> GetDeliveryLogsAsync(string secret, string topicArn, TimeSpan window, int limit, CancellationToken ct = default)
+    {
+        var (successGroup, failureGroup) = SnsDeliveryLogs.LogGroupNames(topicArn);
+        using var logs = CloudWatchLogsClientFactory.Build(secret);
+        var slices = SnsDeliveryLogs.BuildScanSlices(DateTimeOffset.UtcNow, window);
+        return await SnsDeliveryLogs.ScanAsync(
+            async (group, start, end, nextToken, token) =>
+            {
+                var page = await logs.FilterLogEventsAsync(new FilterLogEventsRequest
+                {
+                    LogGroupName = group,
+                    StartTime = start.ToUnixTimeMilliseconds(),
+                    EndTime = end.ToUnixTimeMilliseconds(),
+                    Limit = SnsDeliveryLogs.PageSize,
+                    NextToken = nextToken,
+                }, token);
+                return new DeliveryLogPage(
+                    (page.Events ?? []).Select(e => (e.Timestamp, e.Message ?? "")).ToList(),
+                    page.NextToken);
+            },
+            successGroup, failureGroup, slices, limit, SnsDeliveryLogs.MaxPages, ct);
     }
 }
