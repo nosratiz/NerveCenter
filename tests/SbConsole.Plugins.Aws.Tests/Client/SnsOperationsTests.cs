@@ -26,6 +26,26 @@ public class SnsOperationsTests
     }
 
     [Fact]
+    public void ToTopicAttributes_drops_null_valued_attributes()
+    {
+        // LocalStack returns DisplayName/DeliveryPolicy as null; the result type is non-nullable.
+        var raw = new Dictionary<string, string>
+        {
+            ["TopicArn"] = "arn:aws:sns:us-east-1:1:t",
+            ["DisplayName"] = null!,
+            ["DeliveryPolicy"] = null!,
+        };
+
+        SnsOperations.ToTopicAttributes(raw).Should().Equal(new Dictionary<string, string> { ["TopicArn"] = "arn:aws:sns:us-east-1:1:t" });
+    }
+
+    [Fact]
+    public void ToTopicAttributes_returns_an_empty_map_for_a_null_response()
+    {
+        SnsOperations.ToTopicAttributes(null).Should().BeEmpty();
+    }
+
+    [Fact]
     public void ClassifySubscription_flags_the_literal_PendingConfirmation_arn_as_pending()
     {
         var summary = SnsOperations.ClassifySubscription("PendingConfirmation", "https", "https://ops.example.com", new Dictionary<string, string>());

@@ -106,8 +106,13 @@ public sealed class SnsOperations : ISnsOperations
     {
         using var sns = BuildSnsClient(secret);
         var response = await sns.GetTopicAttributesAsync(new GetTopicAttributesRequest { TopicArn = topicArn }, ct);
-        return new Dictionary<string, string>(response.Attributes ?? [], StringComparer.Ordinal);
+        return ToTopicAttributes(response.Attributes);
     }
+
+    // Pure static: null-valued attributes are dropped so the non-nullable value type is honest --
+    // LocalStack returns e.g. DisplayName/DeliveryPolicy as null rather than omitting them.
+    internal static Dictionary<string, string> ToTopicAttributes(Dictionary<string, string>? attributes) =>
+        (attributes ?? []).Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
 
     public async Task<IReadOnlyList<SubscriptionSummary>> ListSubscriptionsAsync(string secret, string topicArn, CancellationToken ct = default)
     {

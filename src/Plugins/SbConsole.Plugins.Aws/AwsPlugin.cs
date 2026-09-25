@@ -117,9 +117,28 @@ public sealed class AwsPlugin : IPlugin
         }
 
         var queues = await fetch(connectionString, ct);
+        EvictExpiredQueues(now);
         QueuesCache[connectionString] = (now + QueuesCacheTtl, queues);
         return queues;
     }
+
+    // The cache is keyed by the connection secret, so without a sweep a rotated/expired credential's
+    // entry would stay in memory for the process lifetime. Cheap: one pass over a handful of entries,
+    // only on a write (a cache miss). TryRemove(KeyValuePair) removes only the exact stale entry, so a
+    // concurrent refresh of the same key between the scan and the remove is never dropped.
+    private static void EvictExpiredQueues(DateTimeOffset now)
+    {
+        foreach (var entry in QueuesCache)
+        {
+            if (entry.Value.ExpiresAt <= now)
+            {
+                QueuesCache.TryRemove(entry);
+            }
+        }
+    }
+
+    // Test-only probe for the eviction sweep (the cache itself stays private).
+    internal static bool IsQueuesCached(string connectionString) => QueuesCache.ContainsKey(connectionString);
 
     // A queue is a dead-letter queue when other queues' RedrivePolicy targets it -- NOT when it has a
     // RedrivePolicy of its own (see QueueSummary.HasDeadLetterTarget's comment). An

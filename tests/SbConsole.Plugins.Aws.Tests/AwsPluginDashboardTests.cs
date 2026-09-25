@@ -81,6 +81,30 @@ public class AwsPluginDashboardTests
     }
 
     [Fact]
+    public async Task GetCachedQueuesAsync_evicts_expired_entries_for_other_connections_on_write()
+    {
+        // Keyed by secret: a rotated/expired credential's entry must not stay in memory forever.
+        // Times are anchored at the real clock (stale entry in the past) so the sweep can't evict
+        // live entries written by the other tests in this class.
+        static Task<IReadOnlyList<QueueSummary>> Fetch(string cs, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<QueueSummary>>([]);
+        var stale = $"conn-stale-{Guid.NewGuid()}";
+        var live = $"conn-live-{Guid.NewGuid()}";
+        var writer = $"conn-writer-{Guid.NewGuid()}";
+        var now = DateTimeOffset.UtcNow;
+
+        await AwsPlugin.GetCachedQueuesAsync(live, now.AddSeconds(-10), Fetch, CancellationToken.None);
+        await AwsPlugin.GetCachedQueuesAsync(stale, now.AddMinutes(-5), Fetch, CancellationToken.None);
+        AwsPlugin.IsQueuesCached(stale).Should().BeTrue();
+
+        await AwsPlugin.GetCachedQueuesAsync(writer, now, Fetch, CancellationToken.None);
+
+        AwsPlugin.IsQueuesCached(stale).Should().BeFalse();
+        AwsPlugin.IsQueuesCached(live).Should().BeTrue();
+        AwsPlugin.IsQueuesCached(writer).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task GetCachedQueuesAsync_does_not_cache_a_failed_fetch()
     {
         var connectionString = $"conn-{Guid.NewGuid()}";
