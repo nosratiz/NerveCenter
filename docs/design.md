@@ -625,6 +625,12 @@ SNS plan needs no compose change) gated by a real `healthcheck` (`curl` against
 `/_localstack/health`, `condition: service_healthy`) rather than a fixed startup delay, plus a
 one-shot `aws-init` seed script — depending on that healthcheck — that creates sample queues with
 a redrive policy already attached, mirroring Kafka's `kafka-init` pattern. See `docker/README.md`.
+*(2026-09-25: LocalStack now runs with `SERVICES=sqs,sns,sts,cloudwatch,logs`. `sts` because
+`TestConnectionAsync` calls STS `GetCallerIdentity` first, so with only `sqs,sns` every Test
+connection against the documented emulator failed; `cloudwatch` and `logs` back the SNS
+delivery-failure count, the oldest-dead-letter tile and the delivery-logs tab (§6.7.2). LocalStack
+publishes no SQS metrics and writes no SNS delivery-status logs, so those two stay empty locally,
+but the calls succeed instead of failing with "service not enabled".)*
 
 ### 6.7.1 Topics & Subscriptions (2026-09-23)
 
@@ -845,6 +851,15 @@ comes from the server-side `IConnectionProvider` lookup. **No SDK or schema chan
   editor (sent as Subscribe attributes, only when a policy is given); confirmed subscription rows on
   `TopicDetail` gain **Edit filter**, opening `FilterPolicyDialog` pre-filled from the already-loaded
   row (pending rows can't be targeted — their ARN is the literal `PendingConfirmation`).
+  *(2026-09-25 correction: "scope first only when a policy is already present" was wrong. With no
+  current policy (never set, or cleared) the policy-first order made SNS validate a nested
+  `MessageBody` policy under the default `MessageAttributes` scope and reject it — reproduced on
+  LocalStack. `PlanFilterPolicyUpdates` now writes the scope first whenever the new scope is
+  `MessageBody` and differs from the current one, and policy-then-scope otherwise. The claim that
+  SNS rejects a scope without a policy was also wrong on LocalStack, which accepts a scope-only set;
+  that is unverified on real AWS, but if real SNS rejects it, the scope call is the first call and
+  fails before anything changed, so it is no worse than before. The partial-update error no longer
+  mentions a "previous filter policy" when there was none.)*
 
 - **Per-message "Move to source" on Receive** — on a DLQ, each received message gets **Move to
   source**. Sources come from `GetQueueDetailAsync`'s `ListDeadLetterSourceQueues` result (one call,
@@ -933,6 +948,27 @@ count for that row only. The refresh-cost caption says `1 + 2 × n` under a pref
   dashboard hooks; if only some fail, those queues are skipped so one throttled call doesn't blank
   the tile or mark an otherwise-healthy connection unchecked. No new IAM permission —
   `cloudwatch:GetMetricStatistics` was already required for SNS delivery-failure counts.)*
+
+**LocalStack verification (2026-09-25).** The real `SqsOperations`, `SnsOperations` and
+`MoveMessageToSourceCommandHandler` (not substitutes) were run by a throwaway harness against
+LocalStack 3.8 (`SERVICES=sqs,sns,sts,cloudwatch,logs`). Covered: Test connection (STS); queues
+including FIFO; typed and binary message attributes round-tripping; Move to source for standard
+and FIFO queues; redrive start/list/cancel; topics; Subscribe with and without a filter policy;
+filter-policy scope transitions, including the no-policy → nested `MessageBody` and cleared →
+nested `MessageBody` cases (both failed before the `PlanFilterPolicyUpdates` fix above); publish
+filtering matching the configured policy; the SNS delivery-failure metric read; delivery-logs
+against a topic with no logging (reports `LoggingNotConfigured`, no exception); and the oldest-DLQ
+age read (no datapoint, returns `null`). All pass after the fix. One LocalStack quirk worth knowing:
+it accepts a scope-only `FilterPolicyScope` set on a policy-less subscription, but
+`GetSubscriptionAttributes` doesn't report the scope until a policy is also set. The scope still
+takes effect: the follow-up nested policy is accepted and body filtering works. Two small fixes came out of the
+same run: `GetTopicAttributesAsync` now drops null-valued attributes (LocalStack returns
+`DisplayName`/`DeliveryPolicy` as null), and `AwsPlugin`'s secret-keyed queue-list cache now
+sweeps expired entries on every write, so rotated credentials don't stay in memory for the process
+lifetime. **Still unverified on real AWS**: a scope-only `FilterPolicyScope` set on a policy-less
+subscription; CloudWatch `AWS/SQS` metrics (LocalStack doesn't publish them, so the oldest-DLQ tile
+has only been exercised on its empty path); and SNS delivery-status logs (LocalStack doesn't write
+them, so the delivery-logs tab has only been exercised on its not-configured path).
 
 ## 7. Error handling
 

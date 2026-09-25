@@ -111,6 +111,12 @@ docker compose --profile aws up -d
 | `localstack` | `localhost:4566`       |
 | `aws-init`   | (one-shot)             |
 
+Enabled services: `SERVICES=sqs,sns,sts,cloudwatch,logs`. STS backs **Test connection** (it calls
+`GetCallerIdentity` first); CloudWatch and CloudWatch Logs back the SNS delivery-failure count, the
+oldest-dead-letter tile and the delivery-logs tab. LocalStack publishes no SQS metrics and writes no
+SNS delivery-status logs, so the tile and the logs tab stay empty locally. After changing
+`SERVICES`, recreate just the emulator: `docker compose --profile aws up -d --force-recreate --no-deps localstack`.
+
 Seeded queues: `order-events`, `order-events-dlq` (redrive policy already attached, max receives
 5), `payments`. No topics are seeded yet — `docker/aws/init-queues.sh` predates the SNS Topics
 feature and only creates queues; create a topic from the Topics page itself to try it against
