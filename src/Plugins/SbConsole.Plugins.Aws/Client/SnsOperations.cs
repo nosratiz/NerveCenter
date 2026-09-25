@@ -222,7 +222,7 @@ public sealed class SnsOperations : ISnsOperations
 
     // Pure static so the Subscribe attribute map is unit-testable without AWS. FilterPolicy/
     // FilterPolicyScope are only sent when a policy is actually given -- an empty FilterPolicy
-    // attribute on Subscribe is pointless, and a scope without a policy is rejected by SNS.
+    // attribute on Subscribe is pointless, and so is a scope without a policy.
     internal static Dictionary<string, string> BuildSubscribeAttributes(SubscribeRequest request)
     {
         var attributes = new Dictionary<string, string> { ["RawMessageDelivery"] = request.RawMessageDelivery.ToString().ToLowerInvariant() };
@@ -257,7 +257,8 @@ public sealed class SnsOperations : ISnsOperations
                 AttributeName = name,
                 AttributeValue = value,
             }, token),
-            ct);
+            ct,
+            hadPreviousPolicy: !string.IsNullOrWhiteSpace(currentPolicy));
     }
 
     // Makes the planned calls in order (the setter is injected so this is unit-testable without
@@ -265,7 +266,8 @@ public sealed class SnsOperations : ISnsOperations
     // earlier call succeeded left the subscription half-updated, which is reported explicitly as a
     // FilterPolicyPartiallyAppliedException naming what did and didn't land.
     internal static async Task ApplyFilterPolicyUpdatesAsync(
-        IReadOnlyList<(string Name, string Value)> plan, Func<string, string, CancellationToken, Task> setAttribute, CancellationToken ct)
+        IReadOnlyList<(string Name, string Value)> plan, Func<string, string, CancellationToken, Task> setAttribute, CancellationToken ct,
+        bool hadPreviousPolicy = true)
     {
         (string Name, string Value)? applied = null;
         foreach (var (name, value) in plan)
@@ -276,16 +278,18 @@ public sealed class SnsOperations : ISnsOperations
             }
             catch (Exception ex) when (applied is { } done)
             {
-                throw new FilterPolicyPartiallyAppliedException(DescribePartialUpdate(done, (name, value)), ex);
+                throw new FilterPolicyPartiallyAppliedException(DescribePartialUpdate(done, (name, value), hadPreviousPolicy), ex);
             }
 
             applied = (name, value);
         }
     }
 
-    private static string DescribePartialUpdate((string Name, string Value) applied, (string Name, string Value) failed) =>
+    private static string DescribePartialUpdate((string Name, string Value) applied, (string Name, string Value) failed, bool hadPreviousPolicy) =>
         applied.Name == FilterPolicyScopeAttribute
-            ? $"The subscription was left partially updated: the scope was changed to {applied.Value}, but setting the new filter policy failed — the previous filter policy is now evaluated under the {applied.Value} scope."
+            ? hadPreviousPolicy
+                ? $"The subscription was left partially updated: the scope was changed to {applied.Value}, but setting the new filter policy failed — the previous filter policy is now evaluated under the {applied.Value} scope."
+                : $"The subscription was left partially updated: the scope was changed to {applied.Value}, but setting the new filter policy failed — the subscription still has no filter policy, so it receives every message."
             : $"The subscription was left partially updated: the new filter policy was set, but changing the scope to {failed.Value} failed — the new policy is evaluated under the previous scope.";
 
     // Pure static: which SetSubscriptionAttributes calls to make, in order. SetSubscriptionAttributes
@@ -295,14 +299,19 @@ public sealed class SnsOperations : ISnsOperations
     //   docs, "an empty value removes the filter policy"): the installed AWSSDK.SimpleNotificationService
     //   3.7.400.62 marshals AttributeValue = "" onto the wire (IsSetAttributeValue is a null check,
     //   verified against the DLL). FilterPolicyScope is deliberately left alone -- a scope without a
-    //   policy is meaningless and SNS rejects setting it on its own.
+    //   policy has no effect, so there's nothing to reset.
     // - Same scope: FilterPolicy only.
-    // - To MessageBody with a policy already present: scope first, so a nested (body-only) new policy
-    //   is validated under MessageBody. The existing policy must survive the scope switch -- any
+    // - To MessageBody (from anything else): scope first, so a nested (body-only) new policy is
+    //   validated under MessageBody -- policy-first would validate it under the old/default
+    //   MessageAttributes scope, which rejects nested policies ("Filter policy scope MessageAttributes
+    //   does not support nested filter policy", reproduced on LocalStack). This includes the case with
+    //   no current policy (never set, or cleared): setting the scope alone on a policy-less
+    //   subscription was verified on LocalStack 3.8 but is unverified on real AWS. If real SNS rejects
+    //   it, the scope call is the first call and fails before anything changed, so that's no worse
+    //   than the old policy-first order failing. Any existing policy survives the scope switch -- an
     //   attribute-scope policy is flat, which is also valid under MessageBody.
-    // - Otherwise (no current policy -- SNS won't take a scope without one -- or switching to
-    //   MessageAttributes, where the new policy must be flat and so is also valid under the old body
-    //   scope, while the old body policy may be nested): policy first, then scope.
+    // - To MessageAttributes: policy first, then scope -- the new policy must be flat and so is also
+    //   valid under the old body scope, while the old body policy may be nested.
     internal static IReadOnlyList<(string Name, string Value)> PlanFilterPolicyUpdates(
         string? currentPolicy, string? currentScope, string? newPolicy, string newScope)
     {
@@ -317,7 +326,7 @@ public sealed class SnsOperations : ISnsOperations
             return [(FilterPolicyAttribute, newPolicy)];
         }
 
-        return newScope == "MessageBody" && !string.IsNullOrWhiteSpace(currentPolicy)
+        return newScope == "MessageBody"
             ? [(FilterPolicyScopeAttribute, newScope), (FilterPolicyAttribute, newPolicy)]
             : [(FilterPolicyAttribute, newPolicy), (FilterPolicyScopeAttribute, newScope)];
     }

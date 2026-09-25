@@ -115,10 +115,21 @@ public class SnsOperationsTests
     }
 
     [Fact]
-    public void PlanFilterPolicyUpdates_sets_the_policy_before_the_scope_when_none_exists_yet()
+    public void PlanFilterPolicyUpdates_sets_the_MessageBody_scope_first_even_when_no_policy_exists_yet()
     {
-        SnsOperations.PlanFilterPolicyUpdates(null, null, """{"a":["b"]}""", "MessageBody")
-            .Should().Equal([("FilterPolicy", """{"a":["b"]}"""), ("FilterPolicyScope", "MessageBody")]);
+        // Policy-first would validate a nested (body-only) policy under the default
+        // MessageAttributes scope, which SNS rejects ("Filter policy scope MessageAttributes does
+        // not support nested filter policy") -- confirmed on LocalStack.
+        SnsOperations.PlanFilterPolicyUpdates(null, null, """{"a":{"b":["c"]}}""", "MessageBody")
+            .Should().Equal([("FilterPolicyScope", "MessageBody"), ("FilterPolicy", """{"a":{"b":["c"]}}""")]);
+    }
+
+    [Fact]
+    public void PlanFilterPolicyUpdates_sets_the_MessageBody_scope_first_after_a_policy_was_cleared()
+    {
+        // A clear leaves FilterPolicy empty but the old scope in place.
+        SnsOperations.PlanFilterPolicyUpdates("", "MessageAttributes", """{"a":{"b":["c"]}}""", "MessageBody")
+            .Should().Equal([("FilterPolicyScope", "MessageBody"), ("FilterPolicy", """{"a":{"b":["c"]}}""")]);
     }
 
     [Fact]
@@ -288,6 +299,25 @@ public class SnsOperationsTests
         thrown.Message.Should().Contain("partially updated")
             .And.Contain("scope was changed to MessageBody")
             .And.Contain("previous filter policy");
+    }
+
+    [Fact]
+    public async Task ApplyFilterPolicyUpdates_reports_a_scope_change_with_no_previous_policy_without_claiming_one()
+    {
+        var boom = new InvalidOperationException("Invalid parameter: FilterPolicy");
+
+        var act = () => SnsOperations.ApplyFilterPolicyUpdatesAsync(
+            [("FilterPolicyScope", "MessageBody"), ("FilterPolicy", """{"a":{"b":["c"]}}""")],
+            (name, _, _) => name == "FilterPolicy" ? Task.FromException(boom) : Task.CompletedTask,
+            CancellationToken.None,
+            hadPreviousPolicy: false);
+
+        var thrown = (await act.Should().ThrowAsync<FilterPolicyPartiallyAppliedException>()).Which;
+        thrown.InnerException.Should().BeSameAs(boom);
+        thrown.Message.Should().Contain("partially updated")
+            .And.Contain("scope was changed to MessageBody")
+            .And.Contain("no filter policy")
+            .And.NotContain("previous filter policy");
     }
 
     [Fact]
