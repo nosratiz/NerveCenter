@@ -23,11 +23,35 @@ public sealed class RabbitMqPlugin : IPlugin
     // and handler exists.
     public PluginContribution Contribution => new(PageCount: 0, ActionCount: 0);
 
-    // Task 5 adds the query/command handlers (one scoped registration per handler class, same as
-    // AwsPlugin). RabbitOperations is stateless, so one instance serves every connection.
+    // RabbitOperations is stateless, so one instance serves every connection. Then one scoped
+    // registration per handler class; pages resolve handlers by concrete type (no MediatR). A new
+    // handler must be added here or its page fails to render at runtime.
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<IRabbitOperations, RabbitOperations>();
+        services.AddScoped<Connections.GetConnectionEchoQueryHandler>();
+        services.AddScoped<Connections.ListVhostsQueryHandler>();
+        services.AddScoped<Overview.GetOverviewQueryHandler>();
+        services.AddScoped<Exchanges.ListExchangesQueryHandler>();
+        services.AddScoped<Exchanges.ListExchangeBindingsQueryHandler>();
+        services.AddScoped<Exchanges.CreateExchangeCommandHandler>();
+        services.AddScoped<Exchanges.DeleteExchangeCommandHandler>();
+        services.AddScoped<Queues.ListQueuesQueryHandler>();
+        services.AddScoped<Queues.GetQueueDetailQueryHandler>();
+        services.AddScoped<Queues.CreateQueueCommandHandler>();
+        services.AddScoped<Queues.DeleteQueueCommandHandler>();
+        services.AddScoped<Queues.PurgeQueueCommandHandler>();
+        services.AddScoped<Bindings.AddBindingCommandHandler>();
+        services.AddScoped<Bindings.RemoveBindingCommandHandler>();
+        services.AddScoped<Messages.PeekMessagesQueryHandler>();
+        services.AddScoped<Messages.ConsumeMessagesCommandHandler>();
+        services.AddScoped<Messages.PublishMessageCommandHandler>();
+        services.AddScoped<Messages.RepublishMessagesCommandHandler>();
+        services.AddScoped<Shovels.ListShovelsQueryHandler>();
+        services.AddScoped<Shovels.CreateShovelCommandHandler>();
+        services.AddScoped<Shovels.DeleteShovelCommandHandler>();
+        services.AddScoped<Shovels.RestartShovelCommandHandler>();
+        services.AddScoped<Policies.ListPoliciesQueryHandler>();
     }
 
     // The host calls this on a new()'d plugin, outside DI (AwsPlugin precedent), so it builds its
