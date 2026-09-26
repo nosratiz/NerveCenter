@@ -323,6 +323,26 @@ internal sealed class ManagementApiClient
         SendAsync(settings, HttpMethod.Delete,
             $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(exchange)}/q/{Seg(queue)}/{Seg(propertiesKey)}", null, ct);
 
+    /// <summary>Exchange-to-exchange binding: POST /api/bindings/{vhost}/e/{source}/e/{destination}.</summary>
+    public Task AddExchangeBindingAsync(
+        RabbitConnectionSettings settings, string vhost, string source, string destination, string routingKey,
+        IReadOnlyDictionary<string, object?> arguments, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["routing_key"] = routingKey,
+            ["arguments"] = arguments,
+        };
+        return SendAsync(settings, HttpMethod.Post, $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(source)}/e/{Seg(destination)}", body, ct);
+    }
+
+    /// <summary>Same properties_key escaping rule as <see cref="RemoveBindingAsync"/>.</summary>
+    public Task RemoveExchangeBindingAsync(
+        RabbitConnectionSettings settings, string vhost, string source, string destination, string propertiesKey,
+        CancellationToken ct = default) =>
+        SendAsync(settings, HttpMethod.Delete,
+            $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(source)}/e/{Seg(destination)}/{Seg(propertiesKey)}", null, ct);
+
     public Task CreateShovelAsync(RabbitConnectionSettings settings, string vhost, CreateShovelRequest request, CancellationToken ct = default)
     {
         var toQueue = !string.IsNullOrEmpty(request.DestinationQueue);

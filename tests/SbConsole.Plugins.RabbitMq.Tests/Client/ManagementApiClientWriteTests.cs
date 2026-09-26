@@ -186,6 +186,30 @@ public class ManagementApiClientWriteTests
             "DELETE /api/shovels/vhost/%2Forders/legacy-migrate/restart");
     }
 
+    [Fact]
+    public async Task AddExchangeBinding_posts_to_the_exchange_destination_path()
+    {
+        var (client, handler) = Created("POST", "/api/bindings/%2Forders/e/order-events/e/audit.fanout");
+
+        await client.AddExchangeBindingAsync(TestSettings.Orders, "/orders", "order-events", "audit.fanout", "order.#",
+            new Dictionary<string, object?>());
+
+        var request = handler.Requests.Single();
+        request.Method.Should().Be(HttpMethod.Post);
+        Json(request.Body).Should().Be(Json("""{"routing_key":"order.#","arguments":{}}"""));
+    }
+
+    [Fact]
+    public async Task RemoveExchangeBinding_escapes_the_already_encoded_properties_key()
+    {
+        var (client, handler) = TestSettings.Create();
+        handler.Respond("DELETE", "/api/bindings/%2Forders/e/order-events/e/audit.fanout/order.%2523", "", HttpStatusCode.NoContent);
+
+        await client.RemoveExchangeBindingAsync(TestSettings.Orders, "/orders", "order-events", "audit.fanout", "order.%23");
+
+        handler.Requests.Single().Method.Should().Be(HttpMethod.Delete);
+    }
+
     private static (ManagementApiClient Client, FakeManagementHandler Handler) Created(string method, string path)
     {
         var (client, handler) = TestSettings.Create();

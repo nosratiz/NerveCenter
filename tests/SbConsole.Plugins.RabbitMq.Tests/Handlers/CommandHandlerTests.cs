@@ -21,6 +21,7 @@ public class CommandHandlerTests : HandlerTestBase
     {
         "exchange.create", "exchange.delete", "queue.create", "queue.delete", "queue.purge",
         "binding.add", "binding.remove", "shovel.create", "shovel.delete", "shovel.restart",
+        "binding.add.exchange", "binding.remove.exchange",
     };
 
     // (run the handler, expected audit action, target, risk, detail on success)
@@ -56,6 +57,12 @@ public class CommandHandlerTests : HandlerTestBase
         "shovel.restart" => (() => new RestartShovelCommandHandler(Operations, Connections, Audit, Log<RestartShovelCommandHandler>())
                 .HandleAsync(new(ConnectionId, Conn, Vhost, "dlq-drain")),
             "rabbitmq.shovel.restart", "rabbit-uk-prod//orders/dlq-drain", ActionRisk.Mutating, null),
+        "binding.add.exchange" => (() => new AddBindingCommandHandler(Operations, Connections, Audit, Log<AddBindingCommandHandler>())
+                .HandleAsync(new(ConnectionId, Conn, Vhost, "order-events", "audit.fanout", "order.#", DestinationType: BindingDestinationType.Exchange)),
+            "rabbitmq.binding.add", "rabbit-uk-prod//orders/order-events→audit.fanout", ActionRisk.Mutating, "key order.#"),
+        "binding.remove.exchange" => (() => new RemoveBindingCommandHandler(Operations, Connections, Audit, Log<RemoveBindingCommandHandler>())
+                .HandleAsync(new(ConnectionId, Conn, Vhost, "order-events", "audit.fanout", "order.#", "order.%23", BindingDestinationType.Exchange)),
+            "rabbitmq.binding.remove", "rabbit-uk-prod//orders/order-events→audit.fanout", ActionRisk.Mutating, "key order.#"),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -147,6 +154,8 @@ public class CommandHandlerTests : HandlerTestBase
         Operations.PurgeQueueAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.AddBindingAsync(default!, default!, default!, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.RemoveBindingAsync(default!, default!, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
+        Operations.AddExchangeBindingAsync(default!, default!, default!, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
+        Operations.RemoveExchangeBindingAsync(default!, default!, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.CreateShovelAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.DeleteShovelAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.RestartShovelAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
@@ -363,5 +372,16 @@ public class CommandHandlerTests : HandlerTestBase
         {
             scope.ServiceProvider.GetService(type).Should().NotBeNull($"{type.Name} must be registered");
         }
+    }
+
+    [Fact]
+    public async Task Exchange_destination_binds_through_the_exchange_operation()
+    {
+        await new AddBindingCommandHandler(Operations, Connections, Audit, Log<AddBindingCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "order-events", "audit.fanout", "order.#", DestinationType: BindingDestinationType.Exchange));
+
+        await Operations.Received(1).AddExchangeBindingAsync(Secret, Vhost, "order-events", "audit.fanout", "order.#",
+            Arg.Any<IReadOnlyDictionary<string, object?>>(), Arg.Any<CancellationToken>());
+        await Operations.DidNotReceiveWithAnyArgs().AddBindingAsync(default!, default!, default!, default!, default!, default!, default);
     }
 }
