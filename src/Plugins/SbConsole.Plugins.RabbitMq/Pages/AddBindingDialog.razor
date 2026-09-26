@@ -1,0 +1,142 @@
+@using SbConsole.Plugins.RabbitMq.Bindings
+@using SbConsole.Plugins.RabbitMq.Client
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+            Bind <span style="font-family:monospace">@Queue</span> · @RabbitFormat.VhostLabel(Vhost)
+        </MudText>
+        <div class="d-flex align-center gap-2">
+            <MudSelect T="string" Class="binding-exchange" Value="_exchange" ValueChanged="OnExchangeChanged" Label="Exchange">
+                @foreach (var exchange in Candidates)
+                {
+                    <MudSelectItem Value="@exchange.Name">@exchange.Name</MudSelectItem>
+                }
+            </MudSelect>
+            @if (SelectedExchange is { } selected)
+            {
+                <MudChip T="string" Class="binding-exchange-type" Size="Size.Small"
+                         Color="@(selected.Type == "topic" ? Color.Primary : Color.Default)"
+                         Variant="@(selected.Type == "topic" ? Variant.Filled : Variant.Outlined)">@selected.Type</MudChip>
+            }
+        </div>
+
+        @if (IsFanout)
+        {
+            <MudText Typo="Typo.caption" Class="fanout-caption mud-text-secondary d-block mt-2">Fanout ignores the routing key</MudText>
+        }
+        else
+        {
+            <MudTextField T="string" Class="binding-routing-key mt-2" @bind-Value="_routingKey" Label="Routing key" Immediate="true"
+                          Style="font-family:monospace" />
+        }
+
+        @if (IsHeaders)
+        {
+            <MudSelect T="string" Class="binding-x-match mt-2" @bind-Value="_xMatch" Label="x-match">
+                <MudSelectItem Value="@("all")">all — every header must match</MudSelectItem>
+                <MudSelectItem Value="@("any")">any — one matching header is enough</MudSelectItem>
+            </MudSelect>
+            <MudTextField T="string" Class="binding-arguments mt-2" Value="_arguments" ValueChanged="OnArgumentsChanged" Label="Header arguments"
+                          Lines="4" Immediate="true" HelperText="One key: value per line" Style="font-family:monospace" />
+            @foreach (var error in _argumentErrors)
+            {
+                <MudText Typo="Typo.caption" Class="binding-arguments-error mud-error-text d-block">@error</MudText>
+            }
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="add-binding-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="add-binding-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="add-binding-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Bind</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string Vhost { get; set; } = "/";
+    [Parameter] public string Queue { get; set; } = "";
+    /// <summary>The exchanges a queue can be bound to (the page leaves out the default exchange).</summary>
+    [Parameter] public IReadOnlyList<ExchangeSummary> Exchanges { get; set; } = [];
+
+    [Inject] private AddBindingCommandHandler AddHandler { get; set; } = default!;
+
+    private string? _exchange;
+    private string _routingKey = "";
+    private string _xMatch = "all";
+    private string _arguments = "";
+    private IReadOnlyDictionary<string, string> _parsedArguments = new Dictionary<string, string>();
+    private IReadOnlyList<string> _argumentErrors = [];
+    private string? _error;
+    private bool _busy;
+
+    // The default exchange binds every queue implicitly and refuses explicit bindings.
+    private IEnumerable<ExchangeSummary> Candidates =>
+        Exchanges.Where(e => !e.IsDefault).OrderBy(e => e.Name, StringComparer.Ordinal);
+
+    private ExchangeSummary? SelectedExchange => Exchanges.FirstOrDefault(e => e.Name == _exchange);
+    private bool IsFanout => SelectedExchange?.Type == "fanout";
+    private bool IsHeaders => SelectedExchange?.Type == "headers";
+
+    private bool CanSubmit => SelectedExchange is not null && (!IsHeaders || _argumentErrors.Count == 0);
+
+    private void OnExchangeChanged(string? exchange) => _exchange = exchange;
+
+    private void OnArgumentsChanged(string? text)
+    {
+        _arguments = text ?? "";
+        (_parsedArguments, _argumentErrors) = HeaderLines.Parse(_arguments);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSubmit || SelectedExchange is not { } exchange)
+        {
+            return;
+        }
+
+        var arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (IsHeaders)
+        {
+            foreach (var (key, value) in _parsedArguments)
+            {
+                arguments[key] = value;
+            }
+
+            arguments["x-match"] = _xMatch;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var routingKey = IsFanout ? "" : _routingKey.Trim();
+            var result = await AddHandler.HandleAsync(new AddBindingCommand(ConnectionId, ConnectionName, Vhost, exchange.Name, Queue, routingKey, arguments));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

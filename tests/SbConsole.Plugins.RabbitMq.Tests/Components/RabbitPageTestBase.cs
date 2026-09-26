@@ -61,6 +61,9 @@ public abstract class RabbitPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton<CreateQueueCommandHandler>();
         Services.AddSingleton<DeleteQueueCommandHandler>();
         Services.AddSingleton<PurgeQueueCommandHandler>();
+        Services.AddSingleton<GetQueueDetailQueryHandler>();
+        Services.AddSingleton<SbConsole.Plugins.RabbitMq.Bindings.AddBindingCommandHandler>();
+        Services.AddSingleton<SbConsole.Plugins.RabbitMq.Bindings.RemoveBindingCommandHandler>();
         Services.AddKeyedSingleton("rabbitmq", Store);
         Services.AddSingleton<TimeProvider>(Clock);
     }
