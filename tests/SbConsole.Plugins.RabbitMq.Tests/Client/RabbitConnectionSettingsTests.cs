@@ -87,4 +87,21 @@ public class RabbitConnectionSettingsTests
 
         s.ToString().Should().NotContain("hunter2");
     }
+
+    [Theory]
+    [InlineData("http://admin:hunter2@mgmt:15672")]
+    [InlineData("https://admin@mgmt/rabbit")]
+    public void A_management_url_with_userinfo_is_rejected(string url)
+    {
+        var secret = RabbitConfigParser.Serialize(new Dictionary<string, string>
+        {
+            ["host"] = "h", ["managementUrl"] = url, ["username"] = "u", ["password"] = "p",
+        });
+
+        var act = () => RabbitConnectionSettings.From(secret);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Put the username and password in their own fields, not in the management URL.")
+            .Which.Message.Should().NotContain("hunter2");
+    }
 }

@@ -442,7 +442,24 @@ internal sealed class ManagementApiClient
 
     private static readonly string[] KnownShovelStates = ["running", "starting", "terminated"];
 
-    private static string Seg(string value) => Uri.EscapeDataString(value);
+    /// <summary>
+    /// One escaped path segment. "." and ".." are refused: they escape to themselves and .NET's Uri
+    /// then removes them as dot segments, silently retargeting the request (a purge of queue "."
+    /// became DELETE /api/queues/%2F/contents, i.e. a delete of queue "contents").
+    /// </summary>
+    private static string Seg(string value)
+    {
+        var escaped = Uri.EscapeDataString(value);
+        if (escaped is "." or "..")
+        {
+            throw DotSegmentError(value);
+        }
+
+        return escaped;
+    }
+
+    internal static ArgumentException DotSegmentError(string value) =>
+        new($"A name of \"{value}\" can't be addressed through the RabbitMQ management API (the URL would resolve to a different resource). Use rabbitmqctl or the broker UI instead.");
 
     // The default exchange is "" in listings but must be addressed as "amq.default" in paths.
     private static string ExchangeSeg(string exchange) => exchange.Length == 0 ? "amq.default" : Seg(exchange);
@@ -540,8 +557,8 @@ internal sealed class ManagementApiClient
     {
         null => null,
         { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } => null,
-        { ValueKind: JsonValueKind.String } text => text.GetString(),
-        { } other => other.GetRawText(),
+        { ValueKind: JsonValueKind.String } text => UriRedaction.RedactOrNull(text.GetString()),
+        { } other => UriRedaction.Redact(other.GetRawText()),
     };
 
     // src-uri/dest-uri may be one URI or a list of fail-over URIs.

@@ -24,7 +24,31 @@ public static class RabbitConfigParser
     public static string SafeEcho(string config)
     {
         var parsed = Parse(config);
-        return string.Join(" · ", SafeEchoKeys.Where(parsed.ContainsKey).Select(k => $"{k}={parsed[k]}"));
+        return string.Join(" · ", SafeEchoKeys.Where(parsed.ContainsKey)
+            .Select(k => $"{k}={(k == "managementUrl" ? StripUserInfo(parsed[k]) : parsed[k])}"));
+    }
+
+    /// <summary>
+    /// Drops anything up to the last '@' of the authority. Settings reject a management URL with
+    /// userinfo, but the echo shows the raw stored text (even an unparseable one), so strip it here too.
+    /// </summary>
+    internal static string StripUserInfo(string url)
+    {
+        var schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+        var start = schemeEnd < 0 ? 0 : schemeEnd + 3;
+        var authorityEnd = url.IndexOfAny(['/', '?', '#'], start);
+        if (authorityEnd < 0)
+        {
+            authorityEnd = url.Length;
+        }
+
+        if (authorityEnd == start)
+        {
+            return url;
+        }
+
+        var at = url.LastIndexOf('@', authorityEnd - 1, authorityEnd - start);
+        return at < 0 ? url : url[..start] + url[(at + 1)..];
     }
 
     public static Dictionary<string, string> Parse(string config)

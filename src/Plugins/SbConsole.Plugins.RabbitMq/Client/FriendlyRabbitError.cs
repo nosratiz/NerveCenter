@@ -19,7 +19,10 @@ public static class FriendlyRabbitError
     // on a channel method is a per-resource permission refusal.
     private const ushort AmqpConnectionClassId = 10;
 
-    public static string From(Exception ex) => ex switch
+    /// <summary>The friendly text, with any URI userinfo the broker or client quoted redacted.</summary>
+    public static string From(Exception ex) => UriRedaction.Redact(Map(ex));
+
+    private static string Map(Exception ex) => ex switch
     {
         ManagementApiException m => FromManagement(m),
         HttpRequestException { InnerException: AuthenticationException tls } =>
