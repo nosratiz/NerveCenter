@@ -1,0 +1,490 @@
+@page "/p/rabbitmq/queues"
+@using System.Globalization
+@using Microsoft.Extensions.Logging
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Queues
+@using SbConsole.Plugins.RabbitMq.Routing
+@inject ListQueuesQueryHandler QueuesHandler
+@inject PurgeQueueCommandHandler PurgeHandler
+@inject DeleteQueueCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject TimeProvider Clock
+@inject ILogger<Queues> Logger
+@implements IDisposable
+
+<PageTitle>RabbitMQ queues</PageTitle>
+<h1>Queues</h1>
+
+<ConnectionVhostPicker SelectionChanged="OnSelectionChangedAsync" Loading="_loading" />
+
+@if (_selection is not null)
+{
+    @if (_snapshot is null)
+    {
+        @if (_loadError is not null)
+        {
+            <ManagementErrorAlert Error="@_loadError" OnRetry="RetryAsync" />
+        }
+        else
+        {
+            @* Skeleton rows keep the column grid while the read is in flight (spec §7). *@
+            <div class="queues-loading">
+                <MudSimpleTable Dense="true" Elevation="0">
+                    <thead><tr><th>Queue</th><th>Ready</th><th>Unacked</th><th>Cons.</th><th>Ack /s</th><th>Redeliver /s</th><th>Attributes</th></tr></thead>
+                    <tbody>
+                        @for (var i = 0; i < 3; i++)
+                        {
+                            <tr>@for (var c = 0; c < 7; c++) { <td><MudSkeleton /></td> }</tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Rates need two samples — first values appear after 5s.</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block" Style="font-family:monospace">Reading /api/queues/@Uri.EscapeDataString(_selection.Vhost)</MudText>
+            </div>
+        }
+    }
+    else
+    {
+        var snapshot = _snapshot;
+        var now = Now;
+        var rows = VisibleQueues(snapshot);
+
+        @if (_refreshError is not null)
+        {
+            <StaleDataBanner Error="@_refreshError" LastGoodAt="_loadedAt" Now="now" OnRetry="RetryAsync"
+                             AutoRefreshPaused="_paused" OnTogglePause="TogglePause" />
+        }
+
+        <div class="d-flex align-center flex-wrap gap-3 my-3">
+            <MudTextField T="string" Class="queue-filter" Value="_filter" ValueChanged="OnFilterChanged" Immediate="true"
+                          Placeholder="Filter queues…" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:260px" />
+            <MudText Class="queues-summary mud-text-secondary" Typo="Typo.body2">
+                @snapshot.Queues.Count @(snapshot.Queues.Count == 1 ? "queue" : "queues") · @RabbitFormat.Count(snapshot.Queues.Sum(q => q.Ready)) ready · @RabbitFormat.Count(snapshot.Queues.Sum(q => q.Unacked)) unacked
+            </MudText>
+            <MudSpacer />
+            <div class="d-flex align-center gap-2">
+                <MudText Typo="Typo.overline" Class="mud-text-secondary">Auto-refresh</MudText>
+                <MudButtonGroup Class="auto-refresh-picker" Variant="Variant.Outlined" Size="Size.Small">
+                    @foreach (var seconds in AutoRefreshChoices)
+                    {
+                        <MudButton Class="@(seconds == 0 ? "auto-refresh-off" : $"auto-refresh-{seconds}")"
+                                   Variant="@(seconds == AutoRefreshSeconds ? Variant.Filled : Variant.Outlined)"
+                                   OnClick="@(() => SetAutoRefreshAsync(seconds))">@(seconds == 0 ? "Off" : $"{seconds}s")</MudButton>
+                    }
+                </MudButtonGroup>
+            </div>
+            <MudButton Class="create-queue" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateAsync">+ Create queue</MudButton>
+        </div>
+
+        <div class="@(_refreshError is null ? "queues-content" : "queues-content stale-data")" style="@(_refreshError is null ? null : StaleDataBanner.StaleStyle)">
+            @if (snapshot.Queues.Count == 0)
+            {
+                <MudPaper Class="queues-empty pa-6 my-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1">No queues in <span style="font-family:monospace">@RabbitFormat.VhostLabel(_selection.Vhost)</span>.</MudText>
+                </MudPaper>
+            }
+            else if (rows.Count == 0)
+            {
+                var closest = NameSuggester.Closest(_filter, snapshot.Queues.Select(q => q.Name));
+                <MudPaper Class="no-match pa-6 my-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1">No queue matches <span style="font-family:monospace">@_filter</span>.</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+                        @snapshot.Queues.Count @(snapshot.Queues.Count == 1 ? "queue" : "queues") in this vhost.
+                        @if (closest is not null)
+                        {
+                            <text>Did you mean </text><MudLink Class="did-you-mean" Style="font-family:monospace" OnClick="@(() => _filter = closest)">@closest</MudLink><text>?</text>
+                        }
+                    </MudText>
+                    <MudButton Class="clear-filter" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => _filter = "")">Clear filter</MudButton>
+                </MudPaper>
+            }
+            else
+            {
+                <MudTable Items="rows" Dense="true" Elevation="0" RowClass="queue-row">
+                    <HeaderContent>
+                        <MudTh>Queue</MudTh>
+                        <MudTh Style="text-align:right">Ready</MudTh>
+                        <MudTh Style="text-align:right">Unacked</MudTh>
+                        <MudTh Style="text-align:right">Cons.</MudTh>
+                        <MudTh Style="text-align:right">Ack /s</MudTh>
+                        <MudTh Style="text-align:right">
+                            <span class="redeliver-header" title="The management API has no per-queue nack rate; redeliveries are the poison-message signal.">Redeliver /s</span>
+                        </MudTh>
+                        <MudTh>Attributes</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        @{ var queue = context.Queue; }
+                        <MudTd Style="font-family:monospace">
+                            <MudLink Class="queue-link" Href="@QueueUrl(queue.Name)"><span class="queue-name">@queue.Name</span></MudLink>
+                        </MudTd>
+                        @* Ready and Unacked are two numbers, never summed (spec §1). *@
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="queue-ready">@RabbitFormat.Count(queue.Ready)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="queue-unacked">@RabbitFormat.Count(queue.Unacked)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="queue-consumers">@RabbitFormat.Count(queue.Consumers)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="rate-ack">@RabbitFormat.Rate(queue.AckRate)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="rate-redeliver">@RabbitFormat.Rate(queue.RedeliverRate)</span></MudTd>
+                        <MudTd>
+                            <div class="d-flex flex-wrap gap-1">
+                                @if (queue.Type == "quorum")
+                                {
+                                    <MudChip T="string" Class="attr-quorum" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">@(queue.ReplicaCount is { } replicas ? $"quorum · {replicas} {(replicas == 1 ? "replica" : "replicas")}" : "quorum")</MudChip>
+                                }
+                                else if (queue.Type == "stream")
+                                {
+                                    <MudChip T="string" Class="attr-stream" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">stream</MudChip>
+                                }
+                                else if (queue.Durable)
+                                {
+                                    <MudChip T="string" Class="attr-durable" Size="Size.Small" Variant="Variant.Text">durable</MudChip>
+                                }
+                                @if (!string.IsNullOrEmpty(queue.DeadLetterExchange))
+                                {
+                                    <MudChip T="string" Class="attr-dlx" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary">DLX</MudChip>
+                                }
+                                @if (context.IsDeadLetterQueue)
+                                {
+                                    <MudChip T="string" Class="attr-dlq" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary">DLQ</MudChip>
+                                }
+                                @if (queue.MessageTtlMs is { } ttl)
+                                {
+                                    <MudChip T="string" Class="attr-ttl" Size="Size.Small" Variant="Variant.Text">TTL @Ttl(ttl)</MudChip>
+                                }
+                                @if (queue.Lazy)
+                                {
+                                    <MudChip T="string" Class="attr-lazy" Size="Size.Small" Variant="Variant.Text">lazy</MudChip>
+                                }
+                                @if (queue.MaxLength is { } max)
+                                {
+                                    <MudChip T="string" Class="attr-max" Size="Size.Small" Variant="Variant.Text">max @RabbitFormat.Count(max)</MudChip>
+                                }
+                                @if (!string.IsNullOrEmpty(queue.Policy))
+                                {
+                                    <MudChip T="string" Class="attr-policy" Size="Size.Small" Variant="Variant.Text">policy @queue.Policy</MudChip>
+                                }
+                                @if (IdleFor(queue, now) is { } idle)
+                                {
+                                    <MudChip T="string" Class="attr-idle" Size="Size.Small" Variant="Variant.Text">idle @RabbitFormat.Duration(idle)</MudChip>
+                                }
+                                @if (context.NoConsumers)
+                                {
+                                    <MudChip T="string" Class="warn-no-consumers" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">no consumers</MudChip>
+                                }
+                                @if (queue.RedeliverRate is > 0)
+                                {
+                                    <MudChip T="string" Class="warn-redelivering" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">redelivering</MudChip>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="d-flex align-center gap-1">
+                                <MudButton Class="get-queue" Size="Size.Small" Variant="Variant.Text" Href="@($"/p/rabbitmq/queues/{Uri.EscapeDataString(queue.Name)}/get?{_selection.Query}")">Get</MudButton>
+                                <MudButton Class="publish-queue" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => OpenPublishAsync(queue))">Publish</MudButton>
+                                <MudButton Class="purge-queue" Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                                           Disabled="@(_busyQueue == queue.Name)" OnClick="@(() => PurgeAsync(queue))">Purge</MudButton>
+                                <MudMenu Class="queue-menu" Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AriaLabel="More actions" Dense="true">
+                                    <MudMenuItem Class="delete-queue" OnClick="@(() => DeleteAsync(queue))">Delete</MudMenuItem>
+                                </MudMenu>
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </div>
+    }
+}
+
+@code {
+    private const string AutoRefreshKey = "queues.autoRefreshSeconds";
+    private const int DefaultAutoRefreshSeconds = 10;
+    private static readonly int[] AutoRefreshChoices = [0, 10, 30, 60];
+
+    // Keyed property injection -- the key AddSbConsolePlugin<TPlugin>() registers IPluginStore under.
+    [Inject(Key = "rabbitmq")]
+    private IPluginStore Store { get; set; } = default!;
+
+    private RabbitSelection? _selection;
+    private QueuesSnapshot? _snapshot;
+    private DeadLetterTopology? _topology;
+    private DateTimeOffset _loadedAt;
+    private bool _loading;
+    // First-load failure (nothing to show) vs refresh failure (last good data stays, dimmed).
+    private string? _loadError;
+    private string? _refreshError;
+    // Transient pause from the stale banner; the persisted interval is left alone.
+    private bool _paused;
+    // Bumped per load; a result for a selection that changed while it was in flight is dropped.
+    private int _generation;
+    private AutoRefresh? _autoRefresh;
+    private string _filter = "";
+    private string? _busyQueue;
+
+    // Exposed for tests: the chosen interval (0 = Off) and whether the refresh loop is alive.
+    internal int AutoRefreshSeconds { get; private set; } = DefaultAutoRefreshSeconds;
+    internal bool IsAutoRefreshing => _autoRefresh?.IsRunning == true;
+
+    private sealed record QueueRow(QueueSummary Queue, bool IsDeadLetterQueue)
+    {
+        // A DLQ is meant to sit unconsumed; anywhere else a backlog with nobody reading is a stall.
+        public bool NoConsumers => Queue.Ready > 0 && Queue.Consumers == 0 && !IsDeadLetterQueue;
+    }
+
+    private DateTimeOffset Now => TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _autoRefresh = new AutoRefresh(Clock);
+        AutoRefreshSeconds = await ReadAutoRefreshSecondsAsync();
+        // The picker may already have produced a selection while the setting was being read.
+        RestartAutoRefresh();
+    }
+
+    // A missing, unrecognised, or unreadable stored value all mean the 10 s default -- the picker
+    // is a convenience and must never break the page.
+    private async Task<int> ReadAutoRefreshSecondsAsync()
+    {
+        try
+        {
+            var stored = await Store.GetAsync(AutoRefreshKey);
+            return int.TryParse(stored, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && AutoRefreshChoices.Contains(seconds)
+                ? seconds
+                : DefaultAutoRefreshSeconds;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Reading the RabbitMQ queues auto-refresh setting failed; defaulting to 10s.");
+            return DefaultAutoRefreshSeconds;
+        }
+    }
+
+    private async Task SetAutoRefreshAsync(int seconds)
+    {
+        AutoRefreshSeconds = seconds;
+        _paused = false;
+        RestartAutoRefresh();
+        try
+        {
+            await Store.SetAsync(AutoRefreshKey, seconds.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            // The choice still applies for this visit; it just won't be remembered.
+            Logger.LogWarning(ex, "Persisting the RabbitMQ queues auto-refresh setting failed.");
+        }
+    }
+
+    private async Task OnSelectionChangedAsync(RabbitSelection selection)
+    {
+        _selection = selection;
+        _snapshot = null;
+        _topology = null;
+        _loadError = null;
+        _refreshError = null;
+        await LoadAsync();
+        RestartAutoRefresh();
+    }
+
+    private void OnFilterChanged(string? value) => _filter = value ?? "";
+
+    // Called every interval by the loop and directly by tests. Skips (returns false) while a load
+    // is already in flight or before a selection exists.
+    internal async Task<bool> AutoRefreshTickAsync()
+    {
+        if (_loading || _selection is null)
+        {
+            return false;
+        }
+
+        await LoadAsync(fromAutoRefresh: true);
+        StateHasChanged();
+        return true;
+    }
+
+    private Task RetryAsync() => LoadAsync();
+
+    private void TogglePause()
+    {
+        _paused = !_paused;
+        RestartAutoRefresh();
+    }
+
+    private void RestartAutoRefresh()
+    {
+        if (_paused || _selection is null || AutoRefreshSeconds == 0)
+        {
+            _autoRefresh?.Stop();
+            return;
+        }
+
+        _autoRefresh?.Start(TimeSpan.FromSeconds(AutoRefreshSeconds), AutoRefreshTickAsync, InvokeAsync,
+            ex => Logger.LogWarning(ex, "Auto-refreshing the RabbitMQ queues list failed."));
+    }
+
+    // A refresh failure snackbars only when a streak starts -- never once per failing tick.
+    private async Task LoadAsync(bool fromAutoRefresh = false)
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        _loading = true;
+        try
+        {
+            var result = await QueuesHandler.HandleAsync(selection.Connection.Id, selection.Vhost);
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _snapshot = result.Value!;
+                _topology = DeadLetterTopology.Compute(_snapshot.Queues, _snapshot.Bindings, _snapshot.Exchanges);
+                _loadedAt = Now;
+                _loadError = null;
+                _refreshError = null;
+            }
+            else if (_snapshot is null)
+            {
+                _loadError = result.Error!;
+            }
+            else
+            {
+                var alreadyFailing = _refreshError is not null;
+                _refreshError = result.Error!;
+                if (!(fromAutoRefresh && alreadyFailing))
+                {
+                    Snackbar.Add(result.Error!, Severity.Error);
+                }
+            }
+        }
+        finally
+        {
+            if (generation == _generation)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    private List<QueueRow> VisibleQueues(QueuesSnapshot snapshot) =>
+        snapshot.Queues
+            .Where(q => _filter.Length == 0 || q.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(q => q.Name, StringComparer.Ordinal)
+            .Select(q => new QueueRow(q, _topology?.IsDeadLetterQueue(q.Name) == true))
+            .ToList();
+
+    private string QueueUrl(string name) => $"/p/rabbitmq/queues/{Uri.EscapeDataString(name)}?{_selection!.Query}";
+
+    /// <summary>How long the queue has been idle, when that is at least a day; null otherwise.</summary>
+    private static TimeSpan? IdleFor(QueueSummary queue, DateTimeOffset now) =>
+        queue.IdleSince is { } since && now - since >= TimeSpan.FromDays(1) ? now - since : null;
+
+    /// <summary>A TTL in its largest exact unit: 30000 → "30s", 90000 → "90s", 3600000 → "1h", 250 → "250ms".</summary>
+    private static string Ttl(long ms) =>
+        ms > 0 && ms % 86_400_000 == 0 ? $"{ms / 86_400_000}d"
+        : ms > 0 && ms % 3_600_000 == 0 ? $"{ms / 3_600_000}h"
+        : ms > 0 && ms % 60_000 == 0 ? $"{ms / 60_000}m"
+        : ms > 0 && ms % 1_000 == 0 ? $"{ms / 1_000}s"
+        : $"{ms}ms";
+
+    private async Task OpenCreateAsync()
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<CreateQueueDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.Vhost, selection.Vhost },
+            { x => x.ExchangeNames, _snapshot?.Exchanges.Select(e => e.Name).ToList() ?? [] },
+        };
+        var dialog = await DialogService.ShowAsync<CreateQueueDialog>("Create queue", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = dialog is null ? null : await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task OpenPublishAsync(QueueSummary queue)
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<PublishDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.IsProd, selection.Connection.IsProd },
+            { x => x.Vhost, selection.Vhost },
+            { x => x.Exchange, "" },
+            { x => x.RoutingKey, queue.Name },
+            { x => x.Exchanges, _snapshot?.Exchanges },
+        };
+        await DialogService.ShowAsync<PublishDialog>("Publish message", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+    }
+
+    private async Task PurgeAsync(QueueSummary queue)
+    {
+        var selection = _selection!;
+        // IsProd comes from the server-side connection lookup the picker made, never from the client.
+        if (!await Confirmation.ConfirmAsync("Purge", queue.Name, selection.Connection.IsProd, count: (int)Math.Min(queue.Ready, int.MaxValue)))
+        {
+            return;
+        }
+
+        _busyQueue = queue.Name;
+        try
+        {
+            var result = await PurgeHandler.HandleAsync(new PurgeQueueCommand(selection.Connection.Id, selection.Connection.Name, selection.Vhost, queue.Name, queue.Ready));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add($"Purged {queue.Name}", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busyQueue = null;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(QueueSummary queue)
+    {
+        var selection = _selection!;
+        if (!await Confirmation.ConfirmAsync("Delete", queue.Name, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        _busyQueue = queue.Name;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteQueueCommand(selection.Connection.Id, selection.Connection.Name, selection.Vhost, queue.Name));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add($"Deleted {queue.Name}", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busyQueue = null;
+        }
+
+        await LoadAsync();
+    }
+
+    public void Dispose() => _autoRefresh?.Dispose();
+}

@@ -1,0 +1,391 @@
+@using System.Globalization
+@using System.Text
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Exchanges
+@using SbConsole.Plugins.RabbitMq.Messages
+@using SbConsole.Plugins.RabbitMq.Routing
+@inject ISnackbar Snackbar
+
+@* Publish message (spec §7 1g, routing preview §5). Opened from Exchanges, Queues and queue
+   detail. The routing preview is resolved before the Publish button goes live, and an
+   unroutable message on an exchange without an alternate exchange is a blocked state -- with an
+   explicit "Publish anyway" for when the bindings changed since they were read. *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            <span style="font-family:monospace">@ConnectionName</span> · @RabbitFormat.VhostLabel(Vhost)
+            @if (IsProd)
+            {
+                <MudChip T="string" Class="prod-chip ml-1" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+            }
+        </MudText>
+
+        @if (_exchangesError is not null)
+        {
+            <MudAlert Class="exchanges-error my-2" Severity="Severity.Warning" Dense="true">Could not list exchanges — @_exchangesError</MudAlert>
+        }
+
+        <div class="d-flex align-end gap-3 mt-2">
+            <MudSelect T="string" Class="exchange-select" Value="_exchangeKey" ValueChanged="OnExchangeChangedAsync" Label="Exchange"
+                       ToStringFunc="KeyLabel" Style="min-width:260px">
+                @foreach (var exchange in _exchanges)
+                {
+                    <MudSelectItem Value="@Key(exchange)">@Label(exchange)</MudSelectItem>
+                }
+            </MudSelect>
+            @if (SelectedExchange is { } selected && selected.Type.Length > 0)
+            {
+                <MudChip T="string" Class="exchange-type-chip" Size="Size.Small"
+                         Color="@(selected.Type == "topic" ? Color.Primary : Color.Default)"
+                         Variant="@(selected.Type == "topic" ? Variant.Filled : Variant.Outlined)">@selected.Type</MudChip>
+            }
+        </div>
+
+        <MudTextField T="string" Class="routing-key mt-2" Value="_routingKey" ValueChanged="OnRoutingKeyChanged" Label="Routing key"
+                      Immediate="true" DebounceInterval="150" Style="font-family:monospace" />
+
+        <div class="routing-preview my-3">
+            @RenderPreview()
+        </div>
+
+        <div class="d-flex gap-3">
+            <MudSelect T="bool" Class="delivery-mode" @bind-Value="_persistent" Label="Delivery mode" Style="min-width:160px">
+                <MudSelectItem Value="true">Persistent</MudSelectItem>
+                <MudSelectItem Value="false">Transient</MudSelectItem>
+            </MudSelect>
+            <MudNumericField T="int?" Class="priority" @bind-Value="_priority" Label="Priority" Min="0" Max="255" Immediate="true"
+                             Error="@(!PriorityValid)" ErrorText="Priority is 0–255." />
+            <MudTextField T="string" Class="content-type" @bind-Value="_contentType" Label="Content type" Immediate="true" />
+        </div>
+
+        <MudTextField T="string" Class="headers-input mt-2" Value="_headersText" ValueChanged="OnHeadersChanged" Label="Headers"
+                      Lines="3" Immediate="true" DebounceInterval="150" Placeholder="key: value (one per line)" Style="font-family:monospace" />
+        @foreach (var error in _headerErrors)
+        {
+            <MudText Class="headers-errors" Typo="Typo.caption" Color="Color.Error">@error</MudText>
+        }
+
+        <MudTextField T="string" Class="body-input mt-2" @bind-Value="_body" Label="Body" Lines="8" Immediate="true" Style="font-family:monospace" />
+
+        @if (_publishError is not null)
+        {
+            <MudAlert Class="publish-error mt-3" Severity="Severity.Error" Dense="true">@_publishError</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton Class="publish-cancel" OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="publish-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="publish-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanPublish)" OnClick="PublishAsync">Publish</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    /// <summary>The caller's server-side connection lookup; a prod publish is confirmed first.</summary>
+    [Parameter] public bool IsProd { get; set; }
+    [Parameter] public string Vhost { get; set; } = "/";
+    /// <summary>Preselected exchange; "" is the AMQP default exchange.</summary>
+    [Parameter] public string Exchange { get; set; } = "";
+    /// <summary>Prefilled routing key (the queue name when opened from a queue with the default exchange).</summary>
+    [Parameter] public string RoutingKey { get; set; } = "";
+    /// <summary>The exchanges the caller already read; when null the dialog lists them itself.</summary>
+    [Parameter] public IReadOnlyList<ExchangeSummary>? Exchanges { get; set; }
+
+    [Inject] private ListExchangesQueryHandler ExchangesHandler { get; set; } = default!;
+    [Inject] private ListExchangeBindingsQueryHandler BindingsHandler { get; set; } = default!;
+    [Inject] private PublishMessageCommandHandler PublishHandler { get; set; } = default!;
+    [Inject] private IConfirmationService Confirmation { get; set; } = default!;
+
+    // Select values can't safely be "" (the default exchange's name), so the default gets a key no
+    // real exchange name can carry.
+    private const string DefaultKey = "\u0001(AMQP default)";
+
+    private List<ExchangeSummary> _exchanges = [];
+    private string _exchangeKey = DefaultKey;
+    private string _routingKey = "";
+    private bool _persistent = true;
+    private int? _priority;
+    private string _contentType = "application/json";
+    private string _headersText = "";
+    private IReadOnlyDictionary<string, string> _headers = new Dictionary<string, string>();
+    private IReadOnlyList<string> _headerErrors = [];
+    private string _body = "";
+
+    private string? _exchangesError;
+    // Bindings are read once per selected exchange; switching back reuses them.
+    private readonly Dictionary<string, IReadOnlyList<BindingInfo>> _bindingsByExchange = new(StringComparer.Ordinal);
+    private bool _bindingsLoading;
+    private string? _bindingsError;
+    private int _bindingsGeneration;
+    private bool _publishAnyway;
+    private string? _publishError;
+    private bool _busy;
+
+    private static string Key(ExchangeSummary exchange) => exchange.IsDefault ? DefaultKey : exchange.Name;
+
+    private static string Label(ExchangeSummary exchange) => exchange.IsDefault ? "(AMQP default)" : exchange.Name;
+
+    private static string KeyLabel(string? key) => key is null or DefaultKey ? "(AMQP default)" : key;
+
+    private ExchangeSummary? SelectedExchange => _exchanges.FirstOrDefault(e => Key(e) == _exchangeKey);
+
+    private bool PriorityValid => _priority is null or (>= 0 and <= 255);
+
+    /// <summary>The routing preview for the current inputs, or null while it can't be computed.</summary>
+    internal RoutePreview? Preview =>
+        !_bindingsLoading && _bindingsError is null && SelectedExchange is { Type.Length: > 0 } exchange
+        && _bindingsByExchange.TryGetValue(exchange.Name, out var bindings)
+            ? RoutingMatcher.Resolve(exchange, bindings, _routingKey, _headers)
+            : null;
+
+    private bool Blocked => Preview is { IsUnknownType: false, Matched.Count: 0, HasAlternateExchange: false } && !_publishAnyway;
+
+    private bool CanPublish => !_busy && !_bindingsLoading && SelectedExchange is not null && _headerErrors.Count == 0 && PriorityValid && !Blocked;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _routingKey = RoutingKey;
+        if (Exchanges is not null)
+        {
+            _exchanges = [.. Exchanges];
+        }
+        else
+        {
+            var result = await ExchangesHandler.HandleAsync(ConnectionId, Vhost);
+            if (result.IsSuccess)
+            {
+                _exchanges = [.. result.Value!.Exchanges];
+            }
+            else
+            {
+                _exchangesError = result.Error;
+            }
+        }
+
+        // Internal exchanges can't be published to by clients; the default one always can.
+        _exchanges = _exchanges
+            .Where(e => !e.Internal || e.Name == Exchange)
+            .OrderBy(e => e.IsDefault ? 0 : 1)
+            .ThenBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+        if (!_exchanges.Any(e => e.IsDefault))
+        {
+            _exchanges.Insert(0, Synthesized("", "direct"));
+        }
+
+        if (!_exchanges.Any(e => e.Name == Exchange))
+        {
+            // Unknown type: publish still works, the preview says it can't predict.
+            _exchanges.Add(Synthesized(Exchange, ""));
+        }
+
+        _exchangeKey = Key(_exchanges.First(e => e.Name == Exchange));
+        await LoadBindingsAsync();
+    }
+
+    private static ExchangeSummary Synthesized(string name, string type) =>
+        new(name, type, true, false, false, null, null, null, new Dictionary<string, object?>());
+
+    private async Task OnExchangeChangedAsync(string key)
+    {
+        _exchangeKey = key;
+        _publishAnyway = false;
+        _publishError = null;
+        await LoadBindingsAsync();
+    }
+
+    private void OnRoutingKeyChanged(string? value)
+    {
+        _routingKey = value ?? "";
+        _publishAnyway = false;
+    }
+
+    private void OnHeadersChanged(string? value)
+    {
+        _headersText = value ?? "";
+        (_headers, _headerErrors) = HeaderLines.Parse(_headersText);
+    }
+
+    private async Task LoadBindingsAsync()
+    {
+        _bindingsError = null;
+        if (SelectedExchange is not { } exchange)
+        {
+            return;
+        }
+
+        if (exchange.Type.Length == 0)
+        {
+            _bindingsError = _exchangesError ?? $"the type of exchange {exchange.Name} is unknown";
+            return;
+        }
+
+        if (_bindingsByExchange.ContainsKey(exchange.Name))
+        {
+            return;
+        }
+
+        var generation = ++_bindingsGeneration;
+        _bindingsLoading = true;
+        try
+        {
+            var result = await BindingsHandler.HandleAsync(ConnectionId, Vhost, exchange.Name);
+            if (generation != _bindingsGeneration)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _bindingsByExchange[exchange.Name] = result.Value!;
+            }
+            else
+            {
+                _bindingsError = result.Error;
+            }
+        }
+        finally
+        {
+            if (generation == _bindingsGeneration)
+            {
+                _bindingsLoading = false;
+            }
+        }
+    }
+
+    private static int QueueCount(RoutePreview preview) =>
+        preview.Matched.Where(b => b.IsToQueue).Select(b => b.Destination).Distinct(StringComparer.Ordinal).Count();
+
+    private static string Plural(int n, string noun) => $"{n.ToString(CultureInfo.InvariantCulture)} {noun}{(n == 1 ? "" : "s")}";
+
+    private static string BindingKeyText(ExchangeSummary exchange, BindingInfo binding) =>
+        exchange.Type == "headers"
+            ? ExchangeBindingsDialog.FormatArguments(binding.Arguments)
+            : binding.RoutingKey.Length == 0 ? "(no key)" : binding.RoutingKey;
+
+    private RenderFragment RenderPreview() => __builder =>
+    {
+        var exchange = SelectedExchange;
+        if (_bindingsLoading)
+        {
+            <MudText Class="preview-loading mud-text-secondary" Typo="Typo.body2">Reading bindings…</MudText>
+        }
+        else if (_bindingsError is not null)
+        {
+            <MudAlert Class="preview-unavailable" Severity="Severity.Info" Dense="true">Routing preview unavailable — @_bindingsError.TrimEnd('.'). The broker will still return an unroutable message.</MudAlert>
+        }
+        else if (exchange is not null && Preview is { } preview)
+        {
+            if (preview.IsUnknownType)
+            {
+                <MudText Class="preview-unsupported mud-text-secondary" Typo="Typo.body2">Preview not available for @exchange.Type</MudText>
+            }
+            else if (preview.Matched.Count > 0)
+            {
+                <MudText Class="route-summary" Typo="Typo.subtitle2" Color="Color.Success">Will route to @Plural(QueueCount(preview), "queue")</MudText>
+                @foreach (var binding in preview.Matched)
+                {
+                    <div class="route-row d-flex gap-3" style="font-family:monospace">
+                        @if (binding.IsToQueue)
+                        {
+                            <span class="route-destination">@binding.Destination</span>
+                        }
+                        else
+                        {
+                            <span class="route-destination">→ exchange @binding.Destination (routing continues there)</span>
+                        }
+                        <span class="route-key mud-text-secondary">@BindingKeyText(exchange, binding)</span>
+                    </div>
+                }
+            }
+            else if (preview.HasAlternateExchange)
+            {
+                <MudAlert Class="route-alternate" Severity="Severity.Info" Dense="true">Matches no binding. Would go to alternate exchange <span style="font-family:monospace">@exchange.AlternateExchange</span>.</MudAlert>
+            }
+            else
+            {
+                <MudPaper Class="unroutable-panel pa-3" Outlined="true" Style="border-color:var(--mud-palette-error)">
+                    <MudText Typo="Typo.subtitle2" Color="Color.Error">✕ Matches no binding</MudText>
+                    <MudText Typo="Typo.body2">This exchange has no alternate exchange, so the message would be dropped silently.</MudText>
+                    @if (preview.Closest.Count > 0)
+                    {
+                        <MudText Typo="Typo.overline" Class="mud-text-secondary mt-2">Closest bindings</MudText>
+                        @foreach (var binding in preview.Closest)
+                        {
+                            <div class="closest-binding d-flex gap-3" style="font-family:monospace">
+                                <span class="closest-key">@BindingKeyText(exchange, binding)</span>
+                                <span class="closest-destination mud-text-secondary">@binding.Destination</span>
+                            </div>
+                        }
+                    }
+                    @if (_publishAnyway)
+                    {
+                        <MudText Class="publishing-anyway mud-text-secondary mt-2" Typo="Typo.caption">Publishing anyway — if the broker agrees it's unroutable, it returns the message and nothing is delivered.</MudText>
+                    }
+                    else
+                    {
+                        <MudButton Class="publish-anyway mt-2" Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => _publishAnyway = true)">Publish anyway</MudButton>
+                    }
+                </MudPaper>
+            }
+        }
+    };
+
+    private async Task PublishAsync()
+    {
+        if (!CanPublish || SelectedExchange is not { } exchange)
+        {
+            return;
+        }
+
+        if (IsProd && !await Confirmation.ConfirmAsync("Publish to", Label(exchange), true))
+        {
+            return;
+        }
+
+        _busy = true;
+        _publishError = null;
+        try
+        {
+            var preview = Preview;
+            var request = new PublishRequest(
+                exchange.Name,
+                _routingKey,
+                Encoding.UTF8.GetBytes(_body ?? ""),
+                _persistent,
+                _priority,
+                string.IsNullOrWhiteSpace(_contentType) ? null : _contentType.Trim(),
+                _headers.Count > 0 ? _headers : null);
+            var result = await PublishHandler.HandleAsync(new PublishMessageCommand(ConnectionId, ConnectionName, Vhost, request));
+            if (!result.IsSuccess)
+            {
+                _publishError = result.Error;
+            }
+            else if (result.Value == PublishOutcome.Unroutable)
+            {
+                _publishError = "Broker returned the message: unroutable";
+            }
+            else
+            {
+                // A count only when the preview fully accounts for it (no exchange hops, no AE).
+                var message = preview is { IsUnknownType: false, Matched.Count: > 0 } && preview.Matched.All(b => b.IsToQueue)
+                    ? $"Published — routed to {Plural(QueueCount(preview), "queue")}"
+                    : "Published — routed";
+                Snackbar.Add(message, Severity.Success);
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

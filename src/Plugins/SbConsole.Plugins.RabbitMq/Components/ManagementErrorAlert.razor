@@ -1,0 +1,15 @@
+@* The shared first-load failure for a management read (spec §7, "Management-API error model"):
+   the friendly error already names the endpoint, status and likely fix. *@
+<MudAlert Class="management-error my-2" Severity="Severity.Error">
+    <div class="d-flex align-center flex-wrap gap-2">
+        <span class="management-error-text">@Error</span>
+        <MudSpacer />
+        <MudButton Class="retry-load" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="OnRetry">Retry</MudButton>
+        <MudButton Class="edit-connection" Size="Size.Small" Variant="Variant.Text" Href="/connections">Edit connection</MudButton>
+    </div>
+</MudAlert>
+
+@code {
+    [Parameter, EditorRequired] public string Error { get; set; } = "";
+    [Parameter] public EventCallback OnRetry { get; set; }
+}

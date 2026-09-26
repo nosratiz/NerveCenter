@@ -1,0 +1,90 @@
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Exchanges
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" Class="exchange-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true"
+                      Error="@(NameError is not null)" ErrorText="@NameError" />
+        <MudSelect T="string" Class="exchange-type mt-2" @bind-Value="_type" Label="Type">
+            @foreach (var type in Types)
+            {
+                <MudSelectItem Value="@type">@type</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSwitch T="bool" Class="durable-toggle mt-2" @bind-Value="_durable" Label="Durable" Color="Color.Primary" />
+        <MudSwitch T="bool" Class="auto-delete-toggle" @bind-Value="_autoDelete" Label="Auto-delete" Color="Color.Primary" />
+        <MudSwitch T="bool" Class="internal-toggle" @bind-Value="_internal" Label="Internal" Color="Color.Primary" />
+        <MudTextField T="string" Class="alternate-exchange mt-2" @bind-Value="_alternateExchange" Label="Alternate exchange (optional)" Immediate="true"
+                      HelperText="Receives messages that match no binding, instead of dropping them." />
+        @if (_error is not null)
+        {
+            <MudAlert Class="create-exchange-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="create-exchange-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="create-exchange-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private static readonly string[] Types = ["direct", "fanout", "topic", "headers"];
+
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string Vhost { get; set; } = "/";
+
+    [Inject] private CreateExchangeCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private string _type = "direct";
+    private bool _durable = true;
+    private bool _autoDelete;
+    private bool _internal;
+    private string _alternateExchange = "";
+    private string? _error;
+    private bool _busy;
+
+    // The broker reserves the amq. prefix; say so before the round trip rather than after.
+    private string? NameError =>
+        _name.Trim().StartsWith("amq.", StringComparison.Ordinal) ? "Names starting with amq. are reserved by the broker." : null;
+
+    private bool CanSubmit => !string.IsNullOrWhiteSpace(_name) && NameError is null;
+
+    private async Task SaveAsync()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var request = new CreateExchangeRequest(_name.Trim(), _type, _durable, _autoDelete, _internal,
+                string.IsNullOrWhiteSpace(_alternateExchange) ? null : _alternateExchange.Trim());
+            var result = await CreateHandler.HandleAsync(new CreateExchangeCommand(ConnectionId, ConnectionName, Vhost, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

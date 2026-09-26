@@ -122,6 +122,45 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------------------
+  # RabbitMQ 3.13 with the management and shovel plugins (profile: rabbitmq), seeded with the
+  # topology the RabbitMQ plugin's mockup is drawn from (vhost /orders). AMQP is published on
+  # 5673 by default, not 5672, because the Service Bus emulator already claims 5672 on the host.
+  # ---------------------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: nervecenter-rabbitmq
+    profiles: ["rabbitmq"]
+    hostname: rabbit-local
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5673}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./docker/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 15s
+
+  # One-shot: publishes sample messages (including some that dead-letter into payments-dlq).
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    container_name: nervecenter-rabbitmq-init
+    profiles: ["rabbitmq"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init-messages.sh"]
+    environment:
+      RABBIT_API: http://rabbitmq:15672/api
+    volumes:
+      - ./docker/rabbitmq/init-messages.sh:/init-messages.sh:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------
   # Azure Service Bus emulator (profile: servicebus). Needs SQL Server as its store.
   # SQL Server 2022 ships amd64 only, so on Apple Silicon it runs under emulation --
   # slower to start (~30-60s) but works. Both images require ACCEPT_EULA=Y.

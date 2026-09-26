@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 SbConsole: a team-hosted Blazor web app that acts as a **plugin host platform**. The host
 (`SbConsole.Web` + `SbConsole.Core`) provides the chassis — shell UI, auth, saved connections,
 encrypted secrets, settings, audit log, plugin storage. Plugins provide domain features:
-`SbConsole.Plugins.ServiceBus` (Azure Service Bus) and `SbConsole.Plugins.Kafka` (Apache Kafka).
+`SbConsole.Plugins.ServiceBus` (Azure Service Bus), `SbConsole.Plugins.Kafka` (Apache Kafka),
+`SbConsole.Plugins.Aws` (AWS SQS/SNS) and `SbConsole.Plugins.RabbitMq` (RabbitMQ).
 Full architecture and decision history: [docs/design.md](docs/design.md) — read it before making
 any non-trivial change; it documents *why* things are shaped the way they are, not just what
 exists.
@@ -38,6 +39,7 @@ Local dev stack (brokers the plugins talk to — see [docker/README.md](docker/R
 ```bash
 docker compose up -d                              # Kafka (KRaft, seeded topics) + Kafka UI
 docker compose --profile servicebus up -d         # + Azure Service Bus emulator (SQL Server-backed)
+docker compose --profile rabbitmq up -d           # + RabbitMQ 3.13 (management + shovel), seeded vhost /orders, AMQP on 5673
 docker compose --profile app up -d --build        # SbConsole itself, containerized (needs .env, see .env.example)
 docker compose --profile servicebus --profile app down -v   # full reset, drops volumes
 ```
@@ -54,7 +56,8 @@ src/
 └── Plugins/                       # All plugin projects live here. Each references Sdk ONLY.
     ├── SbConsole.Plugins.ServiceBus/
     ├── SbConsole.Plugins.Kafka/
-    └── SbConsole.Plugins.Aws/
+    ├── SbConsole.Plugins.Aws/
+    └── SbConsole.Plugins.RabbitMq/
 tests/  — one xUnit project per src project, plus SbConsole.IntegrationTests (Testcontainers, not yet built)
 ```
 
@@ -89,7 +92,7 @@ The seam every plugin is built against — read `docs/design.md` §3 for the ful
 
 - Core handlers: xUnit + FluentAssertions + NSubstitute (substitute `IAuditWriter`, stores, clock via `Microsoft.Extensions.TimeProvider.Testing`).
 - Blazor components: bUnit.
-- Plugins (Service Bus, Kafka): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further.
+- Plugins (Service Bus, Kafka, AWS, RabbitMQ): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further.
 - `SbConsole.IntegrationTests` (Testcontainers + real/emulated brokers) is planned but not yet built.
 
 ### Stack (non-negotiable, per design doc §9)

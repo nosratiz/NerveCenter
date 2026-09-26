@@ -1,0 +1,507 @@
+@page "/p/rabbitmq/shovels"
+@using System.Collections
+@using System.Globalization
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Policies
+@using SbConsole.Plugins.RabbitMq.Routing
+@using SbConsole.Plugins.RabbitMq.Shovels
+@inject ListShovelsQueryHandler ShovelsHandler
+@inject ListPoliciesQueryHandler PoliciesHandler
+@inject RestartShovelCommandHandler RestartHandler
+@inject DeleteShovelCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
+
+<PageTitle>RabbitMQ shovels &amp; policies</PageTitle>
+<div class="d-flex align-center">
+    <h1>Shovels &amp; policies</h1>
+    <MudSpacer />
+    @if (_selection is not null)
+    {
+        <MudButton Class="refresh-shovels" Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_loading" OnClick="LoadAsync">Refresh</MudButton>
+    }
+</div>
+
+<ConnectionVhostPicker SelectionChanged="OnSelectionChangedAsync" Loading="_loading" />
+
+@if (_selection is not null)
+{
+    var now = Now;
+    <MudTabs Class="mt-3" Elevation="0" KeepPanelsAlive="true" ActivePanelIndex="_activeTab" ActivePanelIndexChanged="OnTabChanged">
+        <MudTabPanel Text="Shovels">
+            <div class="shovels-panel pt-3">
+                @if (_shovels.Snapshot is not { } shovels)
+                {
+                    @if (_shovels.LoadError is not null)
+                    {
+                        <ManagementErrorAlert Error="@_shovels.LoadError" OnRetry="LoadAsync" />
+                    }
+                    else
+                    {
+                        <div class="shovels-loading">
+                            @for (var i = 0; i < 3; i++) { <MudSkeleton Class="my-2" /> }
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace">Reading /api/shovels/@Uri.EscapeDataString(_selection.Vhost)</MudText>
+                        </div>
+                    }
+                }
+                else
+                {
+                    @if (_shovels.RefreshError is not null)
+                    {
+                        <StaleDataBanner Error="@_shovels.RefreshError" LastGoodAt="_shovels.LoadedAt" Now="now" OnRetry="LoadAsync" ShowAutoRefreshToggle="false" />
+                    }
+
+                    <div class="@(_shovels.RefreshError is null ? "shovels-content" : "shovels-content stale-data")" style="@(_shovels.RefreshError is null ? null : StaleDataBanner.StaleStyle)">
+                        @if (shovels.ShovelPluginMissing)
+                        {
+                            <MudAlert Class="shovel-plugin-missing my-2" Severity="Severity.Info" Dense="true">The shovel management plugin isn't enabled on this broker (rabbitmq-plugins enable rabbitmq_shovel_management).</MudAlert>
+                        }
+                        else
+                        {
+                            <div class="d-flex align-center my-2">
+                                <MudText Class="shovels-heading" Typo="Typo.subtitle1">Dynamic shovels — @shovels.Shovels.Count</MudText>
+                                <MudSpacer />
+                                <MudButton Class="new-shovel" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateAsync">+ New shovel</MudButton>
+                            </div>
+
+                            @if (shovels.Shovels.Count == 0)
+                            {
+                                <MudPaper Class="shovels-empty pa-6 my-2" Outlined="true">
+                                    <MudText Typo="Typo.subtitle1">No dynamic shovels in <span style="font-family:monospace">@RabbitFormat.VhostLabel(_selection.Vhost)</span>.</MudText>
+                                </MudPaper>
+                            }
+                            else
+                            {
+                                <MudSimpleTable Dense="true" Elevation="0">
+                                    <thead><tr><th>Shovel</th><th>Route</th><th>Ack mode</th><th>State</th><th>Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var shovel in shovels.Shovels.OrderBy(s => s.Name, StringComparer.Ordinal))
+                                        {
+                                            var remote = RemoteHosts(shovel, _selection.Vhost);
+                                            var explanation = Explanation(shovel, shovels.Queues, _selection.Vhost, now);
+                                            <tr class="shovel-row">
+                                                <td style="font-family:monospace"><span class="shovel-name">@shovel.Name</span></td>
+                                                <td>
+                                                    <span class="shovel-route" style="font-family:monospace">@Route(shovel)</span>
+                                                    @if (remote.Count > 0)
+                                                    {
+                                                        <MudText Typo="Typo.caption" Class="shovel-remote mud-text-secondary d-block">via @string.Join(", ", remote)</MudText>
+                                                    }
+                                                </td>
+                                                <td style="font-family:monospace"><span class="shovel-ack">@shovel.AckMode</span></td>
+                                                <td>
+                                                    <MudChip T="string" Class="shovel-state" Size="Size.Small" Color="StateColor(shovel.State)"
+                                                             Variant="@(shovel.State == "terminated" ? Variant.Filled : Variant.Outlined)">@shovel.State</MudChip>
+                                                </td>
+                                                <td>
+                                                    <div class="d-flex gap-1">
+                                                        <MudButton Class="restart-shovel" Size="Size.Small" Variant="Variant.Text"
+                                                                   Disabled="@(_busyShovel == shovel.Name)" OnClick="@(() => RestartAsync(shovel.Name))">Restart</MudButton>
+                                                        <MudButton Class="delete-shovel" Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                                                                   Disabled="@(_busyShovel == shovel.Name)" OnClick="@(() => DeleteAsync(shovel.Name))">Delete</MudButton>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            @if (explanation is not null)
+                                            {
+                                                <tr class="shovel-explanation-row">
+                                                    <td colspan="5" style="@ExplanationStyle(shovel.State)">
+                                                        <MudText Typo="Typo.body2" Class="shovel-explanation">@explanation</MudText>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            }
+
+                            <MudText Typo="Typo.caption" Class="shovel-deviation mud-text-secondary d-block mt-2">Transfer rate and pause/resume aren't shown — the shovel status API reports no rate, and pausing is rabbitmqctl-only.</MudText>
+                        }
+                    </div>
+                }
+            </div>
+        </MudTabPanel>
+        <MudTabPanel Text="Policies">
+            <div class="policies-panel pt-3">
+                @if (_policies.Snapshot is not { } policies)
+                {
+                    @if (_policies.LoadError is not null)
+                    {
+                        <ManagementErrorAlert Error="@_policies.LoadError" OnRetry="LoadAsync" />
+                    }
+                    else
+                    {
+                        <div class="policies-loading">
+                            @for (var i = 0; i < 3; i++) { <MudSkeleton Class="my-2" /> }
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace">Reading /api/policies/@Uri.EscapeDataString(_selection.Vhost)</MudText>
+                        </div>
+                    }
+                }
+                else
+                {
+                    @if (_policies.RefreshError is not null)
+                    {
+                        <StaleDataBanner Error="@_policies.RefreshError" LastGoodAt="_policies.LoadedAt" Now="now" OnRetry="LoadAsync" ShowAutoRefreshToggle="false" />
+                    }
+
+                    <div class="@(_policies.RefreshError is null ? "policies-content" : "policies-content stale-data")" style="@(_policies.RefreshError is null ? null : StaleDataBanner.StaleStyle)">
+                        <MudText Class="policies-heading my-2" Typo="Typo.subtitle1">Policies — @policies.Policies.Count, applied by pattern</MudText>
+                        @if (policies.Policies.Count == 0)
+                        {
+                            <MudPaper Class="policies-empty pa-6 my-2" Outlined="true">
+                                <MudText Typo="Typo.subtitle1">No policies in <span style="font-family:monospace">@RabbitFormat.VhostLabel(_selection.Vhost)</span>.</MudText>
+                            </MudPaper>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Elevation="0">
+                                <thead>
+                                    <tr><th>Policy</th><th>Pattern</th><th>Applies</th><th>Definition</th><th style="text-align:right">Matches</th><th style="text-align:right">Prio</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var policy in policies.Policies.OrderByDescending(p => p.Priority).ThenBy(p => p.Name, StringComparer.Ordinal))
+                                    {
+                                        var matches = PolicyMatcher.CountMatches(policy, policies.Queues, policies.Exchanges);
+                                        <tr class="policy-row">
+                                            <td><span class="policy-name">@policy.Name</span></td>
+                                            <td style="font-family:monospace"><span class="policy-pattern">@policy.Pattern</span></td>
+                                            <td><span class="policy-applies">@policy.ApplyTo</span></td>
+                                            <td style="font-family:monospace"><span class="policy-definition">@Definition(policy.Definition)</span></td>
+                                            <td style="text-align:right;font-family:monospace">
+                                                @if (matches is { } count)
+                                                {
+                                                    <span class="policy-matches">@RabbitFormat.Count(count)</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="policy-matches" title="The pattern isn't a valid .NET regex or timed out">?</span>
+                                                }
+                                            </td>
+                                            <td style="text-align:right;font-family:monospace"><span class="policy-priority">@policy.Priority.ToString(CultureInfo.InvariantCulture)</span></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                        <MudText Typo="Typo.caption" Class="policies-caption mud-text-secondary d-block mt-2">A policy overrides queue arguments silently — queue detail names the winning policy beside the arguments.</MudText>
+                    </div>
+                }
+            </div>
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    private const int PoliciesTab = 1;
+    private static readonly TimeSpan StartingTooLong = TimeSpan.FromSeconds(60);
+
+    /// <summary>One tab's data and its own first-load vs refresh failure state.</summary>
+    private sealed class TabState<T> where T : class
+    {
+        public T? Snapshot { get; set; }
+        public DateTimeOffset LoadedAt { get; set; }
+        public string? LoadError { get; set; }
+        public string? RefreshError { get; set; }
+
+        public void Reset()
+        {
+            Snapshot = null;
+            LoadError = null;
+            RefreshError = null;
+        }
+
+        public void Apply(PluginResult<T> result, DateTimeOffset now)
+        {
+            if (result.IsSuccess)
+            {
+                Snapshot = result.Value!;
+                LoadedAt = now;
+                LoadError = null;
+                RefreshError = null;
+            }
+            else if (Snapshot is null)
+            {
+                LoadError = result.Error!;
+            }
+            else
+            {
+                RefreshError = result.Error!;
+            }
+        }
+    }
+
+    private RabbitSelection? _selection;
+    private readonly TabState<ShovelsSnapshot> _shovels = new();
+    private readonly TabState<PoliciesSnapshot> _policies = new();
+    private bool _loading;
+    private int _generation;
+    private int _activeTab;
+    private string? _busyShovel;
+
+    private DateTimeOffset Now => TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+
+    protected override void OnInitialized()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        _activeTab = query.TryGetValue("tab", out var tab) && string.Equals(tab.ToString(), "policies", StringComparison.OrdinalIgnoreCase)
+            ? PoliciesTab
+            : 0;
+    }
+
+    private void OnTabChanged(int index)
+    {
+        _activeTab = index;
+        // Only the tab changes; connectionId/vhost (and anything else) stay as they are.
+        var uri = Navigation.GetUriWithQueryParameter("tab", index == PoliciesTab ? "policies" : null);
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+    }
+
+    private async Task OnSelectionChangedAsync(RabbitSelection selection)
+    {
+        _selection = selection;
+        _shovels.Reset();
+        _policies.Reset();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        _loading = true;
+        try
+        {
+            var shovels = ShovelsHandler.HandleAsync(selection.Connection.Id, selection.Vhost);
+            var policies = PoliciesHandler.HandleAsync(selection.Connection.Id, selection.Vhost);
+            await Task.WhenAll(shovels, policies);
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            var now = Now;
+            _shovels.Apply(await shovels, now);
+            _policies.Apply(await policies, now);
+        }
+        finally
+        {
+            if (generation == _generation)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    private static string Route(ShovelInfo shovel)
+    {
+        var source = shovel.SourceQueue ?? "exchange " + shovel.SourceExchange;
+        var destination = shovel.DestinationQueue ?? shovel.DestinationExchange ?? "";
+        if (!string.IsNullOrEmpty(shovel.DestinationRoutingKey))
+        {
+            destination += " · key " + shovel.DestinationRoutingKey;
+        }
+
+        return $"{source} → {destination}";
+    }
+
+    private static Color StateColor(string state) => state switch
+    {
+        "running" => Color.Success,
+        "starting" => Color.Info,
+        "terminated" => Color.Error,
+        _ => Color.Default,
+    };
+
+    // Tinted from theme tokens so light and dark both stay correct.
+    private static string ExplanationStyle(string state) =>
+        state == "terminated" ? "background-color:var(--mud-palette-error-lighten)" : "background-color:var(--mud-palette-info-lighten)";
+
+    private string? Explanation(ShovelInfo shovel, IReadOnlyList<QueueSummary> queues, string vhost, DateTimeOffset now)
+    {
+        if (shovel.State == "terminated")
+        {
+            var text = shovel.Name + " failed";
+            if (shovel.Timestamp is { } failedAt)
+            {
+                text += " " + RabbitFormat.Ago(failedAt, now);
+            }
+
+            if (!string.IsNullOrWhiteSpace(shovel.Reason))
+            {
+                text += " — " + shovel.Reason.Trim().TrimEnd('.');
+            }
+
+            text += ".";
+
+            // Only a source on this broker's vhost can be looked up in the snapshot's queues.
+            var source = shovel.SourceQueue is { } name && IsThisBroker(shovel.SourceUri, vhost)
+                ? queues.FirstOrDefault(q => string.Equals(q.Name, name, StringComparison.Ordinal))
+                : null;
+            if (source is not null)
+            {
+                text += $" {RabbitFormat.Count(source.Ready)} {(source.Ready == 1 ? "message" : "messages")} holding in {source.Name}.";
+            }
+
+            return text;
+        }
+
+        if (shovel.State == "starting" && shovel.Timestamp is { } since && now - since > StartingTooLong)
+        {
+            var local = TimeZoneInfo.ConvertTime(since, Clock.LocalTimeZone);
+            return $"{shovel.Name} has been starting since {local.ToString("HH:mm", CultureInfo.InvariantCulture)} — it's likely retrying an unreachable endpoint.";
+        }
+
+        return null;
+    }
+
+    private static List<string> RemoteHosts(ShovelInfo shovel, string vhost) =>
+        new[] { shovel.SourceUri, shovel.DestinationUri }
+            .Where(uri => !IsThisBroker(uri, vhost))
+            .Select(DisplayHost)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>"amqp://" (no host) or "amqp:///{this vhost}" -- RabbitMQ's spelling of "this broker".</summary>
+    private static bool IsThisBroker(string? uri, string vhost)
+    {
+        if (string.IsNullOrWhiteSpace(uri))
+        {
+            return true;
+        }
+
+        var trimmed = uri.Trim();
+        if (trimmed is "amqp://" or "amqp:///")
+        {
+            return true;
+        }
+
+        if (!trimmed.StartsWith("amqp:///", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var path = trimmed["amqp:///".Length..];
+        var query = path.IndexOf('?', StringComparison.Ordinal);
+        if (query >= 0)
+        {
+            path = path[..query];
+        }
+
+        return string.Equals(Uri.UnescapeDataString(path), vhost, StringComparison.Ordinal);
+    }
+
+    /// <summary>The host only -- never the user:password a shovel URI usually carries.</summary>
+    private static string DisplayHost(string uri)
+    {
+        var trimmed = uri.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed) && !string.IsNullOrEmpty(parsed.Host))
+        {
+            return parsed.Host;
+        }
+
+        var rest = trimmed;
+        var scheme = rest.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0)
+        {
+            rest = rest[(scheme + 3)..];
+        }
+
+        var slash = rest.IndexOf('/', StringComparison.Ordinal);
+        var authority = slash >= 0 ? rest[..slash] : rest;
+        var path = slash >= 0 ? rest[(slash + 1)..] : "";
+        var at = authority.LastIndexOf('@');
+        if (at >= 0)
+        {
+            authority = authority[(at + 1)..];
+        }
+
+        var colon = authority.LastIndexOf(':');
+        if (colon >= 0 && !authority.EndsWith(']'))
+        {
+            authority = authority[..colon];
+        }
+
+        // amqp:///other-vhost: this broker's host, a different vhost.
+        return authority.Length > 0 ? authority : "vhost " + Uri.UnescapeDataString(path.Split('?')[0]);
+    }
+
+    private static string Definition(IReadOnlyDictionary<string, object?> definition) =>
+        string.Join(" · ", definition.Select(kv => $"{kv.Key}: {Value(kv.Value)}"));
+
+    private static string Value(object? value) => value switch
+    {
+        null => "null",
+        string text => text,
+        bool flag => flag ? "true" : "false",
+        int or long or short or byte or uint or ulong => Convert.ToInt64(value, CultureInfo.InvariantCulture).ToString("N0", CultureInfo.InvariantCulture),
+        double d when d == Math.Floor(d) && !double.IsInfinity(d) => d.ToString("N0", CultureInfo.InvariantCulture),
+        double or float or decimal => Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("0.##", CultureInfo.InvariantCulture),
+        IDictionary<string, object?> map => "{" + string.Join(", ", map.Select(kv => $"{kv.Key}: {Value(kv.Value)}")) + "}",
+        IEnumerable list => string.Join(", ", list.Cast<object?>().Select(Value)),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+    };
+
+    private async Task OpenCreateAsync()
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<CreateShovelDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.IsProd, selection.Connection.IsProd },
+            { x => x.Vhost, selection.Vhost },
+            { x => x.QueueNames, (_shovels.Snapshot?.Queues ?? []).Select(q => q.Name).ToList() },
+            { x => x.ExchangeNames, (_policies.Snapshot?.Exchanges ?? []).Where(e => !e.IsBuiltIn).Select(e => e.Name).ToList() },
+        };
+        var dialog = await DialogService.ShowAsync<CreateShovelDialog>("New shovel", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private Task RestartAsync(string name) =>
+        RunAsync("Restart", name, selection => RestartHandler.HandleAsync(new RestartShovelCommand(selection.Connection.Id, selection.Connection.Name, selection.Vhost, name)));
+
+    private Task DeleteAsync(string name) =>
+        RunAsync("Delete", name, selection => DeleteHandler.HandleAsync(new DeleteShovelCommand(selection.Connection.Id, selection.Connection.Name, selection.Vhost, name)));
+
+    private async Task RunAsync(string action, string name, Func<RabbitSelection, Task<PluginResult>> command)
+    {
+        var selection = _selection!;
+        // IsProd comes from the server-side connection lookup the picker made, never from the client.
+        if (!await Confirmation.ConfirmAsync(action, name, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        _busyShovel = name;
+        try
+        {
+            var result = await command(selection);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busyShovel = null;
+        }
+
+        await LoadAsync();
+    }
+}

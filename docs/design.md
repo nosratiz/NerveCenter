@@ -970,6 +970,66 @@ subscription; CloudWatch `AWS/SQS` metrics (LocalStack doesn't publish them, so 
 has only been exercised on its empty path); and SNS delivery-status logs (LocalStack doesn't write
 them, so the delivery-logs tab has only been exercised on its not-configured path).
 
+## 6.8 RabbitMQ plugin (`SbConsole.Plugins.RabbitMq`) (2026-09-25)
+
+SbConsole's fourth plugin: `RabbitMqPlugin : IPlugin`, `Id`/`ConnectionKind` = `"rabbitmq"`,
+registered after AWS. Unlike AWS (three plans), the whole mockup surface (`SbConsole
+RabbitMQ.dc.html`, frames 1a–1h) was built in one plan, because every screen shares one
+connection/vhost picker and one management-API error model. Full design:
+`docs/superpowers/specs/2026-09-25-rabbitmq-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-09-25-rabbitmq-plugin.md`.
+
+**Two endpoints, reported separately.** AMQP (RabbitMQ.Client 7) moves messages; the management
+HTTP API (`HttpClient` + System.Text.Json, no third-party client) is the only source of rates,
+depths, bindings, nodes, shovels and policies. Test connection runs both probes concurrently and
+returns two `ConnectionCheck`s, so the most common self-hosted misconfiguration (AMQP open, the
+management plugin off or unreachable) reads as "partly configured", not as broken. No SDK change was
+needed: `Success=true` with one failed check is the existing "valid but under-permissioned" shape.
+Get and Publish deliberately use AMQP, not the management API's `/get` and `/publish`, so they keep
+working when only AMQP is reachable.
+
+**Connection secret.** The house `key=value;` string, but with every value percent-encoded
+(`RabbitConfigParser`): a RabbitMQ password or vhost can legally contain `;` or `=`, which Kafka's and
+AWS's unencoded convention would split. `RabbitConnectionSettings.From` applies the defaults (ports
+and management URL follow `tls`, vhost `/`). Structured form: `RabbitConnectionFields`.
+
+**Shape.** `IRabbitOperations` / `RabbitOperations` composes an internal `ManagementApiClient`
+(unit-tested against real captured 3.13.7 JSON through a fake `HttpMessageHandler`) and an
+`AmqpClient`. Handlers are thin and share one body (`HandlerRunner`) instead of repeating AWS's
+try/log/friendly/audit block ~20 times. Pure logic lives in `Routing/`: `RoutingMatcher` (the
+Publish dialog's live routing preview — AMQP topic semantics as a word-level matcher, headers
+`x-match` variants, closest bindings), `DeadLetterTopology` (dead-lettering is a routing convention,
+not a broker object: a DLQ is a queue bound to some queue's DLX — refined so a queue that itself has a
+DLX is a work/retry queue, not a DLQ), `PolicyMatcher`, `NameSuggester`.
+
+**Decisions worth knowing:**
+- *Get has no true peek.* `basic.get` takes the message; Peek hands everything back with one
+  `basic.nack(multiple, requeue)`, Consume acks. Cancellation or failure before that closes the
+  channel, which requeues what was held. Peek is a query (no audit row); its side effect (the
+  redelivered flag) is stated in the page byline. Consume is `Destructive`, confirmed and audited,
+  and consumed messages exist only in page memory until requeued/republished — the page warns while
+  any are held.
+- *Publish is mandatory + publisher confirms.* The preview can block an unroutable publish before
+  send ("caught before send"), but the broker's `basic.return` stays the authority.
+- *Ready and Unacked are never summed*, anywhere.
+- *Stale data stays visible* (dimmed, timestamped) when a refresh fails, rather than blanking — a
+  blank table during a management-API blip looks like an emptied broker.
+
+**Deviations from the mockup** (each because the data doesn't exist, not for effort): the Queues
+"Nack /s" column is "Redeliver /s" (no per-queue nack rate in the API); no per-binding rates on queue
+detail (no per-binding statistics); no shovel transfer rate or Pause/Resume (not in the shovel status
+API / `rabbitmqctl`-only on 3.13); the purge dialog's "Oldest"/"Distinct routing keys" facts are not
+shown (they'd need a side-effecting read first); Overview "churn" is since node start, not "last hour".
+
+**Host hooks:** nav badges (Overview = nodes in memory/disk alarm, Queues = DLQ ready total), the
+`Queues`/`Dead-lettered` dashboard metrics, per-queue resource metrics and needs-attention problems,
+all from one 60 s cached broker snapshot (the AWS pattern). `GetOldestDeadLetterAsync` stays at the
+SDK default: reading a message's age needs a `basic.get`.
+
+**Local stack:** `docker compose --profile rabbitmq up -d` — RabbitMQ 3.13 with management + shovel,
+seeded from `docker/rabbitmq/definitions.json` with the mockup's topology in vhost `/orders`; AMQP on
+host port 5673 (the Service Bus emulator holds 5672). See `docker/README.md`.
+
 ## 7. Error handling
 
 - Handlers return typed results (`Result<T>` with error category: `NotFound`,

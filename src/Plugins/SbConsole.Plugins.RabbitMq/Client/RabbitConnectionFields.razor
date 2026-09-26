@@ -1,0 +1,99 @@
+@* src/Plugins/SbConsole.Plugins.RabbitMq/Client/RabbitConnectionFields.razor *@
+@using MudBlazor
+
+<MudTextField T="string" id="rabbit-host" Label="Host" Value="_host" ValueChanged="@(v => OnFieldChanged(v, x => _host = x))" Immediate="true" />
+<MudTextField T="string" id="rabbit-amqp-port" Label="AMQP port" Placeholder="@DefaultAmqpPort" Value="_amqpPort" ValueChanged="@(v => OnFieldChanged(v, x => _amqpPort = x))" Immediate="true" Class="mt-3" />
+<MudTextField T="string" id="rabbit-management-url" Label="Management URL" Placeholder="@DefaultManagementUrl" HelperText="Rates, depths and bindings are read from here — not over AMQP." Value="_managementUrl" ValueChanged="@(v => OnFieldChanged(v, x => _managementUrl = x))" Immediate="true" Class="mt-3" />
+<MudTextField T="string" id="rabbit-vhost" Label="Virtual host" Placeholder="/" Value="_vhost" ValueChanged="@(v => OnFieldChanged(v, x => _vhost = x))" Immediate="true" Class="mt-3" />
+<MudTextField T="string" id="rabbit-username" Label="Username" Value="_username" ValueChanged="@(v => OnFieldChanged(v, x => _username = x))" Immediate="true" Class="mt-3" />
+<MudTextField T="string" id="rabbit-password" Label="Password" InputType="InputType.Password" HelperText="Stored in the host secret store, never in the plugin config file." Value="_password" ValueChanged="@(v => OnFieldChanged(v, x => _password = x))" Immediate="true" Class="mt-3" />
+
+<MudSwitch T="bool" data-testid="rabbit-tls" Label="TLS" Value="_tls" ValueChanged="OnTlsChanged" Class="mt-3" />
+@if (_tls)
+{
+    <MudSwitch T="bool" data-testid="rabbit-verify-cert" Label="Verify certificate chain" Value="_verifyCert" ValueChanged="OnVerifyCertChanged" />
+}
+
+@if (IsProd && !_tls)
+{
+    <MudAlert Severity="Severity.Warning" Class="mt-2">Plain AMQP on a prod connection sends credentials unencrypted.</MudAlert>
+}
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    [Parameter] public bool IsProd { get; set; }
+
+    private string _host = "";
+    private string _amqpPort = "";
+    private string _managementUrl = "";
+    private string _vhost = "";
+    private string _username = "";
+    private string _password = "";
+    private bool _tls;
+    private bool _verifyCert = true;
+
+    private string DefaultAmqpPort => (_tls ? RabbitConnectionSettings.DefaultAmqpTlsPort : RabbitConnectionSettings.DefaultAmqpPort).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private string DefaultManagementUrl => _tls
+        ? $"https://{HostOrPlaceholder}:{RabbitConnectionSettings.DefaultManagementTlsPort}"
+        : $"http://{HostOrPlaceholder}:{RabbitConnectionSettings.DefaultManagementPort}";
+
+    private string HostOrPlaceholder => string.IsNullOrWhiteSpace(_host) ? "{host}" : _host.Trim();
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment (SbConsole.Sdk): the host
+    // round-trips whatever this component last emitted back into InitialSecret on every parent
+    // render, so re-parsing in OnParametersSet would fight in-progress typing.
+    protected override void OnInitialized()
+    {
+        var parsed = RabbitConfigParser.Parse(InitialSecret ?? "");
+        _host = parsed.GetValueOrDefault("host", "");
+        _amqpPort = parsed.GetValueOrDefault("amqpPort", "");
+        _managementUrl = parsed.GetValueOrDefault("managementUrl", "");
+        _vhost = parsed.GetValueOrDefault("vhost", "");
+        _username = parsed.GetValueOrDefault("username", "");
+        _password = parsed.GetValueOrDefault("password", "");
+        _tls = bool.TryParse(parsed.GetValueOrDefault("tls"), out var tls) && tls;
+        _verifyCert = !bool.TryParse(parsed.GetValueOrDefault("verifyCert"), out var verify) || verify;
+    }
+
+    private Task OnTlsChanged(bool value)
+    {
+        _tls = value;
+        return NotifyChangedAsync();
+    }
+
+    private Task OnVerifyCertChanged(bool value)
+    {
+        _verifyCert = value;
+        return NotifyChangedAsync();
+    }
+
+    private Task OnFieldChanged(string value, Action<string> assign)
+    {
+        assign(value ?? "");
+        return NotifyChangedAsync();
+    }
+
+    // RabbitConfigParser.Serialize skips empty values, so blank optional fields are omitted and
+    // RabbitConnectionSettings.From applies its defaults.
+    private Task NotifyChangedAsync()
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["host"] = _host,
+            ["amqpPort"] = _amqpPort,
+            ["managementUrl"] = _managementUrl,
+            ["vhost"] = _vhost,
+            ["username"] = _username,
+            ["password"] = _password,
+            ["tls"] = _tls ? "true" : "false",
+        };
+        if (_tls)
+        {
+            fields["verifyCert"] = _verifyCert ? "true" : "false";
+        }
+
+        return SecretChanged.InvokeAsync(RabbitConfigParser.Serialize(fields));
+    }
+}

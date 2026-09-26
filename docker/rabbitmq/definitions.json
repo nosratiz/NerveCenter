@@ -1,0 +1,412 @@
+{
+  "rabbit_version": "3.13.7",
+  "users": [
+    {
+      "name": "admin",
+      "password_hash": "lNjM1nAENn2hP8u5NGgRZsNtBaH9UvRHdAEZqG9gxP6bpqhY",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [
+        "administrator"
+      ]
+    },
+    {
+      "name": "sbconsole",
+      "password_hash": "hetCNOi8n0L/kkKz72ANREhnaXa0GfjC6KHEO5fxBBfeuJSE",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [
+        "management",
+        "monitoring",
+        "policymaker"
+      ]
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    },
+    {
+      "name": "/orders"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "admin",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "admin",
+      "vhost": "/orders",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "sbconsole",
+      "vhost": "/orders",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "order-events",
+      "vhost": "/orders",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "notify.fanout",
+      "vhost": "/orders",
+      "type": "fanout",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "billing.direct",
+      "vhost": "/orders",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "billing.retry.dlx",
+      "vhost": "/orders",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "shipment.updates",
+      "vhost": "/orders",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "invoice.headers",
+      "vhost": "/orders",
+      "type": "headers",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "audit.fanout",
+      "vhost": "/orders",
+      "type": "fanout",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "legacy.import",
+      "vhost": "/orders",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "order-events.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic",
+        "x-dead-letter-exchange": "billing.retry.dlx",
+        "x-dead-letter-routing-key": "dlq.order-events",
+        "x-max-length": 500000,
+        "x-overflow": "reject-publish"
+      }
+    },
+    {
+      "name": "billing.payments.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic",
+        "x-dead-letter-exchange": "billing.retry.dlx",
+        "x-dead-letter-routing-key": "dlq.payments"
+      }
+    },
+    {
+      "name": "billing.retry",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic",
+        "x-message-ttl": 30000
+      }
+    },
+    {
+      "name": "payments-dlq",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "audit.sink",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "shipment.updates.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "invoice.issued.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "notify.email.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "notify.sms.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic",
+        "x-queue-mode": "lazy"
+      }
+    },
+    {
+      "name": "legacy.import.q",
+      "vhost": "/orders",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "order-events",
+      "vhost": "/orders",
+      "destination": "order-events.q",
+      "destination_type": "queue",
+      "routing_key": "order.*.created",
+      "arguments": {}
+    },
+    {
+      "source": "order-events",
+      "vhost": "/orders",
+      "destination": "order-events.q",
+      "destination_type": "queue",
+      "routing_key": "order.*.amended",
+      "arguments": {}
+    },
+    {
+      "source": "order-events",
+      "vhost": "/orders",
+      "destination": "audit.sink",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "audit.fanout",
+      "vhost": "/orders",
+      "destination": "order-events.q",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    },
+    {
+      "source": "audit.fanout",
+      "vhost": "/orders",
+      "destination": "audit.sink",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    },
+    {
+      "source": "notify.fanout",
+      "vhost": "/orders",
+      "destination": "notify.email.q",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    },
+    {
+      "source": "notify.fanout",
+      "vhost": "/orders",
+      "destination": "notify.sms.q",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    },
+    {
+      "source": "billing.direct",
+      "vhost": "/orders",
+      "destination": "billing.payments.q",
+      "destination_type": "queue",
+      "routing_key": "payment.capture",
+      "arguments": {}
+    },
+    {
+      "source": "billing.direct",
+      "vhost": "/orders",
+      "destination": "billing.payments.q",
+      "destination_type": "queue",
+      "routing_key": "refund.issue",
+      "arguments": {}
+    },
+    {
+      "source": "billing.retry.dlx",
+      "vhost": "/orders",
+      "destination": "payments-dlq",
+      "destination_type": "queue",
+      "routing_key": "dlq.order-events",
+      "arguments": {}
+    },
+    {
+      "source": "billing.retry.dlx",
+      "vhost": "/orders",
+      "destination": "payments-dlq",
+      "destination_type": "queue",
+      "routing_key": "dlq.payments",
+      "arguments": {}
+    },
+    {
+      "source": "shipment.updates",
+      "vhost": "/orders",
+      "destination": "shipment.updates.q",
+      "destination_type": "queue",
+      "routing_key": "shipment.#",
+      "arguments": {}
+    },
+    {
+      "source": "invoice.headers",
+      "vhost": "/orders",
+      "destination": "invoice.issued.q",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {
+        "x-match": "all",
+        "type": "issued"
+      }
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/orders",
+      "name": "orders-limits",
+      "pattern": "^order-events",
+      "apply-to": "queues",
+      "priority": 10,
+      "definition": {
+        "max-length": 500000,
+        "overflow": "reject-publish"
+      }
+    },
+    {
+      "vhost": "/orders",
+      "name": "dlq-ttl",
+      "pattern": "-dlq$",
+      "apply-to": "queues",
+      "priority": 5,
+      "definition": {
+        "message-ttl": 604800000
+      }
+    },
+    {
+      "vhost": "/orders",
+      "name": "retry-shortttl",
+      "pattern": "\\.retry$",
+      "apply-to": "queues",
+      "priority": 5,
+      "definition": {
+        "message-ttl": 30000,
+        "dead-letter-exchange": "billing.direct"
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "vhost": "/orders",
+      "component": "shovel",
+      "name": "legacy-migrate",
+      "value": {
+        "src-protocol": "amqp091",
+        "src-uri": "amqp:///%2Forders",
+        "src-queue": "legacy.import.q",
+        "dest-protocol": "amqp091",
+        "dest-uri": "amqp:///%2Forders",
+        "dest-exchange": "order-events",
+        "dest-exchange-key": "order.legacy.created",
+        "ack-mode": "on-confirm",
+        "src-delete-after": "never"
+      }
+    },
+    {
+      "vhost": "/orders",
+      "component": "shovel",
+      "name": "billing-retry-loop",
+      "value": {
+        "src-protocol": "amqp091",
+        "src-uri": "amqp:///%2Forders",
+        "src-queue": "billing.retry",
+        "dest-protocol": "amqp091",
+        "dest-uri": "amqp://rabbit-eu-dr.invalid:5672",
+        "dest-exchange": "billing.direct",
+        "ack-mode": "on-confirm",
+        "src-delete-after": "never",
+        "reconnect-delay": 30
+      }
+    }
+  ],
+  "global_parameters": [
+    {
+      "name": "cluster_name",
+      "value": "rabbit@local"
+    }
+  ],
+  "topic_permissions": []
+}

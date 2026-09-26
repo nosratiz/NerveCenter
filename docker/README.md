@@ -100,6 +100,51 @@ management calls refused on port 80. Publishing the emulator's 5300 as host port
 lets a single unported endpoint drive both. If port 80 is taken on your machine, move it with
 `SERVICEBUS_HTTP_PORT` and accept that the plugin's management pages will fail.
 
+## RabbitMQ (opt-in)
+
+```bash
+docker compose --profile rabbitmq up -d
+```
+
+| Service         | Host address                                                  |
+|-----------------|---------------------------------------------------------------|
+| `rabbitmq`      | `localhost:5673` (AMQP), http://localhost:15672 (management UI/API) |
+| `rabbitmq-init` | (one-shot)                                                    |
+
+RabbitMQ 3.13 with the `management`, `shovel` and `shovel_management` plugins. AMQP is published
+on **5673**, not 5672, because the Service Bus emulator already claims 5672 on the host (move it
+with `RABBITMQ_AMQP_PORT`).
+
+Topology is declared in [`rabbitmq/definitions.json`](rabbitmq/definitions.json) and imported on
+every boot. It is the one the RabbitMQ plugin's mockup is drawn from, in vhost `/orders`:
+exchanges `order-events` (topic), `notify.fanout`, `billing.direct`, `billing.retry.dlx` (the
+dead-letter exchange), `shipment.updates` (topic), `invoice.headers` (headers), `audit.fanout`,
+and `legacy.import` (deliberately unbound); queues including `order-events.q` and
+`billing.payments.q` (both dead-lettering through `billing.retry.dlx` into `payments-dlq`),
+`billing.retry` (TTL 30 s), and quorum `audit.sink`; three policies (`orders-limits`, `dlq-ttl`,
+`retry-shortttl`); and two dynamic shovels — `legacy-migrate` (healthy) and `billing-retry-loop`
+(pointed at an unreachable destination, so it never leaves `starting`). `rabbitmq-init`
+publishes sample messages, including five payments that expire straight into `payments-dlq` with
+an `x-death` history.
+
+Users: `sbconsole` / `sbconsole` (tags `management`, `monitoring`, `policymaker`; full
+permissions on `/orders` only) and `admin` / `admin` (administrator). With a definitions file
+configured RabbitMQ does not create the default `guest` user.
+
+### Connect the app to it (RabbitMQ)
+
+In SbConsole, **Connections → Add**, kind *RabbitMQ*: Host `localhost`, AMQP port `5673`,
+Management URL `http://localhost:15672`, Virtual host `/orders`, Username/Password `sbconsole`,
+TLS off. The equivalent raw secret (values percent-encoded) is:
+
+```
+host=localhost;amqpPort=5673;managementUrl=http%3A%2F%2Flocalhost%3A15672;vhost=%2Forders;username=sbconsole;password=sbconsole;tls=false
+```
+
+To see Test connection's split result, stop just the management listener's reachability — e.g.
+point Management URL at `http://localhost:15999`: AMQP passes, the management check fails, and
+the connection still saves.
+
 ## LocalStack — AWS SQS/SNS emulator (opt-in)
 
 ```bash
@@ -268,13 +313,13 @@ the host publishes the right ports, the container does not.
 
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
-`SBC_HOST_PORT`, `LOCALSTACK_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the
+`SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the
 broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile app down -v
 ```
 
 `-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's

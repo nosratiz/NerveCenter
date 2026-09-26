@@ -1,0 +1,554 @@
+@page "/p/rabbitmq/queues/{Name}"
+@using System.Globalization
+@using SbConsole.Plugins.RabbitMq.Bindings
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Queues
+@using SbConsole.Plugins.RabbitMq.Routing
+@inject GetQueueDetailQueryHandler DetailHandler
+@inject PurgeQueueCommandHandler PurgeHandler
+@inject RemoveBindingCommandHandler RemoveBindingHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject TimeProvider Clock
+
+<PageTitle>@QueueName</PageTitle>
+
+@* A compact breadcrumb header rather than the connection/vhost picker: the page is about one queue
+   on one connection, so both come from the query (spec §7). IsProd is resolved server-side from
+   IConnectionProvider, never from the URL. *@
+<div class="d-flex align-center flex-wrap gap-2 mb-2">
+    <MudLink Class="breadcrumb-queues" Href="@QueuesUrl">Queues</MudLink>
+    <MudText>/</MudText>
+    <MudText Class="breadcrumb-name" Typo="Typo.h6" Style="font-family:monospace">@QueueName</MudText>
+    @if (_snapshot is not null && _topology?.IsDeadLetterQueue(QueueName) == true)
+    {
+        <MudChip T="string" Class="dlq-chip" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary">dead-letter queue</MudChip>
+    }
+    @if (_connection is not null)
+    {
+        <MudText Typo="Typo.caption" Class="detail-connection mud-text-secondary ml-2">
+            <span style="font-family:monospace">@_connection.Name</span> · @RabbitFormat.VhostLabel(VhostValue)
+        </MudText>
+        @if (_connection.IsProd)
+        {
+            <MudChip T="string" Class="prod-chip" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+        }
+    }
+    <MudSpacer />
+    @if (_snapshot is not null)
+    {
+        <MudButton Class="refresh-detail" Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
+        <MudButton Class="get-messages" Size="Size.Small" Variant="Variant.Outlined" Href="@GetMessagesUrl">Get messages</MudButton>
+        <MudButton Class="add-binding" Size="Size.Small" Variant="Variant.Outlined" OnClick="OpenAddBindingAsync">+ Add binding</MudButton>
+        <MudButton Class="publish-queue" Size="Size.Small" Variant="Variant.Outlined" OnClick="OpenPublishAsync">Publish</MudButton>
+        <MudButton Class="purge-queue" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                   Disabled="_busy" OnClick="PurgeAsync">Purge</MudButton>
+    }
+</div>
+
+@if (!_connectionResolved)
+{
+    <MudProgressCircular Class="queue-detail-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connection is null)
+{
+    <MudAlert Class="connection-not-found my-2" Severity="Severity.Warning">
+        Connection not found. <MudLink Href="/p/rabbitmq/queues">Back to queues</MudLink>
+    </MudAlert>
+}
+else if (_snapshot is null)
+{
+    @if (_notFound)
+    {
+        <MudAlert Class="queue-not-found my-2" Severity="Severity.Warning">
+            <div class="d-flex align-center flex-wrap gap-2">
+                <span class="not-found-text">Queue @QueueName not found in @RabbitFormat.VhostLabel(VhostValue)</span>
+                <MudSpacer />
+                <MudButton Class="back-to-queues" Size="Size.Small" Variant="Variant.Outlined" Href="@QueuesUrl">Back to queues</MudButton>
+            </div>
+        </MudAlert>
+    }
+    else if (_loadError is not null)
+    {
+        <ManagementErrorAlert Error="@_loadError" OnRetry="RefreshAsync" />
+    }
+    else
+    {
+        <div class="queue-detail-loading">
+            <MudGrid Spacing="2" Class="mb-4">
+                @for (var i = 0; i < 5; i++)
+                {
+                    <MudItem xs="6" sm="2"><MudPaper Class="pa-3" Outlined="true"><MudSkeleton /><MudSkeleton Height="32px" /></MudPaper></MudItem>
+                }
+            </MudGrid>
+            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="120px" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block" Style="font-family:monospace">Reading /api/queues/@Uri.EscapeDataString(VhostValue)/@Uri.EscapeDataString(QueueName)</MudText>
+        </div>
+    }
+}
+else
+{
+    var snapshot = _snapshot;
+    var queue = snapshot.Detail.Summary;
+    var bindings = RoutesIn(snapshot);
+    var route = _topology?.RouteOut(queue.Name);
+
+    @if (_refreshError is not null)
+    {
+        <StaleDataBanner Error="@_refreshError" LastGoodAt="_loadedAt" Now="Now" OnRetry="RefreshAsync" ShowAutoRefreshToggle="false" />
+    }
+
+    <div class="@(_refreshError is null ? "queue-detail-content" : "queue-detail-content stale-data")" style="@(_refreshError is null ? null : StaleDataBanner.StaleStyle)">
+        @* Ready and Unacked are separate tiles, never summed (spec §1). *@
+        <MudGrid Spacing="2" Class="mb-4">
+            @Tile("tile-ready", "Ready", RabbitFormat.Count(queue.Ready))
+            @Tile("tile-unacked", "Unacked", RabbitFormat.Count(queue.Unacked))
+            @Tile("tile-consumers", "Consumers", RabbitFormat.Count(queue.Consumers))
+            @Tile("tile-ack", "Ack /s", RabbitFormat.Rate(queue.AckRate))
+            @Tile("tile-memory", "Memory", RabbitFormat.Bytes(queue.MemoryBytes))
+        </MudGrid>
+
+        <MudPaper Class="routes-in pa-4 mb-4" Outlined="true">
+            <MudText Class="routes-in-title" Typo="Typo.subtitle1">Routes in — @bindings.Count @(bindings.Count == 1 ? "binding" : "bindings")</MudText>
+            @if (bindings.Count == 0)
+            {
+                <MudText Class="no-bindings mud-text-secondary mt-2" Typo="Typo.body2">
+                    @("No bindings — this queue only receives messages published to the default exchange with routing key ")<span style="font-family:monospace">@queue.Name</span>@(".")
+                </MudText>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Elevation="0" Class="mt-2">
+                    <tbody>
+                        @foreach (var binding in bindings)
+                        {
+                            var exchangeType = ExchangeType(snapshot, binding.Source);
+                            <tr class="binding-row">
+                                <td style="font-family:monospace">
+                                    <MudLink Class="binding-exchange" Href="@ExchangesUrl">@binding.Source</MudLink>
+                                </td>
+                                <td>
+                                    @if (exchangeType is not null)
+                                    {
+                                        <MudChip T="string" Class="binding-type" Size="Size.Small"
+                                                 Color="@(exchangeType == "topic" ? Color.Primary : Color.Default)"
+                                                 Variant="@(exchangeType == "topic" ? Variant.Filled : Variant.Outlined)">@exchangeType</MudChip>
+                                    }
+                                </td>
+                                <td style="font-family:monospace">
+                                    <span class="@(binding.RoutingKey.Length == 0 ? "binding-key mud-text-secondary" : "binding-key")">@(binding.RoutingKey.Length == 0 ? "(no key)" : binding.RoutingKey)</span>
+                                </td>
+                                <td style="text-align:right">
+                                    <MudButton Class="unbind" Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                                               Disabled="_busy" OnClick="@(() => UnbindAsync(binding))">Unbind</MudButton>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+            <MudText Typo="Typo.caption" Class="routes-in-caption mud-text-secondary d-block mt-2">Per-binding rates aren't shown — the management API has no per-binding statistics.</MudText>
+        </MudPaper>
+
+        <MudPaper Class="route-out pa-4 mb-4" Outlined="true">
+            <MudText Typo="Typo.subtitle1">Route out — dead-letter</MudText>
+            @if (route is null)
+            {
+                <MudText Class="no-dead-letter mud-text-secondary mt-2" Typo="Typo.body2">No dead-letter route — rejected and expired messages are dropped.</MudText>
+            }
+            else
+            {
+                <MudText Class="dead-letter-route mt-2" Typo="Typo.body2">
+                    @("Rejected or expired → ")<span class="dead-letter-exchange" style="font-family:monospace">@(route.Exchange.Length == 0 ? "(AMQP default)" : route.Exchange)</span>@(" · ")<span class="dead-letter-key" style="font-family:monospace">@(route.RoutingKey ?? "original routing key")</span>@(" → ")
+                    @if (route.TargetQueues.Count == 0)
+                    {
+                        <span class="dead-letter-no-target mud-text-secondary">@(route.Exchange.Length == 0 ? "the queue the original routing key names" : "no bound queue")</span>
+                    }
+                    else
+                    {
+                        @for (var i = 0; i < route.TargetQueues.Count; i++)
+                        {
+                            var target = route.TargetQueues[i];
+                            <span class="dead-letter-target-item">@(i > 0 ? ", " : "")<MudLink Class="dead-letter-target" Href="@QueueUrl(target)" Style="font-family:monospace">@target</MudLink>@(" · ")<span class="dead-letter-target-ready">@TargetReady(snapshot, target)</span></span>
+                        }
+                    }
+                    @if (route.DependsOnMessageRoutingKey)
+                    {
+                        <span class="depends-on-key mud-text-secondary">@(" — depends on the message's routing key")</span>
+                    }
+                </MudText>
+                <MudText Class="dead-letter-set-by mud-text-secondary d-block mt-1" Typo="Typo.caption">
+                    @if (route.SetBy == "argument")
+                    {
+                        <span>@("Set by ")<span style="font-family:monospace">x-dead-letter-exchange</span>@(" on the queue, so it is an argument rather than a binding — shown here anyway because it is where the messages actually go.")</span>
+                    }
+                    else
+                    {
+                        <span>@("Set by policy ")<span style="font-family:monospace">@route.SetBy</span>@(", so it is a policy rather than a binding — shown here anyway because it is where the messages actually go.")</span>
+                    }
+                </MudText>
+            }
+        </MudPaper>
+
+        <MudGrid Spacing="2">
+            <MudItem xs="12" md="7">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1">Arguments</MudText>
+                    <MudSimpleTable Class="arguments mt-2" Dense="true" Elevation="0">
+                        <tbody>
+                            @foreach (var row in ArgumentRows(queue))
+                            {
+                                <tr class="argument-row">
+                                    <td style="font-family:monospace"><span class="argument-key">@row.Key</span></td>
+                                    <td>
+                                        <div class="d-flex align-center flex-wrap gap-2">
+                                            <span class="argument-value" style="font-family:monospace">@row.Value</span>
+                                            @if (row.FromPolicy is { } policy)
+                                            {
+                                                <MudChip T="string" Class="policy-override" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">policy @policy</MudChip>
+                                            }
+                                            @if (row.WinsOverPolicy is { } overridden)
+                                            {
+                                                <MudText Typo="Typo.caption" Class="argument-wins mud-text-secondary">argument wins over policy @overridden</MudText>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="5">
+                <MudPaper Class="consumers pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1">Consumers</MudText>
+                    @if (snapshot.Detail.Consumers.Count == 0)
+                    {
+                        <MudText Class="no-consumers mud-text-secondary mt-2" Typo="Typo.body2">No consumers.</MudText>
+                    }
+                    else
+                    {
+                        var consumers = snapshot.Detail.Consumers;
+                        var shown = _showAllConsumers ? consumers : consumers.Take(ConsumersShown).ToList();
+                        @foreach (var consumer in shown)
+                        {
+                            <div class="consumer-row d-flex align-center gap-2 mt-2">
+                                <div class="d-flex flex-column" style="min-width:0">
+                                    <span class="consumer-tag" style="font-family:monospace">@consumer.Tag</span>
+                                    <MudText Typo="Typo.caption" Class="consumer-channel mud-text-secondary">@consumer.ChannelName</MudText>
+                                </div>
+                                <MudSpacer />
+                                <MudText Typo="Typo.caption" Class="consumer-prefetch">prefetch @(consumer.Prefetch == 0 ? "unlimited" : RabbitFormat.Count(consumer.Prefetch))</MudText>
+                            </div>
+                        }
+                        @if (consumers.Count > ConsumersShown)
+                        {
+                            <MudButton Class="more-consumers mt-2" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _showAllConsumers = !_showAllConsumers)">
+                                @(_showAllConsumers ? "Show fewer" : $"+{consumers.Count - ConsumersShown} more")
+                            </MudButton>
+                        }
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </div>
+}
+
+@code {
+    private const int ConsumersShown = 3;
+
+    // Queue argument ↔ policy definition key, for the keys where both exist (RabbitMQ semantics:
+    // when both are set the queue argument is the one in effect).
+    private static readonly (string Argument, string Policy)[] PolicyKeys =
+    [
+        ("x-message-ttl", "message-ttl"),
+        ("x-dead-letter-exchange", "dead-letter-exchange"),
+        ("x-dead-letter-routing-key", "dead-letter-routing-key"),
+        ("x-max-length", "max-length"),
+        ("x-overflow", "overflow"),
+        ("x-queue-mode", "queue-mode"),
+    ];
+
+    /// <summary>The route-escaped queue name (one segment, like AWS QueueDetail's queue URL).</summary>
+    [Parameter] public string Name { get; set; } = "";
+    [SupplyParameterFromQuery(Name = "connectionId")] public Guid? ConnectionId { get; set; }
+    [SupplyParameterFromQuery(Name = "vhost")] public string? Vhost { get; set; }
+
+    private ConnectionInfo? _connection;
+    private bool _connectionResolved;
+    private QueueDetailSnapshot? _snapshot;
+    private DeadLetterTopology? _topology;
+    private DateTimeOffset _loadedAt;
+    private bool _loading;
+    private bool _busy;
+    private bool _notFound;
+    // First-load failure (nothing to show) vs refresh failure (last good data stays, dimmed).
+    private string? _loadError;
+    private string? _refreshError;
+    private bool _showAllConsumers;
+    // "{connectionId}|{vhost}|{name}" of the queue on screen; a load finishing for an older key is dropped.
+    private string? _pageKey;
+
+    private sealed record ArgumentRow(string Key, string Value, string? FromPolicy = null, string? WinsOverPolicy = null);
+
+    private string QueueName => Uri.UnescapeDataString(Name);
+    private string VhostValue => string.IsNullOrEmpty(Vhost) ? "/" : Vhost;
+    private string Query => $"connectionId={ConnectionId}&vhost={Uri.EscapeDataString(VhostValue)}";
+    private string QueuesUrl => $"/p/rabbitmq/queues?{Query}";
+    private string ExchangesUrl => $"/p/rabbitmq/exchanges?{Query}";
+    private string GetMessagesUrl => $"/p/rabbitmq/queues/{Uri.EscapeDataString(QueueName)}/get?{Query}";
+    private string QueueUrl(string queue) => $"/p/rabbitmq/queues/{Uri.EscapeDataString(queue)}?{Query}";
+    private DateTimeOffset Now => TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+
+    // Blazor reuses this instance when navigating between two queue detail URLs (e.g. a dead-letter
+    // target link), so everything is reset whenever the queue, connection or vhost changes.
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{ConnectionId}|{VhostValue}|{Name}";
+        if (key == _pageKey)
+        {
+            return;
+        }
+
+        _pageKey = key;
+        _connection = null;
+        _connectionResolved = false;
+        _snapshot = null;
+        _topology = null;
+        _notFound = false;
+        _loadError = null;
+        _refreshError = null;
+        _showAllConsumers = false;
+
+        var connection = ConnectionId is { } id
+            ? (await Connections.ListAsync(ConnectionVhostPicker.Kind)).FirstOrDefault(c => c.Id == id)
+            : null;
+        if (key != _pageKey)
+        {
+            return;
+        }
+
+        _connection = connection;
+        _connectionResolved = true;
+        await LoadAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var key = _pageKey;
+        _loading = true;
+        try
+        {
+            var result = await DetailHandler.HandleAsync(connection.Id, VhostValue, QueueName);
+            if (key != _pageKey)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                var snapshot = result.Value!;
+                _snapshot = snapshot;
+                // The detail read is the freshest view of this queue; use it for its own route out.
+                var queues = snapshot.Queues.Where(q => q.Name != snapshot.Detail.Summary.Name).Append(snapshot.Detail.Summary).ToList();
+                _topology = DeadLetterTopology.Compute(queues, snapshot.Bindings, snapshot.Exchanges);
+                _loadedAt = Now;
+                _notFound = false;
+                _loadError = null;
+                _refreshError = null;
+            }
+            else if (IsNotFound(result.Error!))
+            {
+                _snapshot = null;
+                _topology = null;
+                _notFound = true;
+                _refreshError = null;
+            }
+            else if (_snapshot is null)
+            {
+                _loadError = result.Error!;
+            }
+            else
+            {
+                _refreshError = result.Error!;
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            if (key == _pageKey)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    // FriendlyRabbitError renders a management 404 as "Not found (GET … → 404)".
+    private static bool IsNotFound(string error) => error.StartsWith("Not found (", StringComparison.Ordinal);
+
+    // The implicit default-exchange binding can't be removed, so it isn't listed (spec §7, 1e).
+    private static List<BindingInfo> RoutesIn(QueueDetailSnapshot snapshot) =>
+        snapshot.Detail.Bindings
+            .Where(b => b.Source.Length > 0 && b.IsToQueue)
+            .OrderBy(b => b.Source, StringComparer.Ordinal)
+            .ThenBy(b => b.RoutingKey, StringComparer.Ordinal)
+            .ToList();
+
+    private static string? ExchangeType(QueueDetailSnapshot snapshot, string exchange) =>
+        snapshot.Exchanges.FirstOrDefault(e => e.Name == exchange)?.Type;
+
+    private static string TargetReady(QueueDetailSnapshot snapshot, string queue) =>
+        snapshot.Queues.FirstOrDefault(q => q.Name == queue) is { } target ? RabbitFormat.Count(target.Ready) : RabbitFormat.Missing;
+
+    private static List<ArgumentRow> ArgumentRows(QueueSummary queue)
+    {
+        var policyName = queue.Policy ?? "(unnamed)";
+        var policy = queue.EffectivePolicyDefinition;
+        var rows = new List<ArgumentRow>
+        {
+            new("durable", queue.Durable ? "true" : "false"),
+            new("x-queue-type", queue.Arguments.GetValueOrDefault("x-queue-type") is { } declaredType ? FormatValue(declaredType) : queue.Type),
+        };
+
+        foreach (var (key, value) in queue.Arguments.Where(a => a.Key != "x-queue-type").OrderBy(a => a.Key, StringComparer.Ordinal))
+        {
+            var policyKey = PolicyKeys.FirstOrDefault(p => p.Argument == key).Policy;
+            var shadowsPolicy = policyKey is not null && policy.ContainsKey(policyKey);
+            rows.Add(new ArgumentRow(key, FormatValue(value), WinsOverPolicy: shadowsPolicy ? policyName : null));
+        }
+
+        // Policy keys the queue didn't declare: the policy's value is what is in effect.
+        foreach (var (key, value) in policy.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            var argumentKey = PolicyKeys.FirstOrDefault(p => p.Policy == key).Argument;
+            if (argumentKey is not null && queue.Arguments.ContainsKey(argumentKey))
+            {
+                continue;
+            }
+
+            rows.Add(new ArgumentRow(argumentKey ?? key, FormatValue(value), FromPolicy: policyName));
+        }
+
+        return rows;
+    }
+
+    private static string FormatValue(object? value) => value switch
+    {
+        null => RabbitFormat.Missing,
+        bool b => b ? "true" : "false",
+        long l => RabbitFormat.Count(l),
+        int i => RabbitFormat.Count(i),
+        double d when d == Math.Floor(d) && Math.Abs(d) < long.MaxValue => RabbitFormat.Count((long)d),
+        double d => d.ToString(CultureInfo.InvariantCulture),
+        string s => s,
+        IReadOnlyDictionary<string, object?> map => string.Join(" · ", map.Select(kv => $"{kv.Key}: {FormatValue(kv.Value)}")),
+        System.Collections.IEnumerable list => string.Join(", ", list.Cast<object?>().Select(FormatValue)),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+    };
+
+    private static RenderFragment Tile(string cssClass, string label, string value) => __builder =>
+    {
+        <MudItem xs="6" sm="2">
+            <MudPaper Class="@($"{cssClass} pa-3")" Outlined="true">
+                <MudText Typo="Typo.overline" Class="tile-label mud-text-secondary">@label</MudText>
+                <MudText Typo="Typo.h5" Class="tile-value" Style="font-family:monospace">@value</MudText>
+            </MudPaper>
+        </MudItem>
+    };
+
+    private async Task OpenAddBindingAsync()
+    {
+        var connection = _connection!;
+        var parameters = new DialogParameters<AddBindingDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.Vhost, VhostValue },
+            { x => x.Queue, QueueName },
+            { x => x.Exchanges, _snapshot?.Exchanges.Where(e => !e.IsDefault).ToList() ?? [] },
+        };
+        var dialog = await DialogService.ShowAsync<AddBindingDialog>("Add binding", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = dialog is null ? null : await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            Snackbar.Add($"Bound {QueueName}", Severity.Success);
+            await LoadAsync();
+        }
+    }
+
+    private async Task OpenPublishAsync()
+    {
+        var connection = _connection!;
+        var parameters = new DialogParameters<PublishDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.IsProd, connection.IsProd },
+            { x => x.Vhost, VhostValue },
+            { x => x.Exchange, "" },
+            { x => x.RoutingKey, QueueName },
+            { x => x.Exchanges, _snapshot?.Exchanges },
+        };
+        await DialogService.ShowAsync<PublishDialog>("Publish message", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+    }
+
+    private async Task PurgeAsync()
+    {
+        var connection = _connection!;
+        var ready = _snapshot!.Detail.Summary.Ready;
+        if (!await Confirmation.ConfirmAsync("Purge", QueueName, connection.IsProd, count: (int)Math.Min(ready, int.MaxValue)))
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await PurgeHandler.HandleAsync(new PurgeQueueCommand(connection.Id, connection.Name, VhostValue, QueueName, ready));
+            Snackbar.Add(result.IsSuccess ? $"Purged {QueueName}" : result.Error!, result.IsSuccess ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task UnbindAsync(BindingInfo binding)
+    {
+        var connection = _connection!;
+        if (!await Confirmation.ConfirmAsync("Unbind", $"{binding.Source} → {QueueName}", connection.IsProd))
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await RemoveBindingHandler.HandleAsync(new RemoveBindingCommand(
+                connection.Id, connection.Name, VhostValue, binding.Source, QueueName, binding.RoutingKey, binding.PropertiesKey));
+            Snackbar.Add(result.IsSuccess ? $"Unbound {binding.Source} → {QueueName}" : result.Error!, result.IsSuccess ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await LoadAsync();
+    }
+}

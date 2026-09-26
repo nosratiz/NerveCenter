@@ -1,0 +1,83 @@
+@using System.Globalization
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Exchanges
+
+<MudDialog>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Class="bindings-loading" Color="Color.Primary" Indeterminate="true" />
+        }
+        else if (_error is not null)
+        {
+            <MudAlert Class="bindings-error" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+        else if (_bindings.Count == 0)
+        {
+            <MudText Class="no-exchange-bindings mud-text-secondary" Typo="Typo.body2">
+                No bindings — messages published here are dropped@(string.IsNullOrEmpty(AlternateExchange) ? "" : $" unless the alternate exchange {AlternateExchange} takes them").
+            </MudText>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Elevation="0">
+                <thead>
+                    <tr><th>Destination</th><th>Type</th><th>Routing key</th><th>Arguments</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var binding in _bindings)
+                    {
+                        <tr class="binding-row">
+                            <td class="binding-destination" style="font-family:monospace">@binding.Destination</td>
+                            <td class="binding-type">@binding.DestinationType</td>
+                            <td class="binding-key" style="font-family:monospace">@(binding.RoutingKey.Length == 0 ? "(no key)" : binding.RoutingKey)</td>
+                            <td class="binding-args" style="font-family:monospace">@FormatArguments(binding.Arguments)</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Class="close-bindings" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string Vhost { get; set; } = "/";
+    [Parameter] public string Exchange { get; set; } = "";
+    [Parameter] public string? AlternateExchange { get; set; }
+
+    [Inject] private ListExchangeBindingsQueryHandler BindingsHandler { get; set; } = default!;
+
+    private IReadOnlyList<BindingInfo> _bindings = [];
+    private string? _error;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var result = await BindingsHandler.HandleAsync(ConnectionId, Vhost, Exchange);
+            if (result.IsSuccess)
+            {
+                _bindings = result.Value!;
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    internal static string FormatArguments(IReadOnlyDictionary<string, object?> arguments) =>
+        string.Join(" · ", arguments.Select(a => $"{a.Key}={Convert.ToString(a.Value, CultureInfo.InvariantCulture)}"));
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}
