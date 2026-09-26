@@ -1,0 +1,186 @@
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Shovels
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" Class="new-shovel-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+
+        @* Free text is allowed (CoerceValue): with a remote source URI the queue lives on another broker. *@
+        <MudAutocomplete T="string" Class="source-queue mt-2" Value="_sourceQueue" ValueChanged="@(v => _sourceQueue = v)"
+                         SearchFunc="SearchQueues" CoerceValue="true" CoerceText="false" Immediate="true" Label="Source queue" Required="true" />
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4">Destination</MudText>
+        <MudToggleGroup T="string" Class="destination-kind mt-1" Value="_destinationKind" ValueChanged="OnKindChanged">
+            <MudToggleItem Value="@("queue")" Text="Queue" />
+            <MudToggleItem Value="@("exchange")" Text="Exchange" />
+        </MudToggleGroup>
+        @if (IsExchange)
+        {
+            <MudAutocomplete T="string" Class="destination-exchange mt-2" Value="_destinationExchange" ValueChanged="@(v => _destinationExchange = v)"
+                             SearchFunc="SearchExchanges" CoerceValue="true" CoerceText="false" Immediate="true" Label="Destination exchange" Required="true" />
+            <MudTextField T="string" Class="destination-routing-key mt-2" @bind-Value="_routingKey" Label="Routing key" Immediate="true"
+                          HelperText="Empty keeps each message's original routing key." />
+        }
+        else
+        {
+            <MudAutocomplete T="string" Class="destination-queue mt-2" Value="_destinationQueue" ValueChanged="@(v => _destinationQueue = v)"
+                             SearchFunc="SearchQueues" CoerceValue="true" CoerceText="false" Immediate="true" Label="Destination queue" Required="true" />
+        }
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4">Ack mode</MudText>
+        <MudRadioGroup T="string" Class="ack-mode" @bind-Value="_ackMode">
+            @foreach (var (mode, explanation) in AckModes)
+            {
+                <div>
+                    <MudRadio T="string" Value="@mode" Color="Color.Primary">@mode</MudRadio>
+                    <MudText Typo="Typo.caption" Class="ack-mode-explanation mud-text-secondary ml-10 d-block">@explanation</MudText>
+                </div>
+            }
+        </MudRadioGroup>
+
+        <MudSelect T="string" Class="delete-after mt-2" @bind-Value="_deleteAfter" Label="Delete after">
+            <MudSelectItem Value="@("never")">never — keep shovelling</MudSelectItem>
+            <MudSelectItem Value="@("queue-length")">queue-length — move what's there now, then delete the shovel</MudSelectItem>
+        </MudSelect>
+
+        <MudButton Class="advanced-toggle mt-3" Size="Size.Small" Variant="Variant.Text"
+                   EndIcon="@(_showAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                   OnClick="@(() => _showAdvanced = !_showAdvanced)">Advanced</MudButton>
+        @if (_showAdvanced)
+        {
+            <MudTextField T="string" Class="source-uri" @bind-Value="_sourceUri" Label="Source URI" Placeholder="amqp:// (this broker)" Immediate="true" />
+            <MudTextField T="string" Class="destination-uri mt-2" @bind-Value="_destinationUri" Label="Destination URI" Placeholder="amqp:// (this broker)" Immediate="true" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">amqp:// with no host means this broker.</MudText>
+        }
+
+        @if (ValidationMessage is { } message)
+        {
+            <MudText Typo="Typo.caption" Class="shovel-validation mt-2" Color="Color.Error">@message</MudText>
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="create-shovel-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="create-shovel-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="create-shovel-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private static readonly (string Mode, string Explanation)[] AckModes =
+    [
+        ("on-confirm", "Acks the source only after the destination confirms — no loss, the safe default."),
+        ("on-publish", "Acks the source once the message is published — faster, can lose messages in flight."),
+        ("no-ack", "Never acks — fastest, loses anything in flight if the shovel stops."),
+    ];
+
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    /// <summary>From the picker's server-side connection lookup; drives the typed confirmation.</summary>
+    [Parameter] public bool IsProd { get; set; }
+    [Parameter] public string Vhost { get; set; } = "/";
+    [Parameter] public IReadOnlyList<string> QueueNames { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> ExchangeNames { get; set; } = [];
+
+    [Inject] private CreateShovelCommandHandler CreateHandler { get; set; } = default!;
+    [Inject] private IConfirmationService Confirmation { get; set; } = default!;
+
+    private string _name = "";
+    private string? _sourceQueue;
+    private string _destinationKind = "queue";
+    private string? _destinationQueue;
+    private string? _destinationExchange;
+    private string _routingKey = "";
+    private string _ackMode = "on-confirm";
+    private string _deleteAfter = "never";
+    private bool _showAdvanced;
+    private string _sourceUri = "";
+    private string _destinationUri = "";
+    private string? _error;
+    private bool _busy;
+
+    private bool IsExchange => _destinationKind == "exchange";
+
+    private static string? Trimmed(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private string? Destination => IsExchange ? Trimmed(_destinationExchange) : Trimmed(_destinationQueue);
+
+    // Same queue name on both ends only loops when both ends are the same broker.
+    private bool SameQueue =>
+        !IsExchange
+        && Trimmed(_sourceQueue) is { } source
+        && string.Equals(source, Trimmed(_destinationQueue), StringComparison.Ordinal)
+        && string.Equals(Trimmed(_sourceUri) ?? "amqp://", Trimmed(_destinationUri) ?? "amqp://", StringComparison.Ordinal);
+
+    private string? ValidationMessage => SameQueue ? "Source and destination queue are the same — the shovel would loop." : null;
+
+    private bool CanSubmit =>
+        !string.IsNullOrWhiteSpace(_name) && Trimmed(_sourceQueue) is not null && Destination is not null && !SameQueue;
+
+    private Task<IEnumerable<string>> SearchQueues(string? text, CancellationToken ct) => Search(QueueNames, text);
+
+    private Task<IEnumerable<string>> SearchExchanges(string? text, CancellationToken ct) => Search(ExchangeNames.Where(n => n.Length > 0), text);
+
+    private static Task<IEnumerable<string>> Search(IEnumerable<string> names, string? text) =>
+        Task.FromResult<IEnumerable<string>>(names
+            .Where(n => string.IsNullOrWhiteSpace(text) || n.Contains(text, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList());
+
+    private void OnKindChanged(string kind) => _destinationKind = kind is "exchange" ? "exchange" : "queue";
+
+    private async Task SaveAsync()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        var name = _name.Trim();
+        if (IsProd && !await Confirmation.ConfirmAsync("Create shovel", name, true))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var request = new CreateShovelRequest(
+                name,
+                Trimmed(_sourceQueue)!,
+                IsExchange ? null : Trimmed(_destinationQueue),
+                IsExchange ? Trimmed(_destinationExchange) : null,
+                IsExchange ? Trimmed(_routingKey) : null,
+                _ackMode,
+                Trimmed(_sourceUri),
+                Trimmed(_destinationUri),
+                _deleteAfter);
+            var result = await CreateHandler.HandleAsync(new CreateShovelCommand(ConnectionId, ConnectionName, Vhost, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
