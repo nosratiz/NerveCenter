@@ -243,7 +243,7 @@
 
             if (result.IsSuccess)
             {
-                _bindingsByExchange[exchange.Name] = result.Value!;
+                _bindingsByExchange[exchange.Name] = result.Value!.Outgoing;
             }
             else
             {

@@ -213,4 +213,29 @@ public class DeadLetterTopologyTests
 
         perVhost["a"].RouteOut("work")!.TargetQueues.Should().BeEmpty();
     }
+
+    [Fact]
+    public void A_queue_reached_from_a_dlx_through_an_exchange_hop_is_a_dlq()
+    {
+        QueueSummary[] queues = [Queue("work.q", "work.dlx", null), Queue("dlq.archive")];
+        BindingInfo[] bindings =
+        [
+            Binding("work.dlx", "dlq.fan", "", destinationType: "exchange"),
+            Binding("dlq.fan", "dlq.archive", ""),
+        ];
+        ExchangeSummary[] exchanges = [Exchange("work.dlx", "fanout"), Exchange("dlq.fan", "fanout")];
+
+        var topology = DeadLetterTopology.Compute(queues, bindings, exchanges);
+
+        topology.IsDeadLetterQueue("dlq.archive").Should().BeTrue();
+        topology.RouteOut("work.q")!.TargetQueues.Should().Equal("dlq.archive");
+        topology.SourcesOf("dlq.archive").Should().Equal("work.q");
+    }
+
+    [Fact]
+    public void SourcesOf_lists_every_queue_whose_dead_letters_can_land_in_the_dlq()
+    {
+        Seeded().SourcesOf("payments-dlq").Should().Equal("billing.payments.q", "order-events.q");
+        Seeded().SourcesOf("audit.sink").Should().BeEmpty();
+    }
 }

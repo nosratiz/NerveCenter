@@ -86,15 +86,20 @@ public class QueryHandlerTests : HandlerTestBase
     }
 
     [Fact]
-    public async Task Exchange_bindings_are_filtered_to_the_source_exchange()
+    public async Task Exchange_bindings_split_outgoing_and_incoming_and_keep_the_whole_vhost()
     {
-        Operations.ListBindingsAsync(Secret, Vhost, Arg.Any<CancellationToken>())
-            .Returns([Binding("order-events", "a", "order.*.created"), Binding("audit.fanout", "b")]);
+        var toQueue = Binding("order-events", "a", "order.*.created");
+        var toExchange = new BindingInfo("order-events", "audit.fanout", "exchange", "order.#", new Dictionary<string, object?>(), "order.%23");
+        var intoOrderEvents = new BindingInfo("ingress", "order-events", "exchange", "", new Dictionary<string, object?>(), "~");
+        var unrelated = Binding("audit.fanout", "b");
+        Operations.ListBindingsAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([toQueue, toExchange, intoOrderEvents, unrelated]);
 
         var result = await new ListExchangeBindingsQueryHandler(Operations, Connections, Log<ListExchangeBindingsQueryHandler>())
             .HandleAsync(ConnectionId, Vhost, "order-events");
 
-        result.Value.Should().ContainSingle().Which.Destination.Should().Be("a");
+        result.Value!.Outgoing.Should().Equal(toQueue, toExchange);
+        result.Value.Incoming.Should().Equal(intoOrderEvents);
+        result.Value.Vhost.Should().HaveCount(4);
     }
 
     [Fact]
@@ -105,7 +110,7 @@ public class QueryHandlerTests : HandlerTestBase
         var result = await new ListExchangeBindingsQueryHandler(Operations, Connections, Log<ListExchangeBindingsQueryHandler>())
             .HandleAsync(ConnectionId, Vhost, "");
 
-        result.Value!.Select(b => (b.Source, b.Destination, b.RoutingKey))
+        result.Value!.Outgoing.Select(b => (b.Source, b.Destination, b.RoutingKey))
             .Should().BeEquivalentTo([("", "payments-dlq", "payments-dlq"), ("", "audit.sink", "audit.sink")]);
         await Operations.DidNotReceiveWithAnyArgs().ListBindingsAsync(default!, default);
     }

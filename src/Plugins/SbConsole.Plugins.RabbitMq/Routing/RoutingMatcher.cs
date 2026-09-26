@@ -21,13 +21,31 @@ public sealed record RoutePreview(
     public IReadOnlyList<string> TypedHeaderArguments { get; init; } = [];
 }
 
+/// <summary>A queue a message would reach, and the exchanges it passes through on the way (first = the publish exchange).</summary>
+public sealed record RoutedQueue(string Queue, IReadOnlyList<string> Path, BindingInfo Binding);
+
+/// <summary>
+/// <see cref="Root"/> is the single-hop preview of the publish exchange (drives the blocked/closest
+/// UI); <see cref="Queues"/> is every queue reached through any number of exchange hops.
+/// </summary>
+public sealed record DeepRoutePreview(
+    RoutePreview Root,
+    IReadOnlyList<RoutedQueue> Queues,
+    bool ReachedHopLimit,
+    IReadOnlyList<string> UnpredictableExchanges);
+
 /// <summary>
 /// Predicts which bindings of an exchange a message would match (design spec §5). Pure.
-/// Exchange-to-exchange bindings are matched like any other and not followed.
+/// Resolve matches one exchange's bindings; ResolveDeep follows exchange-to-exchange bindings.
 /// </summary>
 public static class RoutingMatcher
 {
     private const int MaxClosest = 3;
+
+    /// <summary>Exchange hops followed before giving up (the broker has no limit; a preview needs one).</summary>
+    public const int MaxHops = 8;
+
+    public static string ExchangeLabel(ExchangeSummary exchange) => exchange.IsDefault ? "(AMQP default)" : exchange.Name;
 
     public static RoutePreview Resolve(
         ExchangeSummary exchange,
@@ -61,6 +79,82 @@ public static class RoutingMatcher
         {
             TypedHeaderArguments = type == "headers" ? TypedArguments(sourceBindings) : [],
         };
+    }
+
+    /// <summary>
+    /// Follows exchange-to-exchange bindings breadth-first with the same routing key and headers,
+    /// evaluating each exchange at most once (a cycle is not an error -- the broker also delivers
+    /// one copy per queue). A hop that matches nothing falls through to its alternate exchange.
+    /// A plugin-typed hop can't be predicted and is reported, not followed. Queues keep the first
+    /// (shortest) path that reached them.
+    /// </summary>
+    public static DeepRoutePreview ResolveDeep(
+        ExchangeSummary root,
+        IReadOnlyList<ExchangeSummary> exchanges,
+        IReadOnlyList<BindingInfo> vhostBindings,
+        string routingKey,
+        IReadOnlyDictionary<string, string> headers)
+    {
+        var byName = new Dictionary<string, ExchangeSummary>(StringComparer.Ordinal);
+        foreach (var e in exchanges) byName.TryAdd(e.Name, e);
+
+        IReadOnlyList<BindingInfo> BindingsOf(ExchangeSummary e) =>
+            vhostBindings.Where(b => string.Equals(b.Source, e.Name, StringComparison.Ordinal)).ToList();
+
+        var rootPreview = Resolve(root, BindingsOf(root), routingKey, headers);
+        var queues = new List<RoutedQueue>();
+        var seenQueues = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal) { root.Name };
+        var unpredictable = new List<string>();
+        var reachedLimit = false;
+
+        var frontier = new Queue<(ExchangeSummary Exchange, RoutePreview Preview, List<string> Path)>();
+        frontier.Enqueue((root, rootPreview, [ExchangeLabel(root)]));
+
+        while (frontier.Count > 0)
+        {
+            var (exchange, preview, path) = frontier.Dequeue();
+            if (preview.IsUnknownType)
+            {
+                if (!ReferenceEquals(exchange, root)) unpredictable.Add(exchange.Name);
+                continue;
+            }
+
+            void Follow(string next)
+            {
+                if (!byName.TryGetValue(next, out var nextExchange) || !visited.Add(next)) return;
+                if (path.Count > MaxHops)
+                {
+                    reachedLimit = true;
+                    return;
+                }
+
+                frontier.Enqueue((nextExchange, Resolve(nextExchange, BindingsOf(nextExchange), routingKey, headers), [.. path, next]));
+            }
+
+            if (preview.Matched.Count == 0 && !string.IsNullOrEmpty(exchange.AlternateExchange))
+            {
+                Follow(exchange.AlternateExchange);
+                continue;
+            }
+
+            foreach (var binding in preview.Matched)
+            {
+                if (binding.IsToQueue)
+                {
+                    if (seenQueues.Add(binding.Destination))
+                    {
+                        queues.Add(new RoutedQueue(binding.Destination, [.. path, binding.Destination], binding));
+                    }
+                }
+                else
+                {
+                    Follow(binding.Destination);
+                }
+            }
+        }
+
+        return new DeepRoutePreview(rootPreview, queues, reachedLimit, unpredictable);
     }
 
     /// <summary>

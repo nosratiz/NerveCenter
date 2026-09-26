@@ -71,9 +71,12 @@ public sealed class DeadLetterTopology
         bool IsTerminal(string queue) => byName.TryGetValue(queue, out var q) && q.DeadLetterExchange is null;
 
         var dlqs = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var b in bindings)
+        foreach (var dlx in dlxs)
         {
-            if (b.IsToQueue && dlxs.Contains(b.Source) && IsTerminal(b.Destination)) dlqs.Add(b.Destination);
+            foreach (var queue in ReachableQueues(dlx, bindings))
+            {
+                if (IsTerminal(queue)) dlqs.Add(queue);
+            }
         }
 
         foreach (var q in queues)
@@ -133,13 +136,13 @@ public sealed class DeadLetterTopology
 
         if (exchange.Type == "fanout")
         {
-            return new DeadLetterRoute(dlx, dlrk, QueueTargets(bindings), false, setBy);
+            return new DeadLetterRoute(dlx, dlrk, ReachableQueues(dlx, _bindings).ToList(), false, setBy);
         }
 
         if (keyRouted && dlrk is not null)
         {
-            var preview = RoutingMatcher.Resolve(exchange, bindings, dlrk, new Dictionary<string, string>());
-            return new DeadLetterRoute(dlx, dlrk, QueueTargets(preview.Matched), false, setBy);
+            var deep = RoutingMatcher.ResolveDeep(exchange, [.. _exchanges.Values, exchange], exchange.IsDefault ? bindings : _bindings, dlrk, new Dictionary<string, string>());
+            return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
         }
 
         if (exchange.IsDefault)
@@ -147,9 +150,46 @@ public sealed class DeadLetterTopology
             return new DeadLetterRoute(dlx, dlrk, [], true, setBy);
         }
 
-        return new DeadLetterRoute(dlx, dlrk, QueueTargets(bindings), true, setBy);
+        return new DeadLetterRoute(dlx, dlrk, ReachableQueues(dlx, _bindings).ToList(), true, setBy);
     }
 
-    private static List<string> QueueTargets(IEnumerable<BindingInfo> bindings) =>
-        bindings.Where(b => b.IsToQueue).Select(b => b.Destination).Distinct(StringComparer.Ordinal).ToList();
+    /// <summary>
+    /// Every queue a message leaving <paramref name="exchange"/> could reach, ignoring routing keys,
+    /// through any number of exchange-to-exchange hops (cycle-safe, <see cref="RoutingMatcher.MaxHops"/> deep).
+    /// </summary>
+    private static IReadOnlyList<string> ReachableQueues(string exchange, IReadOnlyList<BindingInfo> bindings)
+    {
+        var queues = new List<string>();
+        var seenQueues = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal) { exchange };
+        var frontier = new Queue<(string Exchange, int Depth)>();
+        frontier.Enqueue((exchange, 0));
+        while (frontier.Count > 0)
+        {
+            var (current, depth) = frontier.Dequeue();
+            foreach (var b in bindings.Where(b => string.Equals(b.Source, current, StringComparison.Ordinal)))
+            {
+                if (b.IsToQueue)
+                {
+                    if (seenQueues.Add(b.Destination)) queues.Add(b.Destination);
+                }
+                else if (depth < RoutingMatcher.MaxHops && visited.Add(b.Destination))
+                {
+                    frontier.Enqueue((b.Destination, depth + 1));
+                }
+            }
+        }
+
+        return queues;
+    }
+
+    /// <summary>
+    /// The queues whose dead letters can land in <paramref name="deadLetterQueue"/> (their route out
+    /// lists it), ordinal-sorted. Empty for a queue that isn't a DLQ.
+    /// </summary>
+    public IReadOnlyList<string> SourcesOf(string deadLetterQueue) =>
+        _queues.Keys
+            .Where(q => RouteOut(q) is { } route && route.TargetQueues.Contains(deadLetterQueue, StringComparer.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToList();
 }
