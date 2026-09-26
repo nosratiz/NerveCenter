@@ -145,6 +145,56 @@ public class GetMessagesPageTests : RabbitPageTestBase
         Text(cut, ".get-byline").Should().Be(ConsumeByline);
     }
 
+    private const string QuorumNote = "On a quorum queue every peek counts toward the delivery limit";
+
+    private void UseQueue(QueueSummary queue) =>
+        Operations.GetQueueAsync(DevSecret, Vhost, Queue, Arg.Any<CancellationToken>()).Returns(new QueueDetails(queue, [], []));
+
+    [Fact]
+    public async Task A_quorum_queue_peek_byline_warns_about_the_delivery_limit()
+    {
+        UseQueue(SeededTopology.Queue(Queue) with { Type = "quorum", Ready = 214 });
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().Be(
+            PeekByline + " " + QuorumNote + "; messages past it are dead-lettered or dropped.");
+
+        await SelectAsync(cut, "get-mode", GetMode.Consume);
+        Text(cut, ".get-byline").Should().Be(ConsumeByline);
+    }
+
+    [Theory]
+    [InlineData(5L, null, "(limit 5)")]
+    [InlineData(null, 3L, "(limit 3)")]
+    [InlineData(10L, 4L, "(limit 4)")]
+    public async Task The_quorum_note_names_the_limit_from_arguments_or_policy(long? argument, long? policy, string expected)
+    {
+        var arguments = new Dictionary<string, object?>();
+        var definition = new Dictionary<string, object?>();
+        if (argument is { } a)
+        {
+            arguments["x-delivery-limit"] = a;
+        }
+
+        if (policy is { } p)
+        {
+            definition["delivery-limit"] = p;
+        }
+
+        UseQueue(SeededTopology.Queue(Queue) with { Type = "quorum", Arguments = arguments, EffectivePolicyDefinition = definition });
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().Contain($"{QuorumNote} {expected}; messages past it are dead-lettered or dropped.");
+    }
+
+    [Fact]
+    public async Task A_classic_queue_peek_byline_has_no_quorum_note()
+    {
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().NotContain("quorum");
+    }
+
     [Fact]
     public async Task Consume_is_confirmed_first_and_cancel_gets_nothing()
     {

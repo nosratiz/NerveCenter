@@ -282,6 +282,13 @@
         }
         else if (exchange is not null && Preview is { } preview)
         {
+            if (preview.TypedHeaderArguments.Count > 0)
+            {
+                <MudText Class="typed-header-note mud-text-secondary d-block mb-1" Typo="Typo.caption">
+                    Bindings compare <span style="font-family:monospace">@string.Join(", ", preview.TypedHeaderArguments)</span> as typed values (number/boolean). Headers published here are always strings, so those arguments can't match.
+                </MudText>
+            }
+
             if (preview.IsUnknownType)
             {
                 <MudText Class="preview-unsupported mud-text-secondary" Typo="Typo.body2">Preview not available for @exchange.Type</MudText>

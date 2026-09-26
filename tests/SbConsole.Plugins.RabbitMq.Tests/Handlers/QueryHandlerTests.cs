@@ -138,6 +138,36 @@ public class QueryHandlerTests : HandlerTestBase
     }
 
     [Fact]
+    public async Task Queue_detail_404_on_the_queue_itself_is_a_typed_not_found()
+    {
+        Operations.GetQueueAsync(Secret, Vhost, "gone", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new ManagementApiException(404, "GET", "/api/queues/%2Forders/gone", "Object Not Found"));
+        Operations.ListQueuesAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([]);
+        Operations.ListBindingsAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([]);
+        Operations.ListExchangesAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([]);
+
+        var result = await new GetQueueDetailQueryHandler(Operations, Connections, Log<GetQueueDetailQueryHandler>()).HandleAsync(ConnectionId, Vhost, "gone");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeNull("a null snapshot means the queue does not exist");
+    }
+
+    [Fact]
+    public async Task Queue_detail_404_from_another_read_is_an_ordinary_error()
+    {
+        Operations.GetQueueAsync(Secret, Vhost, "q", Arg.Any<CancellationToken>()).Returns(new QueueDetails(Queue("q"), [], []));
+        Operations.ListQueuesAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([]);
+        Operations.ListBindingsAsync(Secret, Vhost, Arg.Any<CancellationToken>())
+            .ThrowsAsync(new ManagementApiException(404, "GET", "/api/bindings/%2Forders", "Object Not Found"));
+        Operations.ListExchangesAsync(Secret, Vhost, Arg.Any<CancellationToken>()).Returns([]);
+
+        var result = await new GetQueueDetailQueryHandler(Operations, Connections, Log<GetQueueDetailQueryHandler>()).HandleAsync(ConnectionId, Vhost, "q");
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("404");
+    }
+
+    [Fact]
     public async Task Shovel_status_404_means_the_plugin_is_missing_not_an_error()
     {
         Operations.ListShovelsAsync(Secret, Vhost, Arg.Any<CancellationToken>()).ThrowsAsync(new ManagementApiException(404, "GET", "/api/shovels/%2Forders", "Not Found"));

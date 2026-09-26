@@ -457,4 +457,44 @@ public class QueueDetailPageTests : RabbitPageTestBase
         Text(cut, ".stale-data .tile-ready .tile-value").Should().Be("1,204");
         cut.FindAll(".management-error").Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task A_404_from_a_topology_read_is_an_error_not_a_missing_queue()
+    {
+        Seed();
+        Operations.ListBindingsAsync(DevSecret, Vhost, Arg.Any<CancellationToken>())
+            .ThrowsAsync(new ManagementApiException(404, "GET", "/api/bindings/%2Forders", "Object Not Found"));
+
+        var cut = await RenderPageAsync();
+
+        cut.FindAll(".queue-not-found").Should().BeEmpty();
+        cut.Find(".management-error").TextContent.Should().Contain("404");
+    }
+
+    [Fact]
+    public async Task An_older_overlapping_load_neither_overwrites_newer_data_nor_ends_loading_early()
+    {
+        Seed();
+        Confirmation.ConfirmAsync(default!, default!, default).ReturnsForAnyArgs(true);
+        var older = new TaskCompletionSource<QueueDetails>();
+        var newer = new TaskCompletionSource<QueueDetails>();
+        Operations.GetQueueAsync(DevSecret, Vhost, Queue, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new QueueDetails(OrderEvents(), ConsumerList(), [])), older.Task, newer.Task);
+        var cut = await RenderPageAsync();
+
+        _ = cut.Find(".refresh-detail").ClickAsync(new());        // load #2 (older), pending
+        await SettleAsync(cut);
+        _ = cut.Find(".purge-queue").ClickAsync(new());           // purge, then load #3 (newer), pending
+        await SettleAsync(cut);
+
+        older.SetResult(new QueueDetails(OrderEvents() with { Ready = 999 }, ConsumerList(), []));
+        await SettleAsync(cut);
+        cut.Find(".refresh-detail").HasAttribute("disabled").Should().BeTrue("the newer load is still running");
+        Text(cut, ".tile-ready .tile-value").Should().Be("1,204", "the older load's result is dropped");
+
+        newer.SetResult(new QueueDetails(OrderEvents() with { Ready = 0 }, ConsumerList(), []));
+        await SettleAsync(cut);
+        cut.Find(".refresh-detail").HasAttribute("disabled").Should().BeFalse();
+        Text(cut, ".tile-ready .tile-value").Should().Be("0");
+    }
 }

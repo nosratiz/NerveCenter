@@ -197,6 +197,7 @@ else
     private bool _connectionResolved;
     private string? _pageKey;
     private long? _ready;
+    private QueueSummary? _queue;
     private IReadOnlyList<ExchangeSummary> _exchanges = [];
 
     private GetMode _mode = GetMode.Peek;
@@ -226,8 +227,42 @@ else
     private Entry? FocusedEntry => _entries.FirstOrDefault(e => e.Id == _focusedId);
 
     private string Byline => _mode == GetMode.Peek
-        ? "Peek requeues every message. Nothing is removed, but each message comes back marked redelivered."
+        ? "Peek requeues every message. Nothing is removed, but each message comes back marked redelivered." + QuorumPeekNote
         : "Consume acknowledges and removes every message it gets. Selected messages can be requeued or republished from this page until you leave it.";
+
+    // A quorum queue counts a nack-requeue as a delivery attempt, so peeking isn't free there.
+    private string QuorumPeekNote
+    {
+        get
+        {
+            if (_queue is not { Type: "quorum" } queue)
+            {
+                return "";
+            }
+
+            var limit = DeliveryLimit(queue);
+            return " On a quorum queue every peek counts toward the delivery limit"
+                + (limit is { } n ? $" (limit {n.ToString(CultureInfo.InvariantCulture)})" : "")
+                + "; messages past it are dead-lettered or dropped.";
+        }
+    }
+
+    /// <summary>x-delivery-limit argument and/or delivery-limit policy key; with both, the lower applies.</summary>
+    private static long? DeliveryLimit(QueueSummary queue)
+    {
+        var fromArgument = AsLong(queue.Arguments.GetValueOrDefault("x-delivery-limit"));
+        var fromPolicy = AsLong(queue.EffectivePolicyDefinition.GetValueOrDefault("delivery-limit"));
+        return fromArgument is { } a && fromPolicy is { } p ? Math.Min(a, p) : fromArgument ?? fromPolicy;
+    }
+
+    private static long? AsLong(object? value) => value switch
+    {
+        long l => l,
+        int i => i,
+        double d when d == Math.Floor(d) => (long)d,
+        string text when long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+        _ => null,
+    };
 
     private DateTimeOffset Local(DateTimeOffset value) => TimeZoneInfo.ConvertTime(value, Clock.LocalTimeZone);
 
@@ -252,6 +287,7 @@ else
         _connection = null;
         _connectionResolved = false;
         _ready = null;
+        _queue = null;
         _exchanges = [];
         _entries = [];
         _selected.Clear();
@@ -288,10 +324,11 @@ else
             return;
         }
 
-        if (result.IsSuccess)
+        if (result is { IsSuccess: true, Value: { } snapshot })
         {
-            _ready = result.Value!.Detail.Summary.Ready;
-            _exchanges = result.Value.Exchanges;
+            _queue = snapshot.Detail.Summary;
+            _ready = snapshot.Detail.Summary.Ready;
+            _exchanges = snapshot.Exchanges;
         }
         else
         {

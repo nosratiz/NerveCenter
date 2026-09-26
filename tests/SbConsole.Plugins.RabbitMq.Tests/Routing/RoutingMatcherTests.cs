@@ -205,12 +205,38 @@ public class RoutingMatcherTests
     }
 
     [Fact]
-    public void Headers_values_compare_as_invariant_strings()
+    public void Headers_typed_binding_values_never_match_the_string_headers_a_publish_sends()
     {
+        // The broker compares types: a long 3 is not the string "3", and published headers are strings.
         var b = HeadersBinding("q", ("urgent", true), ("count", 3L), ("ratio", 1.5d));
 
-        RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "true"), ("count", "3"), ("ratio", "1.5"))).Matched.Should().Equal(b);
-        RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "True"), ("count", "3"), ("ratio", "1.5"))).Matched.Should().BeEmpty();
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "true"), ("count", "3"), ("ratio", "1.5")));
+
+        preview.Matched.Should().BeEmpty();
+        preview.TypedHeaderArguments.Should().Equal("count", "ratio", "urgent");
+    }
+
+    [Fact]
+    public void Headers_any_still_matches_on_a_string_argument_beside_a_typed_one()
+    {
+        var b = HeadersBinding("q", ("x-match", "any"), ("count", 3L), ("region", "eu"));
+
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("count", "3"), ("region", "eu")));
+
+        preview.Matched.Should().Equal(b);
+        preview.TypedHeaderArguments.Should().Equal("count");
+    }
+
+    [Fact]
+    public void Headers_string_values_compare_ordinally_and_ignored_x_arguments_are_not_reported()
+    {
+        var b = HeadersBinding("q", ("x-match", "all"), ("x-priority", 5L), ("region", "eu"));
+
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("region", "eu")));
+
+        preview.Matched.Should().Equal(b);
+        preview.TypedHeaderArguments.Should().BeEmpty();
+        RoutingMatcher.Resolve(Headers, [b], "", H(("region", "EU"))).Matched.Should().BeEmpty();
     }
 
     [Fact]
