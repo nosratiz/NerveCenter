@@ -1,0 +1,23 @@
+@using System.Globalization
+@* Shown when a refresh fails but the page still has last-good data (spec §7, 1d error frame).
+   Convention: the page wraps the stale content in <div class="stale-data" style="opacity:.55">. *@
+<MudAlert Class="stale-banner my-2" Severity="Severity.Warning" Dense="true">
+    <div class="d-flex align-center flex-wrap gap-2">
+        <span class="stale-banner-text">Refresh failed — @Error.TrimEnd('.'). Showing values from @LastGoodAt.ToString("HH:mm", CultureInfo.InvariantCulture), @RabbitFormat.Ago(LastGoodAt, Now).</span>
+        <MudSpacer />
+        <MudButton Class="retry-now" Size="Size.Small" Variant="Variant.Outlined" OnClick="OnRetry">Retry now</MudButton>
+        <MudButton Class="toggle-auto-refresh" Size="Size.Small" Variant="Variant.Text" OnClick="OnTogglePause">@(AutoRefreshPaused ? "Resume auto-refresh" : "Pause auto-refresh")</MudButton>
+    </div>
+</MudAlert>
+
+@code {
+    public const string StaleStyle = "opacity:.55";
+
+    [Parameter, EditorRequired] public string Error { get; set; } = "";
+    /// <summary>When the data on screen was read, already in the viewer's zone.</summary>
+    [Parameter] public DateTimeOffset LastGoodAt { get; set; }
+    [Parameter] public DateTimeOffset Now { get; set; }
+    [Parameter] public EventCallback OnRetry { get; set; }
+    [Parameter] public bool AutoRefreshPaused { get; set; }
+    [Parameter] public EventCallback OnTogglePause { get; set; }
+}

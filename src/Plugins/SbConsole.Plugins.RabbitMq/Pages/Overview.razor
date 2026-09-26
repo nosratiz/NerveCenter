@@ -1,0 +1,306 @@
+@page "/p/rabbitmq/overview"
+@using Microsoft.Extensions.Logging
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Overview
+@inject GetOverviewQueryHandler OverviewHandler
+@inject TimeProvider Clock
+@inject ILogger<Overview> Logger
+@implements IDisposable
+
+<PageTitle>RabbitMQ overview</PageTitle>
+<h1>Overview</h1>
+
+<ConnectionVhostPicker SelectionChanged="OnSelectionChangedAsync" Loading="_loading" />
+
+@if (_selection is not null)
+{
+    @if (_snapshot is null)
+    {
+        @if (_loadError is not null)
+        {
+            <ManagementErrorAlert Error="@_loadError" OnRetry="RetryAsync" />
+        }
+        else
+        {
+            <MudProgressLinear Class="overview-loading my-4" Color="Color.Primary" Indeterminate="true" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace">
+                GET /api/overview · /api/nodes · /api/queues/@Uri.EscapeDataString(_selection.Vhost)
+            </MudText>
+        }
+    }
+    else
+    {
+        var snapshot = _snapshot;
+        var broker = snapshot.Overview;
+        var now = Now;
+
+        @if (_refreshError is not null)
+        {
+            <StaleDataBanner Error="@_refreshError" LastGoodAt="_loadedAt" Now="now" OnRetry="RetryAsync"
+                             AutoRefreshPaused="_paused" OnTogglePause="TogglePause" />
+        }
+
+        <div class="@(_refreshError is null ? "overview-content" : "overview-content stale-data")" style="@(_refreshError is null ? null : StaleDataBanner.StaleStyle)">
+            <div class="d-flex align-center flex-wrap gap-3 mt-4 mb-2">
+                <MudText Class="overview-header" Typo="Typo.subtitle1">
+                    @snapshot.Nodes.Count @(snapshot.Nodes.Count == 1 ? "node" : "nodes") · cluster <span style="font-family:monospace">@broker.ClusterName</span> · @broker.RabbitVersion
+                </MudText>
+                <MudSpacer />
+                <MudText Class="refreshed-ago mud-text-secondary" Typo="Typo.caption">Refreshed @RabbitFormat.Ago(_loadedAt, now)</MudText>
+                <MudButton Class="auto-refresh-toggle" Size="Size.Small" Variant="Variant.Text"
+                           StartIcon="@(_paused ? Icons.Material.Filled.PlayArrow : Icons.Material.Filled.Pause)"
+                           OnClick="TogglePause">@(_paused ? "Resume auto-refresh" : "Pause auto-refresh")</MudButton>
+            </div>
+
+            @foreach (var node in snapshot.Nodes)
+            {
+                @if (node.MemAlarm)
+                {
+                    <MudAlert Class="node-alarm my-1" Severity="Severity.Warning" Dense="true">Memory alarm on <span style="font-family:monospace">@node.Name</span> — publishers are blocked while the alarm holds.</MudAlert>
+                }
+                @if (node.DiskAlarm)
+                {
+                    <MudAlert Class="node-alarm my-1" Severity="Severity.Warning" Dense="true">Disk alarm on <span style="font-family:monospace">@node.Name</span> — publishers are blocked while the alarm holds.</MudAlert>
+                }
+            }
+
+            <MudGrid Class="my-2" Spacing="3">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="tile-publish pa-4" Outlined="true">
+                        <MudText Typo="Typo.overline" Class="mud-text-secondary">Publish /s</MudText>
+                        <MudText Class="tile-value" Typo="Typo.h5" Style="font-family:monospace">@RabbitFormat.Rate(broker.PublishRate)</MudText>
+                        <MudText Class="tile-caption mud-text-secondary" Typo="Typo.caption">@RabbitFormat.Count(broker.MessagesReady) ready</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    @{ var belowPublish = broker.DeliverRate is { } deliver && broker.PublishRate is { } publish && deliver < publish; }
+                    <MudPaper Class="@(belowPublish ? "tile-deliver below-publish pa-4" : "tile-deliver pa-4")" Outlined="true">
+                        <MudText Typo="Typo.overline" Class="mud-text-secondary">Deliver /s</MudText>
+                        <MudText Class="tile-value" Typo="Typo.h5" Color="@(belowPublish ? Color.Warning : Color.Default)" Style="font-family:monospace">@RabbitFormat.Rate(broker.DeliverRate)</MudText>
+                        <MudText Class="tile-caption mud-text-secondary" Typo="Typo.caption">ack @RabbitFormat.Rate(broker.AckRate)@(belowPublish ? " · below publish" : "")</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="tile-connections pa-4" Outlined="true">
+                        <MudText Typo="Typo.overline" Class="mud-text-secondary">Connections</MudText>
+                        <MudText Class="tile-value" Typo="Typo.h5" Style="font-family:monospace">@RabbitFormat.Count(broker.Connections)</MudText>
+                        <MudText Class="tile-caption mud-text-secondary" Typo="Typo.caption">@RabbitFormat.Count(broker.Channels) channels</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    @{ var unrouted = broker.UnroutableRate is > 0; }
+                    <MudPaper Class="tile-unrouted pa-4" Outlined="true">
+                        <MudText Typo="Typo.overline" Class="mud-text-secondary">Unrouted /s</MudText>
+                        <MudText Class="tile-value" Typo="Typo.h5" Color="@(unrouted ? Color.Warning : Color.Default)" Style="font-family:monospace">@RabbitFormat.Rate(broker.UnroutableRate)</MudText>
+                        <MudText Class="tile-caption mud-text-secondary" Typo="Typo.caption">@(unrouted ? "dropped or returned" : "none")</MudText>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+
+            <MudText Typo="Typo.h6" Class="mt-4">Nodes</MudText>
+            <MudTable Items="snapshot.Nodes" Dense="true" RowClass="node-row" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Node</MudTh>
+                    <MudTh>Memory</MudTh>
+                    <MudTh>Disk free</MudTh>
+                    <MudTh Style="text-align:right">FDs</MudTh>
+                    <MudTh>State</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Class="node-name" Style="font-family:monospace">@context.Name</MudTd>
+                    <MudTd Class="node-memory">
+                        <div class="d-flex align-center gap-2">
+                            <MudProgressLinear Value="@MemoryPercent(context)" Color="@MemoryColor(context)" Rounded="true" Style="min-width:80px" />
+                            <MudText Typo="Typo.body2" Style="font-family:monospace">@RabbitFormat.Bytes(context.MemUsed)</MudText>
+                        </div>
+                    </MudTd>
+                    <MudTd Class="node-disk">
+                        <MudText Typo="Typo.body2" Color="@DiskColor(context)" Style="font-family:monospace">@RabbitFormat.Bytes(context.DiskFree)</MudText>
+                    </MudTd>
+                    <MudTd Class="node-fds" Style="text-align:right;font-family:monospace">@RabbitFormat.Count(context.FdUsed) / @RabbitFormat.Count(context.FdTotal)</MudTd>
+                    <MudTd>
+                        @{ var (label, color) = NodeState(context); }
+                        <MudChip T="string" Class="node-state" Size="Size.Small" Color="color">@label</MudChip>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Memory bars are the share of the node's high watermark.</MudText>
+
+            <MudGrid Class="mt-4" Spacing="3">
+                <MudItem xs="12" md="7">
+                    <MudText Typo="Typo.h6">Deepest queues <span class="mud-text-secondary" style="font-size:.8em">in @RabbitFormat.VhostLabel(_selection.Vhost)</span></MudText>
+                    @{ var deepest = DeepestQueues(snapshot); }
+                    @if (deepest.Count == 0)
+                    {
+                        <MudText Class="no-deep-queues mud-text-secondary" Typo="Typo.body2">No messages waiting in @RabbitFormat.VhostLabel(_selection.Vhost).</MudText>
+                    }
+                    else
+                    {
+                        <MudSimpleTable Dense="true" Elevation="0">
+                            <thead>
+                                <tr><th>Queue</th><th style="text-align:right">Ready</th><th style="text-align:right">Unacked</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var queue in deepest)
+                                {
+                                    <tr class="deepest-queue">
+                                        <td style="font-family:monospace"><MudLink Class="deepest-queue-link" Href="@QueueUrl(queue.Name)">@queue.Name</MudLink></td>
+                                        <td style="text-align:right;font-family:monospace"><span class="queue-ready">@RabbitFormat.Count(queue.Ready)</span></td>
+                                        <td style="text-align:right;font-family:monospace"><span class="queue-unacked">@RabbitFormat.Count(queue.Unacked)</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+                </MudItem>
+                <MudItem xs="12" md="5">
+                    <MudText Typo="Typo.h6">Churn since node start</MudText>
+                    <MudSimpleTable Dense="true" Elevation="0">
+                        <tbody>
+                            <tr><td>Connections opened</td><td style="text-align:right;font-family:monospace"><span class="churn-connections-opened">@RabbitFormat.Count(broker.ConnectionsOpened)</span></td></tr>
+                            <tr><td>Connections closed</td><td style="text-align:right;font-family:monospace"><span class="churn-connections-closed">@RabbitFormat.Count(broker.ConnectionsClosed)</span></td></tr>
+                            <tr><td>Channels opened</td><td style="text-align:right;font-family:monospace"><span class="churn-channels-opened">@RabbitFormat.Count(broker.ChannelsOpened)</span></td></tr>
+                        </tbody>
+                    </MudSimpleTable>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Cumulative counters — the management API keeps no hourly window.</MudText>
+                </MudItem>
+            </MudGrid>
+        </div>
+    }
+}
+
+@code {
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(10);
+
+    private RabbitSelection? _selection;
+    private OverviewSnapshot? _snapshot;
+    private DateTimeOffset _loadedAt;
+    private bool _loading;
+    // First-load failure (nothing to show) vs refresh failure (last good snapshot stays, dimmed).
+    private string? _loadError;
+    private string? _refreshError;
+    private bool _paused;
+    // Bumped per load; a result for a selection that changed while it was in flight is dropped.
+    private int _generation;
+    private AutoRefresh? _autoRefresh;
+
+    internal bool IsAutoRefreshing => _autoRefresh?.IsRunning == true;
+
+    private DateTimeOffset Now => TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+
+    protected override void OnInitialized() => _autoRefresh = new AutoRefresh(Clock);
+
+    private async Task OnSelectionChangedAsync(RabbitSelection selection)
+    {
+        _selection = selection;
+        _snapshot = null;
+        _loadError = null;
+        _refreshError = null;
+        await LoadAsync();
+        RestartAutoRefresh();
+    }
+
+    // Called every interval by the loop and directly by tests. Skips (returns false) while a load
+    // is already in flight or before a selection exists.
+    internal async Task<bool> AutoRefreshTickAsync()
+    {
+        if (_loading || _selection is null)
+        {
+            return false;
+        }
+
+        await LoadAsync();
+        StateHasChanged();
+        return true;
+    }
+
+    private Task RetryAsync() => LoadAsync();
+
+    private void TogglePause()
+    {
+        _paused = !_paused;
+        RestartAutoRefresh();
+    }
+
+    private void RestartAutoRefresh()
+    {
+        if (_paused || _selection is null)
+        {
+            _autoRefresh?.Stop();
+            return;
+        }
+
+        _autoRefresh?.Start(RefreshInterval, AutoRefreshTickAsync, InvokeAsync,
+            ex => Logger.LogWarning(ex, "Auto-refreshing the RabbitMQ overview failed."));
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        _loading = true;
+        try
+        {
+            var result = await OverviewHandler.HandleAsync(selection.Connection.Id, selection.Vhost);
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _snapshot = result.Value!;
+                _loadedAt = Now;
+                _loadError = null;
+                _refreshError = null;
+            }
+            else if (_snapshot is null)
+            {
+                _loadError = result.Error!;
+            }
+            else
+            {
+                _refreshError = result.Error!;
+            }
+        }
+        finally
+        {
+            if (generation == _generation)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    // Ready and Unacked are ranked together but always displayed as two numbers (spec §1).
+    private static IReadOnlyList<QueueSummary> DeepestQueues(OverviewSnapshot snapshot) =>
+        snapshot.Queues
+            .Where(q => q.Ready + q.Unacked > 0)
+            .OrderByDescending(q => q.Ready + q.Unacked)
+            .ThenBy(q => q.Name, StringComparer.Ordinal)
+            .Take(5)
+            .ToList();
+
+    private string QueueUrl(string name) => $"/p/rabbitmq/queues/{Uri.EscapeDataString(name)}?{_selection!.Query}";
+
+    private static double MemoryPercent(NodeSummary node) =>
+        node.MemLimit > 0 ? Math.Min(100, node.MemUsed * 100.0 / node.MemLimit) : 0;
+
+    private static Color MemoryColor(NodeSummary node) =>
+        node.MemAlarm ? Color.Error : MemoryPercent(node) >= 80 ? Color.Warning : Color.Primary;
+
+    private static Color DiskColor(NodeSummary node) =>
+        node.DiskAlarm ? Color.Error : node.DiskFree < 2 * node.DiskFreeLimit ? Color.Warning : Color.Default;
+
+    private static (string Label, Color Color) NodeState(NodeSummary node) =>
+        !node.Running ? ("Down", Color.Error)
+        : node.MemAlarm ? ("Mem alarm", Color.Error)
+        : node.DiskAlarm ? ("Disk alarm", Color.Error)
+        : ("Running", Color.Success);
+
+    public void Dispose() => _autoRefresh?.Dispose();
+}

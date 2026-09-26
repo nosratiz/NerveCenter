@@ -1,0 +1,182 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.RabbitMq.Connections
+@inject IConnectionProvider Connections
+@inject ListVhostsQueryHandler VhostsHandler
+@inject GetConnectionEchoQueryHandler EchoHandler
+@inject NavigationManager Navigation
+
+@* The header every RabbitMQ page shares (spec §7): connection menu with prod chip (AWS
+   Queues.razor's shape), then a vhost menu defaulting to the connection's configured vhost. The
+   choice lives in ?connectionId=&vhost= so links are shareable. *@
+@if (!_loaded)
+{
+    <MudProgressCircular Class="picker-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connections.Count == 0)
+{
+    <MudAlert Class="no-connections" Severity="Severity.Info">No connections yet. Add a RabbitMQ connection to get started.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Connection</MudText>
+            <MudMenu Class="connection-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Class="selected-connection" Typo="Typo.subtitle1" Style="font-family:monospace">@_connection?.Name</MudText>
+                        @if (_connection?.IsProd == true)
+                        {
+                            <MudChip T="string" Class="prod-chip" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+                        }
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var connection in _connections)
+                    {
+                        <MudMenuItem Class="connection-option" OnClick="@(() => SelectConnectionAsync(connection))">@connection.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Vhost</MudText>
+            <MudMenu Class="vhost-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Class="selected-vhost" Typo="Typo.subtitle1" Style="font-family:monospace">@RabbitFormat.VhostLabel(_vhost)</MudText>
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var vhost in _vhosts)
+                    {
+                        <MudMenuItem Class="vhost-option" OnClick="@(() => SelectVhostAsync(vhost))">@RabbitFormat.VhostLabel(vhost)</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        @if (Loading)
+        {
+            <MudProgressCircular Class="page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+    <MudText Typo="Typo.caption" Class="connection-echo mud-text-secondary">@_echo</MudText>
+}
+
+@code {
+    public const string Kind = "rabbitmq";
+
+    /// <summary>Raised once after the initial selection resolves, then on every change. Never raised when there are no connections.</summary>
+    [Parameter] public EventCallback<RabbitSelection> SelectionChanged { get; set; }
+
+    /// <summary>Set by the page while it loads, to show a small progress circle beside the menus.</summary>
+    [Parameter] public bool Loading { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private IReadOnlyList<string> _vhosts = [];
+    private ConnectionInfo? _connection;
+    private string _vhost = "/";
+    private string _echo = "";
+    private bool _loaded;
+    // Bumped per connection switch; a slower echo/vhost load for a connection no longer selected is dropped.
+    private int _generation;
+
+    internal RabbitSelection? Selection => _connection is null ? null : new RabbitSelection(_connection, _vhost);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync(Kind);
+        if (_connections.Count == 0)
+        {
+            _loaded = true;
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        ConnectionInfo? fromQuery = null;
+        if (query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id))
+        {
+            fromQuery = _connections.FirstOrDefault(c => c.Id == id);
+        }
+
+        // A vhost in the URL only counts alongside the connection it was chosen on.
+        var queryVhost = fromQuery is not null && query.TryGetValue("vhost", out var vhostValue) && !string.IsNullOrEmpty(vhostValue.ToString())
+            ? vhostValue.ToString()
+            : null;
+
+        if (await LoadConnectionAsync(fromQuery ?? _connections[0], queryVhost))
+        {
+            _loaded = true;
+            await PublishAsync();
+        }
+    }
+
+    private async Task SelectConnectionAsync(ConnectionInfo connection)
+    {
+        if (await LoadConnectionAsync(connection, preferredVhost: null))
+        {
+            await PublishAsync();
+        }
+    }
+
+    private async Task SelectVhostAsync(string vhost)
+    {
+        _vhost = vhost;
+        await PublishAsync();
+    }
+
+    // Echo first (it carries the configured default vhost), then the vhost list. Returns false when
+    // a newer switch overtook this one.
+    private async Task<bool> LoadConnectionAsync(ConnectionInfo connection, string? preferredVhost)
+    {
+        var generation = ++_generation;
+        var echo = await EchoHandler.HandleAsync(connection.Id);
+        if (generation != _generation)
+        {
+            return false;
+        }
+
+        var defaultVhost = echo.IsSuccess ? echo.Value!.DefaultVhost : "/";
+        var vhost = preferredVhost ?? defaultVhost;
+
+        var vhosts = await VhostsHandler.HandleAsync(connection.Id);
+        if (generation != _generation)
+        {
+            return false;
+        }
+
+        // A failed listing (e.g. a user without the monitoring tag) still lets the page work on the
+        // vhost it already knows about.
+        IReadOnlyList<string> list = vhosts.IsSuccess ? vhosts.Value! : [vhost];
+        if (!list.Contains(vhost))
+        {
+            list = [vhost, .. list];
+        }
+
+        _connection = connection;
+        _vhost = vhost;
+        _vhosts = list;
+        _echo = echo.IsSuccess ? echo.Value!.Echo : "";
+        return true;
+    }
+
+    private async Task PublishAsync()
+    {
+        var selection = Selection!;
+        var uri = Navigation.GetUriWithQueryParameters(new Dictionary<string, object?>
+        {
+            ["connectionId"] = selection.Connection.Id.ToString(),
+            ["vhost"] = selection.Vhost,
+        });
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await SelectionChanged.InvokeAsync(selection);
+    }
+}
