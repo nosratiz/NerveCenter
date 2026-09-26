@@ -53,4 +53,30 @@ public class RabbitMqPluginTests
             .Which.Should().Match<ServiceDescriptor>(d =>
                 d.Lifetime == ServiceLifetime.Singleton && d.ImplementationType == typeof(RabbitOperations));
     }
+
+    [Fact]
+    public void Uses_the_structured_connection_form()
+    {
+        new RabbitMqPlugin().ConnectionFormComponentType.Should().Be(typeof(RabbitConnectionFields));
+    }
+
+    [Fact]
+    public void Summary_shows_host_and_vhost_but_never_credentials()
+    {
+        var summary = new RabbitMqPlugin().GetConnectionSummary(
+            "host=rabbit.internal;vhost=%2Forders;username=svc;password=s3cret");
+
+        summary.Should().BeEquivalentTo(new Dictionary<string, string> { ["Host"] = "rabbit.internal", ["Vhost"] = "/orders" });
+        summary.Values.Should().NotContain(v => v.Contains("s3cret") || v.Contains("svc"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("garbage;;=;no-equals;%zz")]
+    public void Summary_of_a_malformed_secret_defaults_without_throwing(string secret)
+    {
+        var summary = new RabbitMqPlugin().GetConnectionSummary(secret);
+
+        summary.Should().BeEquivalentTo(new Dictionary<string, string> { ["Host"] = "?", ["Vhost"] = "/" });
+    }
 }

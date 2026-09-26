@@ -19,6 +19,22 @@ public sealed class RabbitMqPlugin : IPlugin
     public string ConnectionKind => "rabbitmq";
     public string ConnectionKindDisplayName => "RabbitMQ";
 
+    public Type? ConnectionFormComponentType => typeof(RabbitConnectionFields);
+
+    // Persisted in plaintext (Connection.SummaryJson): host and vhost only, never credentials.
+    // Parse skips malformed segments, so this never throws.
+    public IReadOnlyDictionary<string, string> GetConnectionSummary(string secret)
+    {
+        var parsed = RabbitConfigParser.Parse(secret);
+        var host = parsed.GetValueOrDefault("host", "");
+        var vhost = parsed.GetValueOrDefault("vhost", "");
+        return new Dictionary<string, string>
+        {
+            ["Host"] = host.Length > 0 ? host : "?",
+            ["Vhost"] = vhost.Length > 0 ? vhost : "/",
+        };
+    }
+
     // Placeholder: Task 13 of the RabbitMQ plan sets the real page/action counts once every page
     // and handler exists.
     public PluginContribution Contribution => new(PageCount: 0, ActionCount: 0);
