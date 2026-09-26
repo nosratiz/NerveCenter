@@ -100,6 +100,44 @@ public class CommandHandlerTests : HandlerTestBase
         Audit.ReceivedCalls().Should().BeEmpty();
     }
 
+    [Theory]
+    [MemberData(nameof(SimpleCommands))]
+    public async Task A_failed_success_audit_still_reports_success_and_writes_no_failed_row(string name)
+    {
+        var (run, action, target, risk, _) = Case(name);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await run();
+
+        result.IsSuccess.Should().BeTrue();
+        await Audit.Received(1).RecordAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ActionRisk>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await Audit.DidNotReceive().RecordAsync(action, target, risk, false, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [MemberData(nameof(SimpleCommands))]
+    public async Task A_failed_failure_audit_still_returns_the_friendly_error(string name)
+    {
+        var (run, _, _, _, _) = Case(name);
+        ThrowOnEveryWrite(Forbidden);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await run();
+
+        result.Error.Should().Be(ForbiddenText);
+    }
+
+    [Fact]
+    public async Task Command_audits_are_written_with_CancellationToken_None()
+    {
+        using var cts = new CancellationTokenSource();
+
+        await new PurgeQueueCommandHandler(Operations, Connections, Audit, Log<PurgeQueueCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", 214), cts.Token);
+
+        await Audit.Received(1).RecordAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ActionRisk>(), true, Arg.Any<string?>(), CancellationToken.None);
+    }
+
     private void ThrowOnEveryWrite(Exception ex)
     {
         Operations.CreateExchangeAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
@@ -113,6 +151,10 @@ public class CommandHandlerTests : HandlerTestBase
         Operations.DeleteShovelAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.RestartShovelAsync(default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
     }
+
+    private static RabbitMessage TestMessage() => new(
+        0, "m-1", null, "order-events", "order.uk.created", false, null, null, 2, null, null, null,
+        new Dictionary<string, string>(), [1], [], null, null, null);
 
     private static PublishRequest Message(string key = "order.uk.created") => new("order-events", key, [1]);
 
@@ -217,6 +259,88 @@ public class CommandHandlerTests : HandlerTestBase
 
         result.Error.Should().Be(ForbiddenText);
         await Audit.Received(1).RecordAsync("rabbitmq.message.consume", Arg.Any<string>(), ActionRisk.Destructive, false, ForbiddenText, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Consume_returns_the_messages_even_when_the_audit_write_fails()
+    {
+        RabbitMessage[] got = [TestMessage()];
+        Operations.GetMessagesAsync(Secret, Vhost, "payments-dlq", 5, GetMode.Consume, Arg.Any<CancellationToken>()).Returns(got);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await new ConsumeMessagesCommandHandler(Operations, Connections, Audit, Log<ConsumeMessagesCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", 5));
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeEquivalentTo(got);
+        await Audit.DidNotReceive().RecordAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ActionRisk>(), false, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Consume_audit_ignores_a_cancellation_after_the_ack()
+    {
+        using var cts = new CancellationTokenSource();
+        Operations.GetMessagesAsync(Secret, Vhost, "payments-dlq", 5, GetMode.Consume, Arg.Any<CancellationToken>())
+            .Returns(_ => { cts.Cancel(); return (IReadOnlyList<RabbitMessage>)[TestMessage()]; });
+
+        var result = await new ConsumeMessagesCommandHandler(Operations, Connections, Audit, Log<ConsumeMessagesCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", 5), cts.Token);
+
+        result.IsSuccess.Should().BeTrue();
+        await Audit.Received(1).RecordAsync("rabbitmq.message.consume", Arg.Any<string>(), ActionRisk.Destructive, true, "1 consumed", CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Consume_failure_still_fails_when_the_audit_write_fails()
+    {
+        Operations.GetMessagesAsync(Secret, Vhost, "payments-dlq", 5, GetMode.Consume, Arg.Any<CancellationToken>()).ThrowsAsync(Forbidden);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await new ConsumeMessagesCommandHandler(Operations, Connections, Audit, Log<ConsumeMessagesCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", 5));
+
+        result.Error.Should().Be(ForbiddenText);
+    }
+
+    [Fact]
+    public async Task Publish_is_ok_even_when_the_audit_write_fails()
+    {
+        Operations.PublishAsync(Secret, Vhost, Arg.Any<PublishRequest>(), Arg.Any<CancellationToken>()).Returns(PublishOutcome.Routed);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await new PublishMessageCommandHandler(Operations, Connections, Audit, Log<PublishMessageCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, Message()));
+
+        result.Value.Should().Be(PublishOutcome.Routed);
+        await Audit.Received(1).RecordAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ActionRisk>(), Arg.Any<bool>(), Arg.Any<string?>(), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Republish_is_ok_even_when_the_audit_write_fails()
+    {
+        Operations.PublishAsync(Secret, Vhost, Arg.Any<PublishRequest>(), Arg.Any<CancellationToken>()).Returns(PublishOutcome.Routed);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var result = await new RepublishMessagesCommandHandler(Operations, Connections, Audit, Log<RepublishMessagesCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", "requeue", [Message(), Message()]));
+
+        result.Value.Should().Be(new RepublishResult(2, 0));
+        await Audit.Received(1).RecordAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ActionRisk>(), Arg.Any<bool>(), Arg.Any<string?>(), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Publish_and_republish_failures_survive_a_failed_audit_write()
+    {
+        Operations.PublishAsync(Secret, Vhost, Arg.Any<PublishRequest>(), Arg.Any<CancellationToken>()).ThrowsAsync(Forbidden);
+        Audit.RecordAsync(default!, default!, default, default, default, default).ThrowsAsyncForAnyArgs(new InvalidOperationException("db locked"));
+
+        var publish = await new PublishMessageCommandHandler(Operations, Connections, Audit, Log<PublishMessageCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, Message()));
+        var republish = await new RepublishMessagesCommandHandler(Operations, Connections, Audit, Log<RepublishMessagesCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Vhost, "payments-dlq", "requeue", [Message()]));
+
+        publish.Error.Should().Be(ForbiddenText);
+        republish.Error.Should().Be(ForbiddenText);
     }
 
     [Fact]

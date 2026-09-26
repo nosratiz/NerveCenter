@@ -23,7 +23,7 @@ public sealed class RabbitOperations : IRabbitOperations
     }
 
     public RabbitOperations(ILogger<RabbitOperations> logger)
-        : this(new ManagementApiClient(), new AmqpClient(), TimeProvider.System, logger)
+        : this(new ManagementApiClient(), new AmqpClient(logger), TimeProvider.System, logger)
     {
     }
 

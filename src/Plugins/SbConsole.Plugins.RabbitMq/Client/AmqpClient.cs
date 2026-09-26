@@ -1,4 +1,5 @@
 using System.Net.Security;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 
@@ -9,7 +10,7 @@ namespace SbConsole.Plugins.RabbitMq.Client;
 /// no automatic recovery -- a console call that fails should fail, not silently reconnect. Not
 /// unit-tested (the transport needs a broker); the pure parts live in <see cref="AmqpMessageMapper"/>.
 /// </summary>
-internal sealed class AmqpClient
+internal sealed class AmqpClient(ILogger? logger = null)
 {
     public const int MaxGetCount = 500;
 
@@ -28,48 +29,94 @@ internal sealed class AmqpClient
     /// basic.get (manual ack) up to <paramref name="count"/> messages (clamped 1..500), stopping
     /// early on an empty queue; then one multiple nack-requeue (Peek) or one multiple ack (Consume)
     /// on the last delivery tag. Any exception or cancellation before that skips the ack entirely:
-    /// disposing the connection closes the channel, which requeues everything held.
+    /// disposing the connection closes the channel, which requeues everything held. Once the
+    /// ack/nack has been sent the messages are returned no matter what the close does -- after a
+    /// Consume they exist nowhere else.
     /// </summary>
     public async Task<IReadOnlyList<RabbitMessage>> GetMessagesAsync(
         RabbitConnectionSettings settings, string vhost, string queue, int count, GetMode mode, CancellationToken ct = default)
     {
         count = Math.Clamp(count, 1, MaxGetCount);
 
-        await using var connection = await OpenAsync(settings, vhost, ct);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
-
+        var connection = await OpenAsync(settings, vhost, ct);
+        IChannel? channel = null;
         var messages = new List<RabbitMessage>(count);
-        ulong lastTag = 0;
-        for (var i = 0; i < count; i++)
+        try
         {
-            var result = await channel.BasicGetAsync(queue, autoAck: false, ct);
-            if (result is null)
+            channel = await connection.CreateChannelAsync(cancellationToken: ct);
+
+            ulong lastTag = 0;
+            for (var i = 0; i < count; i++)
             {
-                break;
+                var result = await channel.BasicGetAsync(queue, autoAck: false, ct);
+                if (result is null)
+                {
+                    break;
+                }
+
+                lastTag = result.DeliveryTag;
+                messages.Add(AmqpMessageMapper.Map(
+                    i, result.Exchange, result.RoutingKey, result.Redelivered, result.BasicProperties, result.Body));
             }
 
-            lastTag = result.DeliveryTag;
-            messages.Add(AmqpMessageMapper.Map(
-                i, result.Exchange, result.RoutingKey, result.Redelivered, result.BasicProperties, result.Body));
+            if (messages.Count > 0)
+            {
+                // Last chance to back out: a cancelled Consume must not ack.
+                ct.ThrowIfCancellationRequested();
+                if (mode == GetMode.Consume)
+                {
+                    await channel.BasicAckAsync(lastTag, multiple: true, CancellationToken.None);
+                }
+                else
+                {
+                    await channel.BasicNackAsync(lastTag, multiple: true, requeue: true, CancellationToken.None);
+                }
+            }
+        }
+        catch
+        {
+            // Nothing was acked: dropping the channel requeues whatever was held. Keep the
+            // original exception -- a dispose failure here must not replace it.
+            await DisposeQuietlyAsync(channel, connection, logger);
+            throw;
         }
 
-        if (messages.Count > 0)
-        {
-            // Last chance to back out: a cancelled Consume must not ack.
-            ct.ThrowIfCancellationRequested();
-            if (mode == GetMode.Consume)
-            {
-                await channel.BasicAckAsync(lastTag, multiple: true, CancellationToken.None);
-            }
-            else
-            {
-                await channel.BasicNackAsync(lastTag, multiple: true, requeue: true, CancellationToken.None);
-            }
-        }
-
-        await channel.CloseAsync(CancellationToken.None);
-        await connection.CloseAsync(CancellationToken.None);
+        await ShutdownQuietlyAsync(channel, connection, logger);
         return messages;
+    }
+
+    /// <summary>Post-ack close: closes then disposes channel and connection, logging (never throwing) any failure.</summary>
+    internal static async Task ShutdownQuietlyAsync(IChannel? channel, IConnection connection, ILogger? logger)
+    {
+        if (channel is not null)
+        {
+            await QuietlyAsync(() => channel.CloseAsync(CancellationToken.None), "closing the channel", logger);
+        }
+
+        await QuietlyAsync(() => connection.CloseAsync(CancellationToken.None), "closing the connection", logger);
+        await DisposeQuietlyAsync(channel, connection, logger);
+    }
+
+    private static async Task DisposeQuietlyAsync(IChannel? channel, IConnection connection, ILogger? logger)
+    {
+        if (channel is not null)
+        {
+            await QuietlyAsync(() => channel.DisposeAsync().AsTask(), "disposing the channel", logger);
+        }
+
+        await QuietlyAsync(() => connection.DisposeAsync().AsTask(), "disposing the connection", logger);
+    }
+
+    private static async Task QuietlyAsync(Func<Task> step, string what, ILogger? logger)
+    {
+        try
+        {
+            await step();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "AMQP get: {Step} failed after the messages were settled; ignoring.", what);
+        }
     }
 
     /// <summary>

@@ -25,21 +25,23 @@ public sealed class PublishMessageCommandHandler(IRabbitOperations operations, I
             return PluginResult<PublishOutcome>.Fail(HandlerRunner.ConnectionNotFound);
         }
 
+        PublishOutcome outcome;
         try
         {
-            var outcome = await operations.PublishAsync(secret, cmd.Vhost, cmd.Request, ct);
-            var routed = outcome == PublishOutcome.Routed;
-            await audit.RecordAsync(Action, target, ActionRisk.Mutating, succeeded: routed,
-                detail: routed ? detail : $"{detail} · unroutable — returned by broker", ct: ct);
-            return PluginResult<PublishOutcome>.Ok(outcome);
+            outcome = await operations.PublishAsync(secret, cmd.Vhost, cmd.Request, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Publishing to {Target} failed.", target);
             var friendly = FriendlyRabbitError.From(ex);
-            await audit.RecordAsync(Action, target, ActionRisk.Mutating, succeeded: false, detail: friendly, ct: ct);
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Mutating, succeeded: false, friendly);
             return PluginResult<PublishOutcome>.Fail(friendly);
         }
+
+        var routed = outcome == PublishOutcome.Routed;
+        await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Mutating, succeeded: routed,
+            routed ? detail : $"{detail} · unroutable — returned by broker");
+        return PluginResult<PublishOutcome>.Ok(outcome);
     }
 
     internal static string ExchangeLabel(string exchange) => exchange.Length == 0 ? "(default)" : exchange;

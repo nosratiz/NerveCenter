@@ -16,12 +16,13 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject TimeProvider Clock
+@implements IDisposable
 
 <PageTitle>Get · @QueueName</PageTitle>
 
-@* Consumed messages live only in this component's memory; at least make the browser ask before
-   a reload or close throws them away. *@
-<NavigationLock ConfirmExternalNavigation="@(HeldCount > 0)" />
+@* Consumed messages live only in this component's memory: the browser asks before a reload or
+   close throws them away, and in-app navigation asks through a message box. *@
+<NavigationLock ConfirmExternalNavigation="@(HeldCount > 0)" OnBeforeInternalNavigation="OnBeforeInternalNavigationAsync" />
 
 @* Same compact breadcrumb header as queue detail: connection and vhost come from the query, IsProd
    from a server-side IConnectionProvider lookup (spec §7). *@
@@ -380,6 +381,35 @@ else
     }
 
     private void CancelGet() => _cts?.Cancel();
+
+    private async Task OnBeforeInternalNavigationAsync(LocationChangingContext context)
+    {
+        var held = HeldCount;
+        if (held == 0 && !_loading)
+        {
+            return;
+        }
+
+        var message = held > 0
+            ? $"{held} consumed {(held == 1 ? "message exists" : "messages exist")} only on this page. Leave anyway?"
+            : "A get is still in progress. Leaving cancels it and the held messages are requeued. Leave anyway?";
+        var leave = await DialogService.ShowMessageBoxAsync("Leave this page?", message, yesText: "Leave", cancelText: "Stay");
+        if (leave != true)
+        {
+            context.PreventNavigation();
+        }
+    }
+
+    /// <summary>
+    /// Leaving the page (or the circuit dropping) cancels an in-flight get: the channel then
+    /// closes with everything unacked, so the broker requeues it instead of a Consume acking
+    /// messages into a page that no longer exists.
+    /// </summary>
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts = null;
+    }
 
     // FriendlyRabbitError's 405 text; matched loosely so a broker phrasing it as an exclusive-consumer
     // refusal lands here too.

@@ -45,14 +45,14 @@ public sealed class RepublishMessagesCommandHandler(IRabbitOperations operations
         {
             logger.LogError(ex, "{Label} from {Target} failed after {Count} messages.", cmd.Label, target, routed + unroutable);
             var friendly = FriendlyRabbitError.From(ex);
-            await audit.RecordAsync(PublishMessageCommandHandler.Action, target, ActionRisk.Mutating, succeeded: false,
-                detail: $"{cmd.Label}: {routed} routed, {unroutable} unroutable, then failed — {friendly}", ct: ct);
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, PublishMessageCommandHandler.Action, target, ActionRisk.Mutating, succeeded: false,
+                $"{cmd.Label}: {routed} routed, {unroutable} unroutable, then failed — {friendly}");
             return PluginResult<RepublishResult>.Fail(
                 routed + unroutable == 0 ? friendly : $"{friendly} ({routed + unroutable} of {cmd.Requests.Count} were published first)");
         }
 
-        await audit.RecordAsync(PublishMessageCommandHandler.Action, target, ActionRisk.Mutating, succeeded: unroutable == 0,
-            detail: $"{cmd.Label}: {routed} routed, {unroutable} unroutable", ct: ct);
+        await HandlerRunner.AuditQuietlyAsync(audit, logger, PublishMessageCommandHandler.Action, target, ActionRisk.Mutating, succeeded: unroutable == 0,
+            $"{cmd.Label}: {routed} routed, {unroutable} unroutable");
         return PluginResult<RepublishResult>.Ok(new RepublishResult(routed, unroutable));
     }
 }

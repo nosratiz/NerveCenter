@@ -25,7 +25,11 @@ public static class FriendlyRabbitError
         HttpRequestException { InnerException: AuthenticationException tls } =>
             $"Management API TLS handshake failed — {FriendlyError.Truncate(tls.Message)}",
         HttpRequestException h => $"Management API unreachable — {FriendlyError.Truncate(h.Message)}",
-        TaskCanceledException or TimeoutException => "Timed out talking to the broker",
+        TimeoutException or OperationCanceledException { InnerException: TimeoutException } => "Timed out talking to the broker",
+        // The caller's own token was cancelled (page closed, Cancel clicked): not a timeout.
+        OperationCanceledException { CancellationToken.IsCancellationRequested: true } => "Cancelled before the broker answered",
+        // Any other cancellation came from an internal timeout (HttpClient, RabbitMQ.Client continuation).
+        OperationCanceledException => "Timed out talking to the broker",
         _ when IsAuthenticationFailure(ex) => "AMQP credentials rejected",
         BrokerUnreachableException => "AMQP endpoint unreachable — check host, port and TLS",
         OperationInterruptedException { ShutdownReason: { ReplyCode: 403, ClassId: AmqpConnectionClassId } } =>

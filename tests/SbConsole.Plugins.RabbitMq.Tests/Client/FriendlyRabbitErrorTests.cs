@@ -87,9 +87,22 @@ public class FriendlyRabbitErrorTests
     [Fact]
     public void Timeouts_map_to_a_fixed_message()
     {
-        FriendlyRabbitError.From(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"))
+        FriendlyRabbitError.From(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout",
+                new TimeoutException("The operation was canceled.")))
             .Should().Be("Timed out talking to the broker");
         FriendlyRabbitError.From(new TimeoutException("x")).Should().Be("Timed out talking to the broker");
+        // A cancellation nobody asked for (its token isn't cancelled) is an internal timeout.
+        FriendlyRabbitError.From(new TaskCanceledException("x")).Should().Be("Timed out talking to the broker");
+    }
+
+    [Fact]
+    public void A_cancellation_by_the_caller_does_not_read_as_a_timeout()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        FriendlyRabbitError.From(new TaskCanceledException("x", null, cts.Token)).Should().Be("Cancelled before the broker answered");
+        FriendlyRabbitError.From(new OperationCanceledException(cts.Token)).Should().Be("Cancelled before the broker answered");
     }
 
     [Fact]

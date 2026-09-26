@@ -436,4 +436,89 @@ public class GetMessagesPageTests : RabbitPageTestBase
 
         cut.FindAll(".prod-chip").Should().ContainSingle();
     }
+
+    private IDialogService UseDialogs(bool? leave)
+    {
+        var dialogs = Substitute.For<IDialogService>();
+        dialogs.ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default).ReturnsForAnyArgs(leave);
+        Services.AddSingleton(dialogs);
+        return dialogs;
+    }
+
+    private async Task NavigateAwayAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.InvokeAsync(() => Navigation.NavigateTo("/p/rabbitmq/queues"));
+        await SettleAsync(cut);
+    }
+
+    [Fact]
+    public async Task Leaving_with_consumed_messages_asks_and_stays_unless_confirmed()
+    {
+        var dialogs = UseDialogs(leave: false);
+        var cut = await ConsumeAsync();
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.Received(1).ShowMessageBoxAsync(Arg.Any<string?>(), "4 consumed messages exist only on this page. Leave anyway?",
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<DialogOptions?>());
+        Navigation.Uri.Should().Contain("/get?", "navigation was prevented");
+        Rows(cut).Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task Leaving_with_consumed_messages_proceeds_when_confirmed()
+    {
+        UseDialogs(leave: true);
+        var cut = await ConsumeAsync();
+
+        await NavigateAwayAsync(cut);
+
+        Navigation.Uri.Should().EndWith("/p/rabbitmq/queues");
+    }
+
+    [Fact]
+    public async Task Leaving_after_a_peek_does_not_ask()
+    {
+        var dialogs = UseDialogs(leave: false);
+        var cut = await RenderPageAsync();
+        await GetAsync(cut);
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.DidNotReceiveWithAnyArgs().ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default);
+        Navigation.Uri.Should().EndWith("/p/rabbitmq/queues");
+    }
+
+    [Fact]
+    public async Task Leaving_while_a_get_is_loading_asks_first()
+    {
+        var dialogs = UseDialogs(leave: false);
+        Operations.GetMessagesAsync(DevSecret, Vhost, Queue, Arg.Any<int>(), Arg.Any<GetMode>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<IReadOnlyList<RabbitMessage>>().Task);
+        var cut = await RenderPageAsync();
+        _ = cut.Find("button.get-submit").ClickAsync(new());
+        await SettleAsync(cut);
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.ReceivedWithAnyArgs(1).ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default);
+        Navigation.Uri.Should().Contain("/get?");
+    }
+
+    [Fact]
+    public async Task Disposing_the_page_cancels_an_in_flight_get()
+    {
+        var pending = new TaskCompletionSource<IReadOnlyList<RabbitMessage>>();
+        CancellationToken token = default;
+        Operations.GetMessagesAsync(DevSecret, Vhost, Queue, Arg.Any<int>(), Arg.Any<GetMode>(), Arg.Do<CancellationToken>(t => token = t))
+            .Returns(pending.Task);
+        var cut = await RenderPageAsync();
+        _ = cut.Find("button.get-submit").ClickAsync(new());
+        await SettleAsync(cut);
+        token.IsCancellationRequested.Should().BeFalse();
+
+        await DisposeComponentsAsync();
+
+        token.IsCancellationRequested.Should().BeTrue("a torn-down page must requeue rather than ack into nothing");
+    }
 }
