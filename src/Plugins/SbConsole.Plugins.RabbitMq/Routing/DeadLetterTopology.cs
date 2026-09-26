@@ -108,13 +108,23 @@ public sealed class DeadLetterTopology
                 StringComparer.Ordinal);
 
     /// <summary>
-    /// The queue's dead-letter route, or null when it has none (or isn't in this vhost). With a
-    /// dead-letter routing key the targets are resolved through <see cref="RoutingMatcher"/>
-    /// (a DLX not in the exchange list is treated as direct). Without one: a fanout DLX reaches
-    /// every bound queue regardless; any other DLX lists every queue it's bound to and flags the
-    /// result as depending on the message's routing key; the default exchange lists nothing (the
-    /// target is whichever queue the original key names). Headers/plugin-type DLXs always list
-    /// every bound queue with the flag set, since the key alone doesn't decide.
+    /// The queue's dead-letter route, or null when it has none (or isn't in this vhost). The default
+    /// exchange is unchanged: with a dead-letter routing key it names the target queue directly (via
+    /// <see cref="RoutingMatcher"/> over the synthesized default-exchange bindings), flag false;
+    /// without one the target is whichever queue the original key names, flag true. For a real DLX
+    /// (a DLX not in the exchange list is treated as direct): when the queue has a dead-letter
+    /// routing key AND every exchange reachable from the DLX through exchange-to-exchange bindings
+    /// (BFS, <see cref="RoutingMatcher.MaxHops"/> deep) is direct/topic/fanout -- "key-deterministic"
+    /// -- the targets are resolved through <see cref="RoutingMatcher.ResolveDeep"/> with that key,
+    /// flag false; this now covers a fanout DLX too, since fanout matches any key. Without a routing
+    /// key, a purely-fanout topology still reaches every bound queue regardless of key, flag false.
+    /// Everything else -- no routing key with any key-routed hop, a headers/plugin-typed/unknown hop
+    /// anywhere in the topology, or the hop limit being hit -- lists every reachable queue and flags
+    /// the result as depending on the message's routing key, since it can't be predicted here. A
+    /// reachable exchange missing from the exchange list (other than the DLX itself, which falls
+    /// back to direct) is a dead end -- and so doesn't count against determinism -- only when it has
+    /// no outgoing bindings of its own; one that does is unknown and can route anywhere, so it always
+    /// counts as unpredictable.
     /// </summary>
     public DeadLetterRoute? RouteOut(string sourceQueue)
     {
@@ -128,42 +138,66 @@ public sealed class DeadLetterTopology
             : _exchanges.GetValueOrDefault(dlx)
               ?? new ExchangeSummary(dlx, "direct", true, false, false, null, null, null, new Dictionary<string, object?>());
 
-        var bindings = exchange.IsDefault
-            ? RoutingMatcher.SynthesizeDefaultExchangeBindings(_queues.Keys)
-            : _bindings.Where(b => string.Equals(b.Source, dlx, StringComparison.Ordinal)).ToList();
-
-        var keyRouted = exchange.IsDefault || exchange.Type is "direct" or "topic";
-
-        if (exchange.Type == "fanout")
-        {
-            return new DeadLetterRoute(dlx, dlrk, ReachableQueues(dlx, _bindings).ToList(), false, setBy);
-        }
-
-        if (keyRouted && dlrk is not null)
-        {
-            var deep = RoutingMatcher.ResolveDeep(exchange, [.. _exchanges.Values, exchange], exchange.IsDefault ? bindings : _bindings, dlrk, new Dictionary<string, string>());
-            return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
-        }
-
         if (exchange.IsDefault)
         {
+            if (dlrk is not null)
+            {
+                var bindings = RoutingMatcher.SynthesizeDefaultExchangeBindings(_queues.Keys);
+                var deep = RoutingMatcher.ResolveDeep(exchange, [.. _exchanges.Values, exchange], bindings, dlrk, new Dictionary<string, string>());
+                return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
+            }
+
             return new DeadLetterRoute(dlx, dlrk, [], true, setBy);
         }
 
-        return new DeadLetterRoute(dlx, dlrk, ReachableQueues(dlx, _bindings).ToList(), true, setBy);
+        var (reachableQueues, reachableExchanges, reachedHopLimit) = ReachableTopology(dlx, _bindings);
+
+        string? TypeOf(string name) =>
+            string.Equals(name, dlx, StringComparison.Ordinal) ? exchange.Type : _exchanges.GetValueOrDefault(name)?.Type;
+
+        bool HasOutgoingBindings(string name) => _bindings.Any(b => string.Equals(b.Source, name, StringComparison.Ordinal));
+
+        static bool IsKeyRoutedType(string? type) => type is "direct" or "topic" or "fanout";
+
+        bool IsDeadEnd(string name) => TypeOf(name) is null && !HasOutgoingBindings(name);
+
+        var keyDeterministic = !reachedHopLimit
+            && reachableExchanges.All(name => IsDeadEnd(name) || IsKeyRoutedType(TypeOf(name)));
+
+        if (dlrk is not null && keyDeterministic)
+        {
+            var deep = RoutingMatcher.ResolveDeep(exchange, [.. _exchanges.Values, exchange], _bindings, dlrk, new Dictionary<string, string>());
+            return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
+        }
+
+        var allFanout = !reachedHopLimit && reachableExchanges.All(name => TypeOf(name) == "fanout");
+
+        if (dlrk is null && allFanout)
+        {
+            return new DeadLetterRoute(dlx, dlrk, reachableQueues.ToList(), false, setBy);
+        }
+
+        return new DeadLetterRoute(dlx, dlrk, reachableQueues.ToList(), true, setBy);
     }
 
     /// <summary>
     /// Every queue a message leaving <paramref name="exchange"/> could reach, ignoring routing keys,
-    /// through any number of exchange-to-exchange hops (cycle-safe, <see cref="RoutingMatcher.MaxHops"/> deep).
+    /// and every exchange (including <paramref name="exchange"/> itself) it passes through on the
+    /// way, through any number of exchange-to-exchange hops (cycle-safe, <see cref="RoutingMatcher.MaxHops"/>
+    /// deep). <c>ReachedHopLimit</c> is true when a hop was refused only because the depth limit was
+    /// reached (not merely because it revisits an already-explored exchange).
     /// </summary>
-    private static IReadOnlyList<string> ReachableQueues(string exchange, IReadOnlyList<BindingInfo> bindings)
+    private static (IReadOnlyList<string> Queues, IReadOnlyList<string> Exchanges, bool ReachedHopLimit) ReachableTopology(
+        string exchange, IReadOnlyList<BindingInfo> bindings)
     {
         var queues = new List<string>();
         var seenQueues = new HashSet<string>(StringComparer.Ordinal);
+        var exchanges = new List<string> { exchange };
         var visited = new HashSet<string>(StringComparer.Ordinal) { exchange };
         var frontier = new Queue<(string Exchange, int Depth)>();
         frontier.Enqueue((exchange, 0));
+        var reachedHopLimit = false;
+
         while (frontier.Count > 0)
         {
             var (current, depth) = frontier.Dequeue();
@@ -173,15 +207,30 @@ public sealed class DeadLetterTopology
                 {
                     if (seenQueues.Add(b.Destination)) queues.Add(b.Destination);
                 }
-                else if (depth < RoutingMatcher.MaxHops && visited.Add(b.Destination))
+                else if (depth < RoutingMatcher.MaxHops)
                 {
-                    frontier.Enqueue((b.Destination, depth + 1));
+                    if (visited.Add(b.Destination))
+                    {
+                        exchanges.Add(b.Destination);
+                        frontier.Enqueue((b.Destination, depth + 1));
+                    }
+                }
+                else if (!visited.Contains(b.Destination))
+                {
+                    reachedHopLimit = true;
                 }
             }
         }
 
-        return queues;
+        return (queues, exchanges, reachedHopLimit);
     }
+
+    /// <summary>
+    /// Every queue a message leaving <paramref name="exchange"/> could reach, ignoring routing keys,
+    /// through any number of exchange-to-exchange hops.
+    /// </summary>
+    private static IReadOnlyList<string> ReachableQueues(string exchange, IReadOnlyList<BindingInfo> bindings) =>
+        ReachableTopology(exchange, bindings).Queues;
 
     /// <summary>
     /// The queues whose dead letters can land in <paramref name="deadLetterQueue"/> (their route out

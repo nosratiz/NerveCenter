@@ -371,4 +371,19 @@ public class RoutingMatcherTests
         deep.UnpredictableExchanges.Should().Equal("hash");
         deep.Queues.Should().BeEmpty();
     }
+
+    [Fact]
+    public void ResolveDeep_reaches_a_queue_exactly_at_the_hop_limit()
+    {
+        var exchanges = Enumerable.Range(0, 9).Select(i => Exchange($"x{i}", "fanout")).ToArray();
+        var bindings = Enumerable.Range(0, 8)
+            .Select(i => Binding($"x{i}", $"x{i + 1}", "", destinationType: "exchange"))
+            .Append(Binding("x8", "edge.q", ""))
+            .ToArray();
+
+        var deep = RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "", NoHeaders);
+
+        deep.Queues.Select(q => q.Queue).Should().Contain("edge.q");
+        deep.ReachedHopLimit.Should().BeFalse();
+    }
 }
