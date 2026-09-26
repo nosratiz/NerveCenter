@@ -1,0 +1,338 @@
+@page "/p/rabbitmq/exchanges"
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Exchanges
+@using SbConsole.Plugins.RabbitMq.Routing
+@inject ListExchangesQueryHandler ExchangesHandler
+@inject DeleteExchangeCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject TimeProvider Clock
+
+<PageTitle>RabbitMQ exchanges</PageTitle>
+<h1>Exchanges</h1>
+
+<ConnectionVhostPicker SelectionChanged="OnSelectionChangedAsync" Loading="_loading" />
+
+@if (_selection is not null)
+{
+    @if (_snapshot is null)
+    {
+        @if (_loadError is not null)
+        {
+            <ManagementErrorAlert Error="@_loadError" OnRetry="LoadAsync" />
+        }
+        else
+        {
+            @* Skeleton rows keep the column grid while the read is in flight (spec §7). *@
+            <div class="exchanges-loading">
+                <MudSimpleTable Dense="true" Elevation="0">
+                    <thead><tr><th>Exchange</th><th>Type</th><th>Attributes</th><th>Bindings</th><th>In /s</th><th>Out /s</th></tr></thead>
+                    <tbody>
+                        @for (var i = 0; i < 3; i++)
+                        {
+                            <tr>@for (var c = 0; c < 6; c++) { <td><MudSkeleton /></td> }</tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-family:monospace">Reading /api/exchanges/@Uri.EscapeDataString(_selection.Vhost)</MudText>
+            </div>
+        }
+    }
+    else
+    {
+        var snapshot = _snapshot;
+        var now = Now;
+
+        @if (_refreshError is not null)
+        {
+            <StaleDataBanner Error="@_refreshError" LastGoodAt="_loadedAt" Now="now" OnRetry="LoadAsync" ShowAutoRefreshToggle="false" />
+        }
+
+        <div class="@(_refreshError is null ? "exchanges-content" : "exchanges-content stale-data")" style="@(_refreshError is null ? null : StaleDataBanner.StaleStyle)">
+            @if (snapshot.Exchanges.All(e => e.IsBuiltIn))
+            {
+                <MudPaper Class="exchanges-empty pa-6 my-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1">No exchanges declared in <span style="font-family:monospace">@RabbitFormat.VhostLabel(_selection.Vhost)</span>.</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">Only the built-in AMQP default is present. Publishers routing by queue name work without one.</MudText>
+                    <MudButton Class="create-exchange" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateAsync">+ Create exchange</MudButton>
+                </MudPaper>
+            }
+            else
+            {
+                var rows = VisibleExchanges(snapshot);
+                <div class="d-flex align-center flex-wrap gap-3 my-3">
+                    <MudTextField T="string" Class="exchange-filter" Value="_filter" ValueChanged="OnFilterChanged" Immediate="true"
+                                  Placeholder="Filter exchanges…" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:260px" />
+                    @foreach (var type in TypeFilters)
+                    {
+                        var value = type;
+                        <MudChip T="string" Class="@($"type-filter-{value}")" Size="Size.Small"
+                                 Color="@(_typeFilter == value ? Color.Primary : Color.Default)"
+                                 Variant="@(_typeFilter == value ? Variant.Filled : Variant.Outlined)"
+                                 OnClick="@(() => _typeFilter = value)">@(value == "all" ? "All" : value)</MudChip>
+                    }
+                    <MudSwitch T="bool" Class="show-builtin" @bind-Value="_showBuiltIn" Label="Show built-in" Color="Color.Primary" />
+                    <MudSpacer />
+                    <MudText Class="exchange-count mud-text-secondary" Typo="Typo.body2">@rows.Count @(rows.Count == 1 ? "exchange" : "exchanges")</MudText>
+                    <MudButton Class="refresh-exchanges" Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh"
+                               Disabled="_loading" OnClick="LoadAsync">Refresh</MudButton>
+                    <MudButton Class="create-exchange" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateAsync">+ Create exchange</MudButton>
+                </div>
+
+                <MudTable Items="rows" Dense="true" Elevation="0" RowClassFunc="RowClass" RowStyleFunc="RowStyle">
+                    <HeaderContent>
+                        <MudTh>Exchange</MudTh>
+                        <MudTh>Type</MudTh>
+                        <MudTh>Attributes</MudTh>
+                        <MudTh Style="text-align:right">Bindings</MudTh>
+                        <MudTh Style="text-align:right">In /s</MudTh>
+                        <MudTh Style="text-align:right">Out /s</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd Style="font-family:monospace"><span class="exchange-name">@Label(context.Exchange)</span></MudTd>
+                        <MudTd>
+                            <MudChip T="string" Class="type-chip" Size="Size.Small"
+                                     Color="@(context.Exchange.Type == "topic" ? Color.Primary : Color.Default)"
+                                     Variant="@(context.Exchange.Type == "topic" ? Variant.Filled : Variant.Outlined)">@context.Exchange.Type</MudChip>
+                        </MudTd>
+                        <MudTd>
+                            <div class="d-flex flex-wrap gap-1">
+                                @if (context.Exchange.Durable)
+                                {
+                                    <MudChip T="string" Class="attr-durable" Size="Size.Small" Variant="Variant.Text">durable</MudChip>
+                                }
+                                @if (context.Exchange.AutoDelete)
+                                {
+                                    <MudChip T="string" Class="attr-auto-delete" Size="Size.Small" Variant="Variant.Text">auto-delete</MudChip>
+                                }
+                                @if (context.Exchange.Internal)
+                                {
+                                    <MudChip T="string" Class="attr-internal" Size="Size.Small" Variant="Variant.Text">internal</MudChip>
+                                }
+                                @if (context.Exchange.IsBuiltIn)
+                                {
+                                    <MudChip T="string" Class="attr-built-in" Size="Size.Small" Variant="Variant.Text">built-in</MudChip>
+                                }
+                                @if (context.IsDeadLetterExchange)
+                                {
+                                    <MudChip T="string" Class="attr-dlx" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary">DLX</MudChip>
+                                }
+                                @if (!string.IsNullOrEmpty(context.Exchange.AlternateExchange))
+                                {
+                                    <MudChip T="string" Class="attr-ae" Size="Size.Small" Variant="Variant.Outlined">AE → @context.Exchange.AlternateExchange</MudChip>
+                                }
+                                @if (context.NoBindings)
+                                {
+                                    <span title="Publishing with zero bindings is silent message loss">
+                                        <MudChip T="string" Class="no-bindings" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">no bindings</MudChip>
+                                    </span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="binding-count">@RabbitFormat.Count(context.BindingCount)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="rate-in">@RabbitFormat.Rate(context.Exchange.PublishInRate)</span></MudTd>
+                        <MudTd Style="text-align:right;font-family:monospace"><span class="rate-out">@RabbitFormat.Rate(context.Exchange.PublishOutRate)</span></MudTd>
+                        <MudTd>
+                            <div class="d-flex gap-1">
+                                <MudButton Class="publish-exchange" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => OpenPublishAsync(context.Exchange))">Publish</MudButton>
+                                <MudButton Class="bindings-exchange" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => OpenBindingsAsync(context.Exchange))">Bindings</MudButton>
+                                <MudButton Class="delete-exchange" Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                                           Disabled="@(context.Exchange.IsBuiltIn || _deleting == context.Exchange.Name)"
+                                           OnClick="@(() => DeleteAsync(context.Exchange))">Delete</MudButton>
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </div>
+    }
+}
+
+@code {
+    private static readonly string[] TypeFilters = ["all", "topic", "direct", "fanout", "headers"];
+
+    private RabbitSelection? _selection;
+    private ExchangesSnapshot? _snapshot;
+    private IReadOnlySet<string> _deadLetterExchanges = new HashSet<string>();
+    private DateTimeOffset _loadedAt;
+    private bool _loading;
+    // First-load failure (nothing to show) vs refresh failure (last good data stays, dimmed).
+    private string? _loadError;
+    private string? _refreshError;
+    // Bumped per load; a result for a selection that changed while it was in flight is dropped.
+    private int _generation;
+    private string _filter = "";
+    private string _typeFilter = "all";
+    private bool _showBuiltIn;
+    private string? _deleting;
+
+    private sealed record ExchangeRow(ExchangeSummary Exchange, int BindingCount, bool IsDeadLetterExchange)
+    {
+        // The user's own exchange, bound nowhere and with nothing to catch the miss.
+        public bool NoBindings => !Exchange.IsBuiltIn && BindingCount == 0 && string.IsNullOrEmpty(Exchange.AlternateExchange);
+
+        public bool SilentLoss => NoBindings && Exchange.PublishInRate is > 0;
+    }
+
+    private DateTimeOffset Now => TimeZoneInfo.ConvertTime(Clock.GetUtcNow(), Clock.LocalTimeZone);
+
+    private static string Label(ExchangeSummary exchange) => exchange.IsDefault ? "(AMQP default)" : exchange.Name;
+
+    private async Task OnSelectionChangedAsync(RabbitSelection selection)
+    {
+        _selection = selection;
+        _snapshot = null;
+        _loadError = null;
+        _refreshError = null;
+        await LoadAsync();
+    }
+
+    private void OnFilterChanged(string? value) => _filter = value ?? "";
+
+    private async Task LoadAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        _loading = true;
+        try
+        {
+            var result = await ExchangesHandler.HandleAsync(selection.Connection.Id, selection.Vhost);
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _snapshot = result.Value!;
+                _deadLetterExchanges = DeadLetterTopology.Compute(_snapshot.Queues, _snapshot.Bindings, _snapshot.Exchanges).DeadLetterExchanges;
+                _loadedAt = Now;
+                _loadError = null;
+                _refreshError = null;
+            }
+            else if (_snapshot is null)
+            {
+                _loadError = result.Error!;
+            }
+            else
+            {
+                _refreshError = result.Error!;
+            }
+        }
+        finally
+        {
+            if (generation == _generation)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    private List<ExchangeRow> VisibleExchanges(ExchangesSnapshot snapshot)
+    {
+        var counts = snapshot.Bindings
+            .GroupBy(b => b.Source, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        return snapshot.Exchanges
+            .Where(e => _showBuiltIn || !e.IsBuiltIn || e.IsDefault)
+            .Where(e => _typeFilter == "all" || string.Equals(e.Type, _typeFilter, StringComparison.Ordinal))
+            .Where(e => _filter.Length == 0 || Label(e).Contains(_filter, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.IsDefault ? 0 : 1)
+            .ThenBy(e => e.Name, StringComparer.Ordinal)
+            .Select(e => new ExchangeRow(
+                e,
+                e.IsDefault ? snapshot.Queues.Count : counts.GetValueOrDefault(e.Name),
+                _deadLetterExchanges.Contains(e.Name)))
+            .ToList();
+    }
+
+    private static string RowClass(ExchangeRow row, int index) => row.SilentLoss ? "exchange-row silent-loss" : "exchange-row";
+
+    // Tinted from the theme's warning token so light and dark both stay correct.
+    private static string RowStyle(ExchangeRow row, int index) =>
+        row.SilentLoss ? "background-color:var(--mud-palette-warning-lighten)" : "";
+
+    private async Task OpenCreateAsync()
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<CreateExchangeDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.Vhost, selection.Vhost },
+        };
+        var dialog = await DialogService.ShowAsync<CreateExchangeDialog>("Create exchange", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task OpenPublishAsync(ExchangeSummary exchange)
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<PublishDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.IsProd, selection.Connection.IsProd },
+            { x => x.Vhost, selection.Vhost },
+            { x => x.Exchange, exchange.Name },
+            { x => x.Exchanges, _snapshot?.Exchanges },
+        };
+        await DialogService.ShowAsync<PublishDialog>("Publish message", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+    }
+
+    private async Task OpenBindingsAsync(ExchangeSummary exchange)
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<ExchangeBindingsDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.Vhost, selection.Vhost },
+            { x => x.Exchange, exchange.Name },
+            { x => x.AlternateExchange, exchange.AlternateExchange },
+        };
+        await DialogService.ShowAsync<ExchangeBindingsDialog>($"Bindings — {Label(exchange)}", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+    }
+
+    private async Task DeleteAsync(ExchangeSummary exchange)
+    {
+        var selection = _selection!;
+        if (exchange.IsBuiltIn)
+        {
+            return;
+        }
+
+        // IsProd comes from the server-side connection lookup the picker made, never from the client.
+        if (!await Confirmation.ConfirmAsync("Delete", exchange.Name, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        _deleting = exchange.Name;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteExchangeCommand(selection.Connection.Id, selection.Connection.Name, selection.Vhost, exchange.Name));
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _deleting = null;
+        }
+
+        await LoadAsync();
+    }
+}
