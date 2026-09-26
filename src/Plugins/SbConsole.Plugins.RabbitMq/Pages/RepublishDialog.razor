@@ -1,0 +1,169 @@
+@using System.Globalization
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Messages
+
+@* Republish… from the Get messages page (spec §7 1f). Defaults to where the first message
+   originally died (x-first-death-exchange + that death's routing key), so the common case -- send
+   dead letters back where they came from -- is one click. *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            <span style="font-family:monospace">@ConnectionName</span> · @RabbitFormat.VhostLabel(Vhost) · @Plural(Messages.Count, "message") from <span style="font-family:monospace">@SourceQueue</span>
+            @if (IsProd)
+            {
+                <MudChip T="string" Class="prod-chip ml-1" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+            }
+        </MudText>
+
+        @if (IsCopy)
+        {
+            <MudAlert Class="copy-warning my-2" Severity="Severity.Info" Dense="true">The original stays in the queue — this publishes a copy.</MudAlert>
+        }
+
+        <MudSelect T="string" Class="republish-exchange mt-2" @bind-Value="_exchangeKey" Label="Exchange" ToStringFunc="KeyLabel">
+            @foreach (var exchange in _exchanges)
+            {
+                <MudSelectItem Value="@Key(exchange)">@Label(exchange)</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudCheckBox T="bool" Class="keep-original-keys mt-2" @bind-Value="_keepOriginalKeys" Label="Keep each message's original routing key" />
+
+        <MudTextField T="string" Class="republish-routing-key" @bind-Value="_routingKey" Label="Routing key" Immediate="true"
+                      Disabled="_keepOriginalKeys" Style="font-family:monospace" />
+        @if (_keepOriginalKeys)
+        {
+            <MudText Typo="Typo.caption" Class="original-keys mud-text-secondary d-block mt-1" Style="font-family:monospace">@string.Join(", ", OriginalKeys.Distinct(StringComparer.Ordinal))</MudText>
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="republish-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton Class="republish-cancel" OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="republish-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="republish-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_busy || Messages.Count == 0)" OnClick="SubmitAsync">
+            Republish @Plural(Messages.Count, "message")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    /// <summary>The caller's server-side connection lookup; a prod republish is confirmed first.</summary>
+    [Parameter] public bool IsProd { get; set; }
+    [Parameter] public string Vhost { get; set; } = "/";
+    [Parameter] public string SourceQueue { get; set; } = "";
+    [Parameter] public IReadOnlyList<RabbitMessage> Messages { get; set; } = [];
+    /// <summary>Peek mode: the originals are still in the queue, so this publishes copies.</summary>
+    [Parameter] public bool IsCopy { get; set; }
+    [Parameter] public IReadOnlyList<ExchangeSummary> Exchanges { get; set; } = [];
+    /// <summary>Overrides the first message's first-death exchange as the preselected exchange.</summary>
+    [Parameter] public string? DefaultExchange { get; set; }
+    /// <summary>Overrides the first message's first-death routing key.</summary>
+    [Parameter] public string? DefaultRoutingKey { get; set; }
+
+    [Inject] private RepublishMessagesCommandHandler RepublishHandler { get; set; } = default!;
+    [Inject] private IConfirmationService Confirmation { get; set; } = default!;
+
+    // Select values can't safely be "" (the default exchange's name) -- same trick as PublishDialog.
+    private const string DefaultKey = "\u0001(AMQP default)";
+
+    private List<ExchangeSummary> _exchanges = [];
+    private string _exchangeKey = DefaultKey;
+    private string _routingKey = "";
+    private bool _keepOriginalKeys;
+    private string? _error;
+    private bool _busy;
+
+    private static string Key(string exchange) => exchange.Length == 0 ? DefaultKey : exchange;
+
+    private static string Key(ExchangeSummary exchange) => Key(exchange.Name);
+
+    private static string Label(ExchangeSummary exchange) => exchange.IsDefault ? "(AMQP default)" : exchange.Name;
+
+    private static string KeyLabel(string? key) => key is null or DefaultKey ? "(AMQP default)" : key;
+
+    private static string ExchangeName(string key) => key == DefaultKey ? "" : key;
+
+    private static string Plural(int n, string noun) => $"{n.ToString(CultureInfo.InvariantCulture)} {noun}{(n == 1 ? "" : "s")}";
+
+    private IEnumerable<string> OriginalKeys => Messages.Select(MessageFormat.OriginalRoutingKey);
+
+    protected override void OnInitialized()
+    {
+        var first = Messages.FirstOrDefault();
+        var exchange = DefaultExchange ?? (first is null ? "" : MessageFormat.OriginalExchange(first));
+        _routingKey = DefaultRoutingKey ?? (first is null ? "" : MessageFormat.OriginalRoutingKey(first));
+        _keepOriginalKeys = OriginalKeys.Distinct(StringComparer.Ordinal).Count() > 1;
+
+        // Internal exchanges can't be published to by clients.
+        _exchanges = Exchanges
+            .Where(e => !e.Internal || e.Name == exchange)
+            .OrderBy(e => e.IsDefault ? 0 : 1)
+            .ThenBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+        if (!_exchanges.Any(e => e.IsDefault))
+        {
+            _exchanges.Insert(0, Synthesized(""));
+        }
+
+        if (!_exchanges.Any(e => e.Name == exchange))
+        {
+            // The first-death exchange may be one this listing doesn't know (deleted, or unreadable);
+            // offer it anyway -- the broker returns the messages if it can't route them.
+            _exchanges.Add(Synthesized(exchange));
+        }
+
+        _exchangeKey = Key(exchange);
+    }
+
+    private static ExchangeSummary Synthesized(string name) =>
+        new(name, "", true, false, false, null, null, null, new Dictionary<string, object?>());
+
+    private async Task SubmitAsync()
+    {
+        if (_busy || Messages.Count == 0)
+        {
+            return;
+        }
+
+        var exchange = ExchangeName(_exchangeKey);
+        if (IsProd && !await Confirmation.ConfirmAsync("Republish", KeyLabel(_exchangeKey), true, Messages.Count))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var requests = Messages
+                .Select(m => MessageFormat.ToPublishRequest(m, exchange, _keepOriginalKeys ? MessageFormat.OriginalRoutingKey(m) : _routingKey ?? ""))
+                .ToList();
+            var result = await RepublishHandler.HandleAsync(new RepublishMessagesCommand(ConnectionId, ConnectionName, Vhost, SourceQueue, "republish", requests));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(result.Value!));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

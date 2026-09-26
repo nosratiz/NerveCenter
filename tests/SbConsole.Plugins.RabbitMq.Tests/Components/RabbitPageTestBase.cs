@@ -57,6 +57,9 @@ public abstract class RabbitPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton<CreateExchangeCommandHandler>();
         Services.AddSingleton<DeleteExchangeCommandHandler>();
         Services.AddSingleton<PublishMessageCommandHandler>();
+        Services.AddSingleton<PeekMessagesQueryHandler>();
+        Services.AddSingleton<ConsumeMessagesCommandHandler>();
+        Services.AddSingleton<RepublishMessagesCommandHandler>();
         Services.AddSingleton<ListQueuesQueryHandler>();
         Services.AddSingleton<CreateQueueCommandHandler>();
         Services.AddSingleton<DeleteQueueCommandHandler>();

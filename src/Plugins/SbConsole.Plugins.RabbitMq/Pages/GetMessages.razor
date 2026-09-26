@@ -1,0 +1,626 @@
+@page "/p/rabbitmq/queues/{Name}/get"
+@using System.Globalization
+@using System.Text
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.JSInterop
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Messages
+@using SbConsole.Plugins.RabbitMq.Queues
+@inject PeekMessagesQueryHandler PeekHandler
+@inject ConsumeMessagesCommandHandler ConsumeHandler
+@inject RepublishMessagesCommandHandler RepublishHandler
+@inject GetQueueDetailQueryHandler DetailHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject TimeProvider Clock
+
+<PageTitle>Get · @QueueName</PageTitle>
+
+@* Consumed messages live only in this component's memory; at least make the browser ask before
+   a reload or close throws them away. *@
+<NavigationLock ConfirmExternalNavigation="@(HeldCount > 0)" />
+
+@* Same compact breadcrumb header as queue detail: connection and vhost come from the query, IsProd
+   from a server-side IConnectionProvider lookup (spec §7). *@
+<div class="d-flex align-center flex-wrap gap-2 mb-2">
+    <MudLink Class="breadcrumb-queues" Href="@QueuesUrl">Queues</MudLink>
+    <MudText>/</MudText>
+    <MudLink Class="breadcrumb-name" Href="@QueueUrl" Typo="Typo.h6" Style="font-family:monospace">@QueueName</MudLink>
+    @if (_connection is not null)
+    {
+        <MudText Typo="Typo.caption" Class="get-connection mud-text-secondary ml-2">
+            <span style="font-family:monospace">@_connection.Name</span> · @RabbitFormat.VhostLabel(VhostValue)
+        </MudText>
+        @if (_connection.IsProd)
+        {
+            <MudChip T="string" Class="prod-chip" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+        }
+    }
+</div>
+
+@if (!_connectionResolved)
+{
+    <MudProgressCircular Class="get-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connection is null)
+{
+    <MudAlert Class="connection-not-found my-2" Severity="Severity.Warning">
+        Connection not found. <MudLink Href="/p/rabbitmq/queues">Back to queues</MudLink>
+    </MudAlert>
+}
+else
+{
+    @if (HeldCount > 0)
+    {
+        <MudAlert Class="held-warning my-2" Severity="Severity.Warning">@HeldCount consumed @(HeldCount == 1 ? "message exists" : "messages exist") only on this page — requeue or republish them before leaving.</MudAlert>
+    }
+
+    <div class="d-flex align-end flex-wrap gap-3">
+        <MudSelect T="GetMode" Class="get-mode" Value="_mode" ValueChanged="OnModeChanged" Label="Mode" Style="min-width:140px" Disabled="_loading">
+            <MudSelectItem Value="GetMode.Peek">Peek</MudSelectItem>
+            <MudSelectItem Value="GetMode.Consume">Consume</MudSelectItem>
+        </MudSelect>
+        <MudSelect T="int" Class="get-count" @bind-Value="_count" Label="Count" Style="min-width:100px" Disabled="_loading">
+            @foreach (var option in CountOptions)
+            {
+                <MudSelectItem Value="option">@option</MudSelectItem>
+            }
+        </MudSelect>
+        <MudButton Class="get-submit" Variant="Variant.Filled" Color="@(_mode == GetMode.Consume ? Color.Error : Color.Primary)"
+                   Disabled="@(_loading || _busy)" OnClick="GetAsync">Get messages</MudButton>
+    </div>
+    <MudText Typo="Typo.body2" Class="get-byline mud-text-secondary mt-2">@Byline</MudText>
+
+    <div class="mt-3">
+        @if (_loading)
+        {
+            <MudPaper Class="get-loading pa-4" Outlined="true">
+                <div class="d-flex align-center gap-3">
+                    <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                    <div>
+                        <MudText Typo="Typo.subtitle2">Getting @_loadingCount messages…</MudText>
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">Messages are held unacked until the page returns them. Cancelling requeues immediately.</MudText>
+                    </div>
+                    <MudSpacer />
+                    <MudButton Class="cancel-get" Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelGet">Cancel</MudButton>
+                </div>
+            </MudPaper>
+        }
+        else if (_locked)
+        {
+            <MudAlert Class="get-locked my-2" Severity="Severity.Error">
+                <div class="d-flex align-center flex-wrap gap-2">
+                    <span class="locked-text">Cannot get from <span style="font-family:monospace">@QueueName</span> — the queue has an exclusive consumer. Peeking would compete with the live consumer.</span>
+                    <MudSpacer />
+                    <MudButton Class="retry-get" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="GetAsync">Retry</MudButton>
+                    <MudButton Class="view-consumers" Size="Size.Small" Variant="Variant.Text" Href="@QueueUrl">View consumers</MudButton>
+                </div>
+            </MudAlert>
+        }
+        else if (_error is not null)
+        {
+            <ManagementErrorAlert Error="@_error" OnRetry="GetAsync" />
+        }
+        else if (_lastGetCount == 0)
+        {
+            <MudPaper Class="get-empty pa-4" Outlined="true">
+                <MudText Typo="Typo.subtitle1" Class="empty-title">Queue is empty</MudText>
+                <div class="d-flex gap-2 mt-2">
+                    <MudButton Class="get-again" Size="Size.Small" Variant="Variant.Outlined" OnClick="GetAsync">Get again</MudButton>
+                    <MudButton Class="back-to-queues" Size="Size.Small" Variant="Variant.Text" Href="@QueuesUrl">Back to queues</MudButton>
+                </div>
+            </MudPaper>
+        }
+    </div>
+
+    @if (_lastGetCount > 0 && !_loading)
+    {
+        <MudText Typo="Typo.subtitle2" Class="result-header mt-2">
+            @(_lastGetReady is { } ready ? $"{RabbitFormat.Count(_lastGetCount.Value)} of {RabbitFormat.Count(ready)} shown" : $"{RabbitFormat.Count(_lastGetCount.Value)} shown")<span class="mud-text-secondary"> · oldest first</span>
+        </MudText>
+    }
+
+    @if (_entries.Count > 0)
+    {
+        @if (_selected.Count > 0)
+        {
+            <MudPaper Class="selection-bar d-flex align-center gap-2 pa-2 mt-2" Outlined="true">
+                <MudText Typo="Typo.body2" Class="selection-count">@_selected.Count selected</MudText>
+                <MudSpacer />
+                <MudButton Class="requeue-selected" Size="Size.Small" Variant="Variant.Outlined" Disabled="@(_busy || !SelectedEntries.All(e => e.Consumed))"
+                           OnClick="@(() => RequeueAsync(SelectedEntries))">Requeue</MudButton>
+                <MudButton Class="republish-selected" Size="Size.Small" Variant="Variant.Outlined" Disabled="_busy"
+                           OnClick="OpenRepublishAsync">Republish…</MudButton>
+            </MudPaper>
+        }
+
+        <MudGrid Spacing="2" Class="mt-2">
+            <MudItem xs="12" md="6">
+                <MudPaper Class="message-list" Outlined="true">
+                    @foreach (var entry in _entries)
+                    {
+                        var message = entry.Message;
+                        var death = MessageFormat.DeathSummary(message);
+                        var focused = entry.Id == _focusedId;
+                        <div class="@(focused ? "message-row focused d-flex align-center gap-2 px-2 py-1" : "message-row d-flex align-center gap-2 px-2 py-1")"
+                             style="@(focused ? "cursor:pointer;background:var(--mud-palette-action-default-hover)" : "cursor:pointer")"
+                             @onclick="@(() => _focusedId = entry.Id)">
+                            <span @onclick:stopPropagation="true">
+                                <MudCheckBox T="bool" Class="message-select" Dense="true" Size="Size.Small"
+                                             Value="@_selected.Contains(entry.Id)" ValueChanged="@(v => ToggleSelected(entry.Id, v))" />
+                            </span>
+                            <span class="message-id" style="font-family:monospace">@IdLabel(message)</span>
+                            <span class="message-time mud-text-secondary" style="font-family:monospace">@Time(message.Timestamp)</span>
+                            @if (death is not null)
+                            {
+                                <MudChip T="string" Class="death-chip" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">@death</MudChip>
+                            }
+                            @if (entry.Consumed)
+                            {
+                                <MudChip T="string" Class="consumed-chip" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error">consumed</MudChip>
+                            }
+                            <MudSpacer />
+                            <span class="message-key mud-text-secondary" style="font-family:monospace">@message.RoutingKey</span>
+                        </div>
+                    }
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                @if (FocusedEntry is { } focusedEntry)
+                {
+                    @RenderDetail(focusedEntry)
+                }
+            </MudItem>
+        </MudGrid>
+    }
+}
+
+@code {
+    private static readonly int[] CountOptions = [1, 5, 10, 25, 50, 100];
+
+    // Headers already shown as their own property row.
+    private static readonly HashSet<string> PropertyHeaders = new(StringComparer.Ordinal) { "x-first-death-queue", "x-delivery-count" };
+
+    /// <summary>The route-escaped queue name (one segment, like queue detail).</summary>
+    [Parameter] public string Name { get; set; } = "";
+    [SupplyParameterFromQuery(Name = "connectionId")] public Guid? ConnectionId { get; set; }
+    [SupplyParameterFromQuery(Name = "vhost")] public string? Vhost { get; set; }
+
+    /// <summary>A got message on the page. Consumed ones exist nowhere else until requeued or republished.</summary>
+    private sealed record Entry(int Id, RabbitMessage Message, bool Consumed);
+
+    private ConnectionInfo? _connection;
+    private bool _connectionResolved;
+    private string? _pageKey;
+    private long? _ready;
+    private IReadOnlyList<ExchangeSummary> _exchanges = [];
+
+    private GetMode _mode = GetMode.Peek;
+    private int _count = 25;
+    private bool _loading;
+    private int _loadingCount;
+    private CancellationTokenSource? _cts;
+    private bool _busy;
+    private string? _error;
+    private bool _locked;
+    private int? _lastGetCount;
+    private long? _lastGetReady;
+
+    private List<Entry> _entries = [];
+    private int _nextId;
+    private readonly HashSet<int> _selected = [];
+    private int? _focusedId;
+
+    private string QueueName => Uri.UnescapeDataString(Name);
+    private string VhostValue => string.IsNullOrEmpty(Vhost) ? "/" : Vhost;
+    private string Query => $"connectionId={ConnectionId}&vhost={Uri.EscapeDataString(VhostValue)}";
+    private string QueuesUrl => $"/p/rabbitmq/queues?{Query}";
+    private string QueueUrl => $"/p/rabbitmq/queues/{Uri.EscapeDataString(QueueName)}?{Query}";
+
+    private int HeldCount => _entries.Count(e => e.Consumed);
+    private List<Entry> SelectedEntries => _entries.Where(e => _selected.Contains(e.Id)).ToList();
+    private Entry? FocusedEntry => _entries.FirstOrDefault(e => e.Id == _focusedId);
+
+    private string Byline => _mode == GetMode.Peek
+        ? "Peek requeues every message. Nothing is removed, but each message comes back marked redelivered."
+        : "Consume acknowledges and removes every message it gets. Selected messages can be requeued or republished from this page until you leave it.";
+
+    private DateTimeOffset Local(DateTimeOffset value) => TimeZoneInfo.ConvertTime(value, Clock.LocalTimeZone);
+
+    private string Time(DateTimeOffset? value) =>
+        value is { } t ? Local(t).ToString("HH:mm:ss", CultureInfo.InvariantCulture) : RabbitFormat.Missing;
+
+    private static string IdLabel(RabbitMessage message) =>
+        message.MessageId ?? $"#{(message.Index + 1).ToString(CultureInfo.InvariantCulture)}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{ConnectionId}|{VhostValue}|{Name}";
+        if (key == _pageKey)
+        {
+            return;
+        }
+
+        // A different queue: nothing from the previous one carries over. (Held consumed messages
+        // are lost here -- the banner warned; NavigationLock covers leaving the app.)
+        _pageKey = key;
+        _cts?.Cancel();
+        _connection = null;
+        _connectionResolved = false;
+        _ready = null;
+        _exchanges = [];
+        _entries = [];
+        _selected.Clear();
+        _focusedId = null;
+        _error = null;
+        _locked = false;
+        _lastGetCount = null;
+
+        var connection = ConnectionId is { } id
+            ? (await Connections.ListAsync(ConnectionVhostPicker.Kind)).FirstOrDefault(c => c.Id == id)
+            : null;
+        if (key != _pageKey)
+        {
+            return;
+        }
+
+        _connection = connection;
+        _connectionResolved = true;
+        await LoadDepthAsync();
+    }
+
+    /// <summary>Queue depth for "{n} of {ready}" and the exchange list for Republish…; failure only drops the depth.</summary>
+    private async Task LoadDepthAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var key = _pageKey;
+        var result = await DetailHandler.HandleAsync(connection.Id, VhostValue, QueueName);
+        if (key != _pageKey)
+        {
+            return;
+        }
+
+        if (result.IsSuccess)
+        {
+            _ready = result.Value!.Detail.Summary.Ready;
+            _exchanges = result.Value.Exchanges;
+        }
+        else
+        {
+            _ready = null;
+        }
+    }
+
+    private void OnModeChanged(GetMode mode) => _mode = mode;
+
+    private async Task GetAsync()
+    {
+        if (_loading || _connection is not { } connection)
+        {
+            return;
+        }
+
+        var mode = _mode;
+        var count = _count;
+        if (mode == GetMode.Consume && !await Confirmation.ConfirmAsync("Consume", QueueName, connection.IsProd, count))
+        {
+            return;
+        }
+
+        var key = _pageKey;
+        using var cts = new CancellationTokenSource();
+        _cts = cts;
+        _loading = true;
+        _loadingCount = count;
+        _error = null;
+        _locked = false;
+        _lastGetCount = null;
+        var depthBefore = _ready;
+        PluginResult<IReadOnlyList<RabbitMessage>>? result = null;
+        try
+        {
+            result = mode == GetMode.Peek
+                ? await PeekHandler.HandleAsync(connection.Id, VhostValue, QueueName, count, cts.Token)
+                : await ConsumeHandler.HandleAsync(new ConsumeMessagesCommand(connection.Id, connection.Name, VhostValue, QueueName, count), cts.Token);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // Handled below: a cancelled get is not an error.
+        }
+        finally
+        {
+            if (ReferenceEquals(_cts, cts))
+            {
+                _cts = null;
+                _loading = false;
+            }
+        }
+
+        if (key != _pageKey)
+        {
+            return;
+        }
+
+        if (cts.IsCancellationRequested)
+        {
+            // The channel closed with everything unacked, so the broker requeued it all.
+            Snackbar.Add("Get cancelled — the held messages were requeued", Severity.Info);
+            return;
+        }
+
+        if (result!.IsSuccess)
+        {
+            var messages = result.Value!;
+            // Peeked messages from an earlier get are still in the queue, so they're replaced;
+            // consumed ones are kept -- this page is the only place they exist.
+            var added = messages.Select(m => new Entry(_nextId++, m, mode == GetMode.Consume)).ToList();
+            _entries = [.. _entries.Where(e => e.Consumed), .. added];
+            _selected.IntersectWith(_entries.Select(e => e.Id));
+            _focusedId = added.FirstOrDefault()?.Id ?? FocusedEntry?.Id;
+            _lastGetCount = messages.Count;
+            _lastGetReady = depthBefore;
+        }
+        else if (IsLocked(result.Error!))
+        {
+            _locked = true;
+        }
+        else
+        {
+            _error = result.Error!;
+        }
+
+        await LoadDepthAsync();
+    }
+
+    private void CancelGet() => _cts?.Cancel();
+
+    // FriendlyRabbitError's 405 text; matched loosely so a broker phrasing it as an exclusive-consumer
+    // refusal lands here too.
+    private static bool IsLocked(string error) =>
+        error.Contains("resource locked", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("exclusive consumer", StringComparison.OrdinalIgnoreCase);
+
+    private void ToggleSelected(int id, bool selected)
+    {
+        if (selected)
+        {
+            _selected.Add(id);
+        }
+        else
+        {
+            _selected.Remove(id);
+        }
+    }
+
+    /// <summary>Requeue = publish back through the default exchange keyed by this queue. Consumed messages only.</summary>
+    private async Task RequeueAsync(IReadOnlyList<Entry> entries)
+    {
+        if (_busy || entries.Count == 0 || entries.Any(e => !e.Consumed) || _connection is not { } connection)
+        {
+            return;
+        }
+
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Requeue", QueueName, true, entries.Count))
+        {
+            return;
+        }
+
+        var requests = entries.Select(e => MessageFormat.ToPublishRequest(e.Message, "", QueueName)).ToList();
+        await RepublishAsync("requeue", entries, requests);
+    }
+
+    /// <summary>The detail pane's one-click "Republish to {first-death exchange}".</summary>
+    private async Task RepublishToFirstDeathAsync(Entry entry)
+    {
+        if (_busy || entry.Message.FirstDeathExchange is not { } exchange || _connection is not { } connection)
+        {
+            return;
+        }
+
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Republish", exchange.Length == 0 ? "(AMQP default)" : exchange, true, 1))
+        {
+            return;
+        }
+
+        var request = MessageFormat.ToPublishRequest(entry.Message, exchange, MessageFormat.OriginalRoutingKey(entry.Message));
+        await RepublishAsync("republish", [entry], [request]);
+    }
+
+    private async Task RepublishAsync(string label, IReadOnlyList<Entry> entries, IReadOnlyList<PublishRequest> requests)
+    {
+        var connection = _connection!;
+        _busy = true;
+        try
+        {
+            var result = await RepublishHandler.HandleAsync(new RepublishMessagesCommand(connection.Id, connection.Name, VhostValue, QueueName, label, requests));
+            if (result.IsSuccess)
+            {
+                Report(label, entries, result.Value!);
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenRepublishAsync()
+    {
+        var connection = _connection!;
+        var entries = SelectedEntries;
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<RepublishDialog>
+        {
+            { x => x.ConnectionId, connection.Id },
+            { x => x.ConnectionName, connection.Name },
+            { x => x.IsProd, connection.IsProd },
+            { x => x.Vhost, VhostValue },
+            { x => x.SourceQueue, QueueName },
+            { x => x.Messages, entries.Select(e => e.Message).ToList() },
+            { x => x.IsCopy, entries.Any(e => !e.Consumed) },
+            { x => x.Exchanges, _exchanges },
+        };
+        var dialog = await DialogService.ShowAsync<RepublishDialog>("Republish messages", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = dialog is null ? null : await dialog.Result;
+        if (result is { Canceled: false, Data: RepublishResult republished })
+        {
+            Report("republish", entries, republished);
+        }
+    }
+
+    /// <summary>
+    /// Snackbar the outcome; on full success release the consumed messages (they're back on the
+    /// broker). With any unroutable, the broker returned some of them and the result doesn't say
+    /// which -- so everything stays on the page rather than risk dropping a message.
+    /// </summary>
+    private void Report(string label, IReadOnlyList<Entry> entries, RepublishResult result)
+    {
+        var text = $"{label}: {result.Routed} routed, {result.Unroutable} unroutable";
+        if (result.Unroutable > 0)
+        {
+            Snackbar.Add(entries.Any(e => e.Consumed) ? $"{text} — the consumed messages stay on this page" : text, Severity.Warning);
+            return;
+        }
+
+        var released = entries.Where(e => e.Consumed).Select(e => e.Id).ToHashSet();
+        _entries = _entries.Where(e => !released.Contains(e.Id)).ToList();
+        _selected.ExceptWith(entries.Select(e => e.Id));
+        if (_focusedId is { } focused && released.Contains(focused))
+        {
+            _focusedId = _entries.FirstOrDefault()?.Id;
+        }
+
+        Snackbar.Add(text, Severity.Success);
+    }
+
+    private async Task CopyBodyAsync(RabbitMessage message)
+    {
+        var view = MessageFormat.RenderBody(message.Body);
+        // Text bodies are copied verbatim (not the pretty-printed form); binary as base64.
+        var text = view.Kind == BodyKind.Binary ? Convert.ToBase64String(message.Body) : Encoding.UTF8.GetString(message.Body);
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add(view.Kind == BodyKind.Binary ? "Body copied (base64)." : "Body copied.", Severity.Success);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Couldn't copy to the clipboard.", Severity.Warning);
+        }
+    }
+
+    private List<(string Key, string Value)> Properties(Entry entry)
+    {
+        var m = entry.Message;
+        var rows = new List<(string, string)>
+        {
+            ("message_id", m.MessageId ?? RabbitFormat.Missing),
+            ("correlation_id", m.CorrelationId ?? RabbitFormat.Missing),
+            ("delivery_mode", MessageFormat.DeliveryMode(m)),
+            ("priority", m.Priority?.ToString(CultureInfo.InvariantCulture) ?? RabbitFormat.Missing),
+            ("app_id", m.AppId ?? RabbitFormat.Missing),
+            ("timestamp", m.Timestamp is { } t ? Local(t).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : RabbitFormat.Missing),
+            ("content_encoding", m.ContentEncoding ?? RabbitFormat.Missing),
+            // basic.get reports the flag as it was before this read; a peek sets it for next time.
+            ("redelivered", (m.Redelivered ? "true" : "false") + (entry.Consumed ? "" : " (before this peek)")),
+        };
+
+        if (m.DeliveryCount is { } deliveryCount)
+        {
+            rows.Add(("x-delivery-count", deliveryCount.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (m.Deaths.Count > 0)
+        {
+            rows.Add(("x-death count", MessageFormat.DeathCount(m).ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (m.FirstDeathQueue is { } firstDeathQueue)
+        {
+            rows.Add(("x-first-death-queue", firstDeathQueue));
+        }
+
+        rows.AddRange(m.Headers.Where(h => !PropertyHeaders.Contains(h.Key)).OrderBy(h => h.Key, StringComparer.Ordinal).Select(h => (h.Key, h.Value)));
+        return rows;
+    }
+
+    private RenderFragment RenderDetail(Entry entry) => __builder =>
+    {
+        var message = entry.Message;
+        var death = MessageFormat.DeathSummary(message);
+        var body = MessageFormat.RenderBody(message.Body);
+        <MudPaper Class="message-detail pa-4" Outlined="true">
+            <div class="d-flex align-center flex-wrap gap-2">
+                <MudText Typo="Typo.subtitle1" Class="detail-id" Style="font-family:monospace">@IdLabel(message)</MudText>
+                @if (death is not null)
+                {
+                    <MudChip T="string" Class="detail-death-chip" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">@death</MudChip>
+                }
+                <MudSpacer />
+                <MudButton Class="copy-body" Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ContentCopy"
+                           OnClick="@(() => CopyBodyAsync(message))">Copy</MudButton>
+                @if (entry.Consumed)
+                {
+                    <MudButton Class="requeue-focused" Size="Size.Small" Variant="Variant.Outlined" Disabled="_busy"
+                               OnClick="@(() => RequeueAsync([entry]))">Requeue</MudButton>
+                }
+                @if (message.FirstDeathExchange is { } firstDeathExchange)
+                {
+                    <MudButton Class="republish-first-death" Size="Size.Small" Variant="Variant.Outlined" Disabled="_busy"
+                               OnClick="@(() => RepublishToFirstDeathAsync(entry))">Republish to @(firstDeathExchange.Length == 0 ? "(AMQP default)" : firstDeathExchange)</MudButton>
+                }
+            </div>
+
+            @if (message.Deaths.Count > 0)
+            {
+                <MudText Typo="Typo.overline" Class="mud-text-secondary d-block mt-3">Death history</MudText>
+                @foreach (var record in message.Deaths)
+                {
+                    <div class="death-row d-flex flex-wrap gap-3" style="font-family:monospace">
+                        <span class="death-exchange">@(record.Exchange.Length == 0 ? "(AMQP default)" : record.Exchange)</span>
+                        <span class="death-reason">@record.Reason</span>
+                        <span class="death-keys mud-text-secondary">@string.Join(", ", record.RoutingKeys)</span>
+                        <MudSpacer />
+                        <span class="death-count mud-text-secondary">×@record.Count.ToString(CultureInfo.InvariantCulture)@(record.Time is { } time ? $" · {Time(time)}" : "")</span>
+                    </div>
+                }
+            }
+
+            <MudText Typo="Typo.overline" Class="mud-text-secondary d-block mt-3">Body</MudText>
+            <MudText Typo="Typo.caption" Class="body-meta mud-text-secondary">@(message.ContentType ?? "no content type") · @RabbitFormat.Bytes(message.Body.Length)</MudText>
+            @if (body.Kind == BodyKind.Binary)
+            {
+                <MudText Typo="Typo.caption" Class="body-note mud-text-secondary d-block">Binary — hex preview@(body.Truncated ? $" of the first {MessageFormat.HexPreviewBytes} bytes" : "")</MudText>
+            }
+            <pre class="message-body pa-2 mt-1" style="white-space:pre-wrap;word-break:break-all;font-size:12px;max-height:360px;overflow:auto;background:var(--mud-palette-background-gray)">@body.Text</pre>
+
+            <MudText Typo="Typo.overline" Class="mud-text-secondary d-block mt-3">Properties</MudText>
+            <MudSimpleTable Class="message-properties" Dense="true" Elevation="0">
+                <tbody>
+                    @foreach (var (key, value) in Properties(entry))
+                    {
+                        <tr class="property-row">
+                            <td class="property-key mud-text-secondary" style="font-family:monospace">@key</td>
+                            <td class="property-value" style="font-family:monospace;word-break:break-all">@value</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    };
+}
