@@ -131,7 +131,7 @@
                             <div class="d-flex flex-wrap gap-1">
                                 @if (queue.Type == "quorum")
                                 {
-                                    <MudChip T="string" Class="attr-quorum" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">@(queue.ReplicaCount is { } replicas ? $"quorum · {replicas} replicas" : "quorum")</MudChip>
+                                    <MudChip T="string" Class="attr-quorum" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">@(queue.ReplicaCount is { } replicas ? $"quorum · {replicas} {(replicas == 1 ? "replica" : "replicas")}" : "quorum")</MudChip>
                                 }
                                 else if (queue.Type == "stream")
                                 {

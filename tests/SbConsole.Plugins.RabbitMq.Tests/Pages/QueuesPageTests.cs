@@ -111,6 +111,16 @@ public class QueuesPageTests : RabbitPageTestBase
     }
 
     [Fact]
+    public async Task A_single_node_quorum_queue_reads_one_replica()
+    {
+        Seed([SeededTopology.Queue("audit.sink") with { Type = "quorum", ReplicaCount = 1 }]);
+
+        var cut = await RenderPageAsync();
+
+        Text(Row(cut, "audit.sink"), ".attr-quorum").Should().Be("quorum · 1 replica");
+    }
+
+    [Fact]
     public async Task Attribute_chips_describe_each_queue()
     {
         Seed();
