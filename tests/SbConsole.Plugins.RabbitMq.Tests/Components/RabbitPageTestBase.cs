@@ -9,6 +9,7 @@ using SbConsole.Plugins.RabbitMq.Connections;
 using SbConsole.Plugins.RabbitMq.Exchanges;
 using SbConsole.Plugins.RabbitMq.Messages;
 using SbConsole.Plugins.RabbitMq.Overview;
+using SbConsole.Plugins.RabbitMq.Queues;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.RabbitMq.Tests.Components;
@@ -31,6 +32,7 @@ public abstract class RabbitPageTestBase : BunitContext, IAsyncLifetime
     protected readonly ConnectionInfo Prod = new(Guid.NewGuid(), "rabbit-uk-prod", "rabbitmq", ["prod"]);
     protected readonly IConfirmationService Confirmation = Substitute.For<IConfirmationService>();
     protected readonly IAuditScope Audit = Substitute.For<IAuditScope>();
+    protected readonly IPluginStore Store = Substitute.For<IPluginStore>();
     protected readonly MutableClock Clock = new(new DateTimeOffset(2026, 9, 26, 14, 3, 7, TimeSpan.Zero));
 
     protected RabbitPageTestBase()
@@ -55,6 +57,11 @@ public abstract class RabbitPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton<CreateExchangeCommandHandler>();
         Services.AddSingleton<DeleteExchangeCommandHandler>();
         Services.AddSingleton<PublishMessageCommandHandler>();
+        Services.AddSingleton<ListQueuesQueryHandler>();
+        Services.AddSingleton<CreateQueueCommandHandler>();
+        Services.AddSingleton<DeleteQueueCommandHandler>();
+        Services.AddSingleton<PurgeQueueCommandHandler>();
+        Services.AddKeyedSingleton("rabbitmq", Store);
         Services.AddSingleton<TimeProvider>(Clock);
     }
 

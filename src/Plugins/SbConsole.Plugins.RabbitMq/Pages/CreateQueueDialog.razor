@@ -1,0 +1,133 @@
+@using SbConsole.Plugins.RabbitMq.Client
+@using SbConsole.Plugins.RabbitMq.Queues
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" Class="queue-name" @bind-Value="_name" Label="Name" Required="true" Immediate="true" />
+        <MudSelect T="string" Class="queue-type mt-2" Value="_type" ValueChanged="OnTypeChanged" Label="Type">
+            <MudSelectItem Value="@("classic")">classic</MudSelectItem>
+            <MudSelectItem Value="@("quorum")">quorum</MudSelectItem>
+        </MudSelect>
+        <MudSwitch T="bool" Class="durable-toggle mt-2" @bind-Value="_durable" Label="Durable" Color="Color.Primary" Disabled="IsQuorum" />
+        @if (IsQuorum)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Quorum queues are always durable.</MudText>
+        }
+        <MudSwitch T="bool" Class="auto-delete-toggle" @bind-Value="_autoDelete" Label="Auto-delete" Color="Color.Primary" />
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4">Dead-lettering (optional)</MudText>
+        <MudSelect T="string" Class="dead-letter-exchange" @bind-Value="_deadLetterExchange" Label="Dead-letter exchange" Clearable="true">
+            @foreach (var name in DeadLetterCandidates)
+            {
+                <MudSelectItem Value="@name">@name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string" Class="dead-letter-routing-key mt-2" @bind-Value="_deadLetterRoutingKey" Label="Dead-letter routing key" Immediate="true"
+                      HelperText="Empty keeps the message's original routing key." />
+
+        <MudText Typo="Typo.subtitle2" Class="mt-4">Limits (optional)</MudText>
+        <MudNumericField T="long?" Class="message-ttl" @bind-Value="_messageTtlMs" Label="Message TTL (ms)" Min="0" Immediate="true" HideSpinButtons="true" />
+        <MudNumericField T="long?" Class="max-length mt-2" @bind-Value="_maxLength" Label="Max length (messages)" Min="0" Immediate="true" HideSpinButtons="true" />
+        <MudSelect T="string" Class="overflow mt-2" @bind-Value="_overflow" Label="Overflow" Clearable="true">
+            @foreach (var overflow in Overflows)
+            {
+                <MudSelectItem Value="@overflow">@overflow</MudSelectItem>
+            }
+        </MudSelect>
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="create-queue-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mr-auto ml-4">Logged to audit</MudText>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="create-queue-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="create-queue-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private static readonly string[] Overflows = ["drop-head", "reject-publish", "reject-publish-dlx"];
+
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public string Vhost { get; set; } = "/";
+    /// <summary>The vhost's exchange names, offered as dead-letter exchanges.</summary>
+    [Parameter] public IReadOnlyList<string> ExchangeNames { get; set; } = [];
+
+    [Inject] private CreateQueueCommandHandler CreateHandler { get; set; } = default!;
+
+    private string _name = "";
+    private string _type = "classic";
+    private bool _durable = true;
+    private bool _autoDelete;
+    private string? _deadLetterExchange;
+    private string _deadLetterRoutingKey = "";
+    private long? _messageTtlMs;
+    private long? _maxLength;
+    private string? _overflow;
+    private string? _error;
+    private bool _busy;
+
+    private bool IsQuorum => _type == "quorum";
+
+    // The default exchange ("") can't be a select value; a named DLX is the common case anyway.
+    private IEnumerable<string> DeadLetterCandidates =>
+        ExchangeNames.Where(n => n.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+
+    private bool CanSubmit => !string.IsNullOrWhiteSpace(_name);
+
+    private void OnTypeChanged(string type)
+    {
+        _type = type;
+        if (IsQuorum)
+        {
+            _durable = true;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var request = new CreateQueueRequest(
+                _name.Trim(),
+                _type,
+                IsQuorum || _durable,
+                _autoDelete,
+                string.IsNullOrWhiteSpace(_deadLetterExchange) ? null : _deadLetterExchange,
+                string.IsNullOrWhiteSpace(_deadLetterRoutingKey) ? null : _deadLetterRoutingKey.Trim(),
+                _messageTtlMs,
+                _maxLength,
+                string.IsNullOrWhiteSpace(_overflow) ? null : _overflow);
+            var result = await CreateHandler.HandleAsync(new CreateQueueCommand(ConnectionId, ConnectionName, Vhost, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
