@@ -28,6 +28,7 @@ public class FriendlyRedisErrorTests
     [InlineData("NOAUTH Authentication required.", "Authentication required or failed (NOAUTH)")]
     [InlineData("WRONGTYPE Operation against a key holding the wrong kind of value", "Wrong type for this key — it may have changed since the page loaded")]
     [InlineData("CLUSTERDOWN Hash slot not served", "Cluster is down")]
+    [InlineData("NOGROUP No such key 'orders:events' or consumer group 'workers'", "Stream or consumer group not found — it may have been deleted since the page loaded")]
     public void Maps_known_server_error_prefixes(string serverMessage, string friendlyMessage)
     {
         var ex = new RedisServerException(serverMessage);
