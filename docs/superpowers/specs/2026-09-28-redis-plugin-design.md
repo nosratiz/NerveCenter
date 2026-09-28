@@ -681,3 +681,120 @@ and pending-entries tables), pending-entry row actions (Ack / Claim-to-consumer 
 with no `beforeId`, newest-first). `RedisPlugin.NavItems` gains `new PluginNavItem("Streams",
 "/p/redis/streams")`; `Contribution` is `PageCount: 3, ActionCount: 19` (the Keys browser's 14 plus
 the five Streams command handlers).
+
+## 14. Phase 3 addendum — Pub/Sub, FLUSHDB, ACL-aware disabled buttons (post-implementation, 2026-09-28)
+
+Written once phase 3 actually shipped, per §3's "specify shapes when the phase starts" convention. Cluster
+topology stays explicitly out of scope everywhere (§1/§12) — this phase did not touch
+`RedisConnectionFactory`'s `NotSupportedException` for `RedisTopology.Cluster`, and nothing below changes
+that.
+
+**DTOs shipped** (`src/Plugins/SbConsole.Plugins.Redis/Client/PubSub*.cs`):
+
+```csharp
+public sealed record PubSubChannelSummary(string Channel, long SubscriberCount);
+public sealed record PubSubMessage(string Channel, string Payload, DateTimeOffset ReceivedAt);
+```
+
+Both are intentionally minimal against the mockup's channel-list-and-tail screen: `PubSubChannelSummary`
+is exactly `PUBSUB CHANNELS` + `PUBSUB NUMSUB` joined into one row; `PubSubMessage.ReceivedAt` is this
+client's own receipt timestamp, not a server-side one — Redis's `PUBLISH`/message-delivery protocol
+carries no timestamp of its own, unlike a Stream entry's ID.
+
+**`IRedisOperations` additions** — `GetPubSubChannelsAsync`, `SubscribeAsync`, `PublishAsync` (all
+server-wide, no database parameter, per §2's original "no second axis" decision — Pub/Sub in Redis isn't
+scoped to a `SELECT`ed database at all), plus two unrelated-to-Pub/Sub-but-also-phase-3 additions:
+`FlushDatabaseAsync` (FLUSHDB, deferred from phase 1 per §12) and `HasCommandPermissionAsync` (the
+ACL-aware disabled-button check §12 said would piggyback on Pub/Sub's own ACL-checking precedent).
+
+**Live-tail subscription lifecycle — the one genuinely new shape phase 3 introduces.** Every other
+`IRedisOperations` method opens a `ConnectionMultiplexer` with `await using` and disposes it before
+returning — a live tail can't do that, since messages need to keep arriving after the call that started
+the subscription has returned. `SubscribeAsync` instead returns `Task<IAsyncDisposable>`
+(`RedisPubSubSubscription`, `Client/RedisPubSubSubscription.cs`): it owns the multiplexer, the
+`ISubscriber`, the `RedisChannel`, and the raw `Action<RedisChannel, RedisValue>` handler StackExchange.Redis
+was given, and its `DisposeAsync` unsubscribes first, then disposes the multiplexer, idempotently (an
+`Interlocked.Exchange` guard, since the Blazor page can reach disposal from three different paths — see
+below — and must not double-unsubscribe or double-dispose). The handler itself is `async void` (the only
+option for `ISubscriber.SubscribeAsync`'s synchronous-delegate signature) wrapped in a `try`/`catch` that
+swallows everything: a message can arrive on StackExchange.Redis's own completion thread after the
+Blazor component that started the subscription has already been disposed (a normal race, not a bug), and
+letting that throw would crash a background thread with no one watching it.
+
+`Pages/PubSub.razor`'s side of the same contract: the page's `OnMessageAsync` callback (passed into
+`SubscribeAsync`) is invoked on that same background thread per message, so it dispatches back onto the
+Blazor renderer via `InvokeAsync` before touching any `@code` state or calling `StateHasChanged` — the
+standard Blazor Server pattern for a background-thread callback into a component. The page stops its own
+subscription from three places, all funneling through one `StopTailAsync` helper: the explicit
+"Unsubscribe" button, switching to a different connection (a stale subscription must not keep tailing the
+previous server, and must not leak its multiplexer), and the component's own `DisposeAsync` (navigating
+away, closing the tab, or a dropped circuit) — this third path is the actual leak guard; the other two are
+UX. bUnit tests cover all three exit paths plus the message-delivery/ordering behavior itself (see
+`tests/SbConsole.Plugins.Redis.Tests/Pages/PubSubTests.cs`), substituting `IRedisOperations.SubscribeAsync`
+to hand back a captured callback the test invokes directly and a mock `IAsyncDisposable` it asserts was
+disposed.
+
+**FLUSHDB.** `Keys/FlushDatabaseCommandHandler` — `ActionRisk.Destructive`, audit action
+`redis.database.flush`, target `"{connectionName}/db{n}"` (no key segment; `HandlerRunner.Target`'s
+three-argument shape doesn't fit a whole-database action, so the target string is built inline instead of
+extending that helper for one caller). Exposed as a "Flush database…" button in `Pages/Keys.razor`'s
+toolbar. The confirmation's blast-radius count reuses `_dbSizeAtStart` — the real `DBSIZE` the page's own
+last key scan already observed — rather than issuing a fresh dry-run call FLUSHDB has no natural
+equivalent of (there's nothing to "preview"; every key in the database is affected, unconditionally). This
+follows §6's existing rule (also `DeleteByPatternDialog`'s precedent) that a destructive confirmation must
+show real, already-known server state, not a client guess or an invented number.
+
+**ACL-aware disabled-button state.** `RedisAclPermissionEvaluator`
+(`Client/RedisAclPermissionEvaluator.cs`) is a pure, unit-tested parser of `ACL GETUSER`'s `"commands"`
+rule string (e.g. `"-@all +@dangerous -flushdb"`) — it replays Redis's own left-to-right,
+last-match-wins evaluation over `+/-@all`, `+/-@category`, and `+/-cmd` tokens (dropping a `|subcommand`
+suffix before matching, e.g. `+acl|whoami`), but only recognizes the category names the two phase-3
+call sites actually need:
+
+```csharp
+["FLUSHDB"] = ["keyspace", "write", "slow", "dangerous"],
+["PUBLISH"] = ["pubsub", "fast"],
+```
+
+This is a **deliberate, scoped-down judgment call**, not a full ACL engine — flagged explicitly since the
+design brief allowed either approach ("attempt-and-catch NOPERM if more robust"). Attempt-and-catch was
+rejected for both call sites: it would mean actually running `FLUSHDB` (unacceptable — the "check" would
+be the destructive action itself) or actually running `PUBLISH` (an unwanted side effect — injecting a
+probe message into a real channel just to see whether it's allowed). A static ACL-rule scan has no side
+effect, which is why `RedisOperations.HasCommandPermissionAsync` runs `ACL WHOAMI` then `ACL GETUSER
+<username>` (via raw `ExecuteAsync`, parsed by `RedisAclPermissionEvaluator.ExtractCommandsField` — `ACL
+GETUSER`'s reply has no typed StackExchange.Redis surface) and evaluates the result instead.
+
+The other half of the judgment call: **this check fails open.** A `null`/unparseable `commands` field, or
+any exception from `ACL WHOAMI`/`GETUSER` themselves (which a sufficiently locked-down ACL user might not
+even be allowed to run), returns `true` ("allowed") rather than `false`. This is safe specifically *because*
+the check only ever disables a button — it is advisory UI, not the authorization boundary. The real
+boundary stays exactly where it already was: a command the ACL actually refuses still fails loudly and
+correctly at the point of use, via the existing `NOPERM` → `"Command refused by ACL (NOPERM): ..."` mapping
+in `FriendlyRedisError` (§10). Failing closed here would have the opposite, worse failure mode — silently
+disabling a button (with no explanation the user can act on) for an ACL shape this narrow evaluator simply
+doesn't understand, on a connection that would have worked fine. `Pages/PubSub.razor`'s Publish button and
+`Pages/Keys.razor`'s Flush database button both disable (never hide, per the mockup's "Command refused by
+ACL" state) and show that exact caption text when `AclQueryHandler.HasCommandPermissionAsync` returns
+`false`.
+
+**Remaining empty/error states (mockup 1g).** `Pages/Keys.razor`'s prefix tree and `Pages/Streams.razor`'s
+stream list now render an explicit "No keys/streams found matching this pattern." message when a scan
+completes with zero matches, instead of silently rendering nothing — previously indistinguishable from
+"still loading" or a stuck scan. `Pages/PubSub.razor` ships the same treatment from day one ("No active
+channels." / "Waiting for messages…"). All four pages (Overview, Keys, Streams, Pub-Sub) now render every
+`FriendlyRedisError` failure (`CLUSTERDOWN`, `NOPERM`, connection-refused, etc.) as an inline `MudAlert`
+next to the affected panel rather than a blank result — Overview and Keys already did this before phase 3;
+Streams and the new Pub-Sub page are covered by this phase's work.
+
+**UI** (`Pages/PubSub.razor`, `/p/redis/pubsub`): connection picker only — deliberately **no** database
+picker, since Pub/Sub is server-wide in Redis, not scoped to a `SELECT`ed database (same reasoning as
+Overview.razor, the plugin's other server-wide page). Left pane: active-channel list with an optional glob
+filter and the empty state above. Right pane: a live-tail panel (channel-or-pattern input, a
+"Pattern (PSUBSCRIBE)" checkbox, Subscribe/Unsubscribe, a newest-first message table capped at 200
+buffered messages client-side) and a publish form (channel, payload, the ACL-gated Publish button).
+`RedisPlugin.NavItems` gains `new PluginNavItem("Pub/Sub", "/p/redis/pubsub")`; `Contribution` is
+`PageCount: 4, ActionCount: 22` (the Keys browser's 14, Streams' 5, plus phase 3's 3: FLUSHDB,
+Pub/Sub subscribe-start — audited `Safe`, matching `RevealHashFieldCommandHandler`'s "safe but
+worth-recording read" precedent, only at subscribe-start rather than per message or at unsubscribe — and
+Pub/Sub publish).
