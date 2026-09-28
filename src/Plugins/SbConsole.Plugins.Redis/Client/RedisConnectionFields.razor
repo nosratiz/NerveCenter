@@ -91,7 +91,8 @@
         // string is wrapped so a not-yet-valid host just skips this keystroke's SecretChanged
         // (the last-known-good secret stays in effect) instead of throwing out of a Blazor event
         // handler and crashing the circuit -- there's no ErrorBoundary around the connection form.
-        if (_host.Contains(','))
+        // The service name shares the same comma-as-separator hazard when Topology is Sentinel.
+        if (_host.Contains(',') || (_serviceName?.Contains(',') ?? false))
         {
             return Task.CompletedTask;
         }

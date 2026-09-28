@@ -12,7 +12,7 @@ internal static class RedisConnectionFactory
             throw new NotSupportedException("Cluster support ships in a later update.");
         }
 
-        if (settings.Topology == RedisTopology.Sentinel && string.IsNullOrEmpty(settings.ServiceName))
+        if (settings.Topology == RedisTopology.Sentinel && string.IsNullOrWhiteSpace(settings.ServiceName))
         {
             // Without a service name, StackExchange.Redis would connect in plain standalone mode
             // to the sentinel node itself, not the primary it fronts -- INFO would then report the

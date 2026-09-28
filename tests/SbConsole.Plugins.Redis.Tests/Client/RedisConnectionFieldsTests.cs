@@ -119,6 +119,24 @@ public class RedisConnectionFieldsTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public void Service_name_containing_a_comma_does_not_raise_secret_changed()
+    {
+        // Same comma-as-field-separator hazard as the host field, but for the Sentinel-only
+        // service name field.
+        var initial = new RedisConnectionSettings(
+            RedisTopology.Sentinel, ["sentinel-1:26379"], null, null, false, "uk-prod", false, 0)
+            .ToSecretString();
+
+        var cut = RenderFields(initial, out var emitted);
+        var countBefore = emitted.Count;
+
+        var act = () => cut.Find("input#redis-conn-servicename").Input("uk,prod");
+
+        act.Should().NotThrow();
+        emitted.Count.Should().Be(countBefore);
+    }
+
+    [Fact]
     public void A_well_formed_but_invalid_initial_secret_renders_with_defaults_instead_of_throwing()
     {
         // "bogus|0|host:6379" has three '|'-delimited parts (so it does NOT hit the FormatException

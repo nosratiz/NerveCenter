@@ -51,8 +51,8 @@ phase is independently working, testable software:
   FLUSHDB confirmation, remaining empty/error states (mockup 1g).
 
 (The Keys browser, mentioned above as deferred out of phase 1, ships as its
-own plan ahead of Streams — its scope is described in §7 pending that plan's
-own spec addendum.)
+own plan ahead of Streams — its preserved UI design is in §7a below, kept
+separate from §7 now that §7 describes only what phase 1 actually shipped.)
 
 Cluster is deferred past phase 1 specifically because its shard-enumeration
 API needs verifying against the installed `StackExchange.Redis` version
@@ -181,7 +181,8 @@ public sealed record MemoryByPrefixEntry(string Prefix, long SampledBytes, int S
 
 public sealed record SlowLogEntry(DateTimeOffset At, TimeSpan Duration, string Command, string? ClientAddress);
 
-// KeySummary.cs — phase 1
+// KeySummary.cs — Keys plan (not phase 1 — see §1's correction; kept here,
+// fully specified, so the Keys plan starts from an agreed shape)
 public enum RedisKeyType { String, List, Set, SortedSet, Hash, Stream, Unknown }
 
 public sealed record KeySummary(string Key, RedisKeyType Type, TimeSpan? Ttl, long ApproximateSizeBytes);
@@ -190,7 +191,7 @@ public sealed record KeyScanPage(
     IReadOnlyList<KeySummary> Matches, long Cursor, bool Complete,
     long KeysScannedSoFar, long DatabaseKeyCountAtScanStart);
 
-// Per-type value DTOs — phase 1
+// Per-type value DTOs — Keys plan (not phase 1)
 public sealed record StringValue(string Key, TimeSpan? Ttl, long SizeBytes, string RawValue, bool LooksLikeJson);
 
 public sealed record HashFieldPage(IReadOnlyList<HashFieldEntry> Fields, long Cursor, bool Complete, long TotalFieldCount);
@@ -204,7 +205,7 @@ public sealed record SortedSetEntry(string Member, double Score);
 
 public sealed record SetPage(long Cardinality, IReadOnlyList<string> Members, long Cursor, bool Complete);
 
-// Requests.cs — phase 1
+// Requests.cs — Keys plan (not phase 1)
 public sealed record ScanKeysRequest(int Database, string? Pattern, RedisKeyType? TypeFilter, long Cursor, int Count);
 public sealed record SetTtlRequest(int Database, string Key, TimeSpan? ExpireIn, DateTimeOffset? ExpireAt, bool Persist);
 public sealed record DryRunDeleteByPatternResult(long WouldDeleteKeyCount, long WouldDeleteBytes, bool Complete);
@@ -239,18 +240,26 @@ its first parameter — one shared singleton instance serves every
 connection, matching `IRabbitOperations`/`IKafkaOperations`/`ISqsOperations`
 (`docs/design.md` §6.8).
 
+**What actually shipped in phase 1 is only the first two groups below**
+(Connection, Overview) — the real `Client/IRedisOperations.cs` today has
+exactly those four methods. Keys/String/Hash/List/Sorted-set/Set are this
+section's target shape for the **Keys plan**, kept here fully specified
+(not stubbed into the shipped interface) so that plan starts from an
+agreed shape rather than re-deriving it — consistent with the "Streams/
+Pub-Sub methods aren't declared here yet either" note at the bottom.
+
 ```csharp
 public interface IRedisOperations
 {
-    // Connection (phase 1)
+    // Connection — shipped, phase 1
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
 
-    // Overview (phase 1)
+    // Overview — shipped, phase 1
     Task<ServerOverview> GetOverviewAsync(string secret, CancellationToken ct = default);
     Task<IReadOnlyList<MemoryByPrefixEntry>> GetMemoryByPrefixAsync(string secret, int database, char delimiter, int sampleSize, CancellationToken ct = default);
     Task<IReadOnlyList<SlowLogEntry>> GetSlowLogAsync(string secret, int count, CancellationToken ct = default);
 
-    // Keys (phase 1)
+    // Keys — Keys plan, not yet built
     Task<KeyScanPage> ScanKeysAsync(string secret, ScanKeysRequest request, CancellationToken ct = default);
     Task<RedisKeyType> GetKeyTypeAsync(string secret, int database, string key, CancellationToken ct = default);
     Task<bool> DeleteKeyAsync(string secret, int database, string key, CancellationToken ct = default);
@@ -259,26 +268,26 @@ public interface IRedisOperations
     Task<DryRunDeleteByPatternResult> DryRunDeleteByPatternAsync(string secret, int database, string pattern, CancellationToken ct = default);
     Task<long> DeleteByPatternAsync(string secret, int database, string pattern, CancellationToken ct = default);
 
-    // String (phase 1)
+    // String — Keys plan, not yet built
     Task<StringValue> GetStringAsync(string secret, int database, string key, CancellationToken ct = default);
     Task SetStringAsync(string secret, int database, string key, string value, TimeSpan? ttl, CancellationToken ct = default);
 
-    // Hash (phase 1)
+    // Hash — Keys plan, not yet built
     Task<HashFieldPage> ScanHashFieldsAsync(string secret, int database, string key, string? fieldPattern, long cursor, int count, CancellationToken ct = default);
     Task SetHashFieldAsync(string secret, int database, string key, string field, string value, CancellationToken ct = default);
     Task<bool> DeleteHashFieldAsync(string secret, int database, string key, string field, CancellationToken ct = default);
 
-    // List (phase 1)
+    // List — Keys plan, not yet built
     Task<ListSlice> GetListSliceAsync(string secret, int database, string key, int headCount, int tailCount, CancellationToken ct = default);
     Task PushListAsync(string secret, int database, string key, string value, bool atHead, CancellationToken ct = default);
     Task TrimListAsync(string secret, int database, string key, long start, long stop, CancellationToken ct = default);
 
-    // Sorted set (phase 1)
+    // Sorted set — Keys plan, not yet built
     Task<SortedSetSlice> GetSortedSetRangeAsync(string secret, int database, string key, long start, long stop, bool descending, CancellationToken ct = default);
     Task AddSortedSetMemberAsync(string secret, int database, string key, string member, double score, CancellationToken ct = default);
     Task<double> IncrementSortedSetScoreAsync(string secret, int database, string key, string member, double by, CancellationToken ct = default);
 
-    // Set (phase 1)
+    // Set — Keys plan, not yet built
     Task<SetPage> ScanSetMembersAsync(string secret, int database, string key, long cursor, int count, CancellationToken ct = default);
     Task<bool> IsSetMemberAsync(string secret, int database, string key, string member, CancellationToken ct = default);
     Task AddSetMemberAsync(string secret, int database, string key, string member, CancellationToken ct = default);
@@ -300,7 +309,7 @@ unit tested with captured fixtures). `RedisOperations` itself stays thin
 and isn't unit tested directly, consistent with `docs/design.md` §8's
 Testcontainers deferral.
 
-## 5. Key scanning (phase 1)
+## 5. Key scanning (Keys plan design — not yet built)
 
 `ScanKeysAsync` never calls `KEYS`. It issues one raw `SCAN cursor MATCH
 pattern COUNT n` per call via `IDatabase.ExecuteAsync("SCAN", ...)`,
@@ -392,6 +401,34 @@ Conversely, `RedisConnectionFactory` rejects a Sentinel-topology connection
 with no service name before attempting to connect, rather than silently
 connecting to the sentinel node itself as if it were the primary.
 
+## 7a. Keys browser UI design (deferred — reference for the Keys plan, not built in phase 1)
+
+Preserved from this section's original draft (not deleted when §7 was
+corrected to describe only what phase 1 shipped) — the Keys plan should
+start from this, not re-derive it:
+
+- **`Pages/Keys.razor`** (`/p/redis/keys`): connection + database-index
+  picker in the header (round-tripped into the URL query string, matching
+  `ConnectionVhostPicker`'s pattern minus the vhost axis). Left pane: scan
+  progress bar + prefix tree (split on `:`, a plugin setting with default
+  `:`) + flat match list once a leaf prefix is expanded, each row showing
+  type tag / TTL-or-"no ttl" / size. Right pane: the selected key's value
+  editor, one Razor component per `RedisKeyType`
+  (`Components/StringEditor.razor`, `HashEditor.razor`, `ListEditor.razor`,
+  `SetEditor.razor`, `SortedSetEditor.razor`) swapped via a `@switch` on
+  type — mirroring mockup 1c's four side-by-side type panels, but shown
+  one at a time in the master/detail layout of 1b. Secret-pattern field
+  masking (`csrf`, `token`, `*secret*` — case-insensitive substring match,
+  a plugin setting) applies inside `HashEditor`'s field table; the "reveal"
+  action is itself audited (`redis.field.reveal`, `Safe` risk, since it's
+  read-only but sensitive).
+- **`Pages/SetTtlDialog.razor`, `DeleteByPatternDialog.razor`**: mockup 1f.
+  `DeleteByPatternDialog` calls `DryRunDeleteByPatternAsync` on open and
+  disables "Continue…" until the dry run completes.
+
+This pairs with §7a's data/interface counterparts, which are similarly
+marked "not yet built" rather than "phase 1" in §3-§5 and §9 below.
+
 ## 8. Dashboard problems and nav badge (phase 1 scope — corrected)
 
 Phase 1 implements a memory-pressure `GetDashboardProblemsAsync`:
@@ -412,6 +449,12 @@ public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsy
         "/p/redis/overview")];
 }
 ```
+
+(The snippet above is illustrative of the logic; what actually shipped
+splits it into a public `GetDashboardProblemsAsync` that constructs
+`new RedisOperations()` and an internal `GetDashboardProblemsAsyncForTesting(IRedisOperations, ...)`
+seam the tests substitute — same testability pattern RabbitMQ's
+`GetCachedSnapshotAsync` uses, see `docs/design.md` §6.9.)
 
 **Correction (post-implementation): `GetDashboardMetricsAsync` returns no
 metrics** (`[]`), not the "used memory %"/"hit ratio %" pair this section
@@ -434,18 +477,25 @@ the UI from "no pending entries" and requires no phase-1 stub.
 
 ## 9. Handlers
 
-Folder-per-resource under the plugin root (`Keys/`, `Overview/`), same
-shape as every other plugin. A shared `HandlerRunner` (copied and adapted
-from RabbitMQ's — `docs/design.md` §6.8 — plugins don't share code beyond
-`Sdk`) centralizes the resolve-secret → try → friendly-error → audit
-boilerplate for command handlers, and a plain resolve-secret → run for
-query handlers.
+Folder-per-resource under the plugin root, same shape as every other
+plugin — shipped so far is only `Overview/`. A shared `HandlerRunner`
+(copied and adapted from RabbitMQ's — `docs/design.md` §6.8 — plugins
+don't share code beyond `Sdk`) centralizes the resolve-secret → try →
+friendly-error boilerplate; **shipped today it has only the query-side
+`QueryAsync`**, since phase 1 has no command handlers (it's read-only).
 
-Audit action naming: `redis.{resource}.{verb}` — e.g. `redis.key.delete`,
-`redis.key.setttl`, `redis.pattern.delete`, `redis.hash.setfield`. Audit
-target: `"{connectionName}/db{n}/{key}"` (no vhost axis; database index
-takes its place) via a `HandlerRunner.Target(connectionName, database, key)`
-helper.
+The `Keys/` folder, its command handlers, the `CommandAsync`/
+`AuditQuietlyAsync` variants, and the `HandlerRunner.Target(connectionName,
+database, key)` helper described below are **Keys-plan design, not yet
+built** — the Keys plan is the first to need audited command handlers, so
+it adds them to `HandlerRunner` rather than phase 1 speculatively stubbing
+methods with no caller.
+
+Audit action naming (once the Keys plan adds commands): `redis.{resource}.{verb}` —
+e.g. `redis.key.delete`, `redis.key.setttl`, `redis.pattern.delete`,
+`redis.hash.setfield`. Audit target: `"{connectionName}/db{n}/{key}"` (no
+vhost axis; database index takes its place) via a
+`HandlerRunner.Target(connectionName, database, key)` helper.
 
 ## 10. Error handling
 

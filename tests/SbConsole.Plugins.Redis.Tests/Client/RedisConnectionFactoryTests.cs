@@ -34,4 +34,18 @@ public class RedisConnectionFactoryTests
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
+
+    [Fact]
+    public async Task Sentinel_with_a_whitespace_only_service_name_is_also_rejected()
+    {
+        // string.IsNullOrEmpty("  ") is false -- this must use IsNullOrWhiteSpace or a
+        // whitespace-only service name slips past the guard above.
+        var secret = new RedisConnectionSettings(
+            RedisTopology.Sentinel, ["sentinel-1:26379"], null, null, false, ServiceName: "   ", false, 0)
+            .ToSecretString();
+
+        var act = async () => await RedisConnectionFactory.ConnectAsync(secret, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
 }
