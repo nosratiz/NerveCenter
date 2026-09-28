@@ -57,9 +57,21 @@ pinned exactly like the other three plugins pin their client — see
 **Secret format.** Unlike Rabbit/Kafka/AWS's house `key=value;` convention,
 Redis's own client already has a well-documented, fully-featured connection
 string format (`ConfigurationOptions.Parse` / `.ToString()`) that natively
-supports multiple endpoints, TLS, ACL user/password, and comma/quote
-escaping for special characters in passwords. Reinventing a parser would be
-pure duplication. The secret is a single string, an envelope of two parts:
+supports multiple endpoints, TLS, and ACL user/password — reinventing a
+parser for all of that would be pure duplication. It does **not**, however,
+escape commas inside a value (comma is the field/endpoint separator with no
+escape syntax — a known, long-standing library limitation:
+[#680](https://github.com/StackExchange/StackExchange.Redis/issues/680),
+[#883](https://github.com/StackExchange/StackExchange.Redis/issues/883)), so
+a generated password containing a comma would silently corrupt the parse.
+`RedisConnectionSettings` therefore percent-encodes only the `User`/
+`Password` values (`Uri.EscapeDataString`/`UnescapeDataString`) before
+handing the string to `ConfigurationOptions.Parse`/`.ToString()` — genuinely
+reusing the library for every other field (endpoints, TLS, ServiceName,
+DefaultDatabase), with a minimal, targeted encoding layer on top for the
+one gap it has, the same shape as RabbitMQ's own percent-encoding precedent
+(`docs/design.md` §6.8) for a value its format can't otherwise carry safely.
+The secret is a single string, an envelope of two parts:
 
 ```
 "{topology}|{configurationOptionsString}"

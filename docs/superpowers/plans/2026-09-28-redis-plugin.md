@@ -182,6 +182,26 @@ public class RedisConnectionSettingsTests
         settings.EndpointHostPorts.Should().Equal("redis-01:6380");
         settings.DefaultDatabase.Should().Be(3);
     }
+
+    [Fact]
+    public void The_configuration_options_portion_is_a_genuine_ConfigurationOptions_string()
+    {
+        // Proves RedisConnectionSettings reuses StackExchange.Redis's own parser/serializer
+        // rather than a hand-rolled one: everything after the second '|' must be independently
+        // parseable by ConfigurationOptions.Parse and carry the same endpoint/Ssl/ServiceName —
+        // fields a hand-rolled parser could drop or corrupt without any of the other tests here
+        // noticing (they only ever round-trip through this class's own Parse/ToSecretString).
+        var secret = new RedisConnectionSettings(
+            RedisTopology.Sentinel, ["sentinel-1:26379", "sentinel-2:26379"], "sbconsole", "hunter2",
+            true, "uk-prod", false, 0).ToSecretString();
+
+        var configPortion = secret.Split('|', 3)[2];
+        var options = StackExchange.Redis.ConfigurationOptions.Parse(configPortion);
+
+        options.EndPoints.Should().HaveCount(2);
+        options.Ssl.Should().BeTrue();
+        options.ServiceName.Should().Be("uk-prod");
+    }
 }
 ```
 
@@ -237,13 +257,18 @@ public sealed record RedisConnectionSettings(
 
         var topology = Enum.Parse<RedisTopology>(parts[0], ignoreCase: true);
         var preferReplica = parts[1] == "1";
+        // Genuinely reuse StackExchange.Redis's own parser for everything (endpoints, TLS,
+        // ServiceName, DefaultDatabase) — the ONLY hand-written layer is decoding User/Password,
+        // because ConfigurationOptions has no escape syntax for a comma inside a value (comma is
+        // its field separator; see the design spec §2 for the upstream issue links). Every other
+        // field round-trips through the library exactly as it would for any other caller.
         var options = ConfigurationOptions.Parse(parts[2]);
 
         return new RedisConnectionSettings(
             topology,
             options.EndPoints.Select(EndpointToHostPort).ToList(),
-            options.User,
-            options.Password,
+            options.User is null ? null : Uri.UnescapeDataString(options.User),
+            options.Password is null ? null : Uri.UnescapeDataString(options.Password),
             options.Ssl,
             options.ServiceName,
             preferReplica,
@@ -252,18 +277,21 @@ public sealed record RedisConnectionSettings(
 
     public string ToSecretString()
     {
-        var options = ToConfigurationOptions();
+        var options = ToConfigurationOptionsCore(encodeCredentials: true);
         var topologyToken = Topology.ToString().ToLowerInvariant();
         var preferReplicaToken = PreferReplicaForReads ? "1" : "0";
         return $"{topologyToken}|{preferReplicaToken}|{options}";
     }
 
-    public ConfigurationOptions ToConfigurationOptions()
+    /// <summary>The real, connectable options — raw (unescaped) User/Password.</summary>
+    public ConfigurationOptions ToConfigurationOptions() => ToConfigurationOptionsCore(encodeCredentials: false);
+
+    private ConfigurationOptions ToConfigurationOptionsCore(bool encodeCredentials)
     {
         var options = new ConfigurationOptions
         {
-            User = User,
-            Password = Password,
+            User = EncodeIfNeeded(User, encodeCredentials),
+            Password = EncodeIfNeeded(Password, encodeCredentials),
             Ssl = Ssl,
             ServiceName = ServiceName,
             AllowAdmin = true, // SbConsole is an operator tool and needs MEMORY/SLOWLOG/CLIENT — the
@@ -278,6 +306,9 @@ public sealed record RedisConnectionSettings(
 
         return options;
     }
+
+    private static string? EncodeIfNeeded(string? value, bool encode) =>
+        value is null || !encode ? value : Uri.EscapeDataString(value);
 
     /// <summary>
     /// EndPoint.ToString() renders "AddressFamily/host:port" (e.g. "Unspecified/redis-01:6380"),
@@ -296,7 +327,7 @@ public sealed record RedisConnectionSettings(
 - [ ] **Step 8: Run the test to verify it passes**
 
 Run: `dotnet test tests/SbConsole.Plugins.Redis.Tests --filter "FullyQualifiedName~RedisConnectionSettingsTests"`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 9: Commit**
 
