@@ -1549,9 +1549,14 @@ Expected: build failure — `RedisMemoryByPrefixSampler` doesn't exist yet.
 // src/Plugins/SbConsole.Plugins.Redis/Client/RedisMemoryByPrefixSampler.cs
 namespace SbConsole.Plugins.Redis.Client;
 
-public static class RedisMemoryByPrefixSampler
+// internal, not public: this class only ever takes SampledKey (itself internal) as input,
+// so a public Summarize would be a CS0051 accessibility error (a public member exposing a
+// less-accessible type). Only RedisOperations (same assembly) and the test project (via
+// InternalsVisibleTo) ever call this — MemoryByPrefixEntry, the type that actually crosses
+// the public IRedisOperations boundary, stays public regardless.
+internal static class RedisMemoryByPrefixSampler
 {
-    public static IReadOnlyList<MemoryByPrefixEntry> Summarize(
+    internal static IReadOnlyList<MemoryByPrefixEntry> Summarize(
         IReadOnlyList<SampledKey> samples, char delimiter, int topN)
     {
         var groups = samples
