@@ -65,4 +65,67 @@ public class RedisConnectionFieldsTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("TLS");
     }
+
+    [Fact]
+    public void Typing_an_incomplete_host_port_does_not_crash_the_component()
+    {
+        // Immediate="true" means every keystroke round-trips through RaiseChangedAsync ->
+        // ToSecretString -> ConfigurationOptions.EndPoints.Add. Typing "host:6379" passes through
+        // the intermediate state "localhost:", which EndPoints.Add cannot parse and throws
+        // ArgumentException for -- this must be swallowed, not propagate into the Blazor circuit.
+        var initial = new RedisConnectionSettings(
+            RedisTopology.Standalone, ["localhost:6379"], null, null, false, null, false, 0)
+            .ToSecretString();
+
+        var cut = RenderFields(initial, out _);
+
+        var act = () => cut.Find("input#redis-conn-host").Input("localhost:");
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Completing_the_host_after_an_unparsable_intermediate_state_still_raises_secret_changed()
+    {
+        var initial = new RedisConnectionSettings(
+            RedisTopology.Standalone, ["localhost:6379"], null, null, false, null, false, 0)
+            .ToSecretString();
+
+        var cut = RenderFields(initial, out var emitted);
+
+        cut.Find("input#redis-conn-host").Input("localhost:");
+        cut.Find("input#redis-conn-host").Input("localhost:6379");
+
+        emitted.Should().NotBeEmpty();
+        RedisConnectionSettings.Parse(emitted.Last()).EndpointHostPorts.Should().Equal("localhost:6379");
+    }
+
+    [Fact]
+    public void Host_containing_a_comma_does_not_raise_secret_changed()
+    {
+        // A comma inside the host would silently corrupt the '|'-delimited secret envelope --
+        // ConfigurationOptions treats comma as its own field separator with no escape syntax.
+        var initial = new RedisConnectionSettings(
+            RedisTopology.Standalone, ["localhost:6379"], null, null, false, null, false, 0)
+            .ToSecretString();
+
+        var cut = RenderFields(initial, out var emitted);
+        var countBefore = emitted.Count;
+
+        var act = () => cut.Find("input#redis-conn-host").Input("host,x:6379");
+
+        act.Should().NotThrow();
+        emitted.Count.Should().Be(countBefore);
+    }
+
+    [Fact]
+    public void A_well_formed_but_invalid_initial_secret_renders_with_defaults_instead_of_throwing()
+    {
+        // "bogus|0|host:6379" has three '|'-delimited parts (so it does NOT hit the FormatException
+        // branch) but "bogus" isn't a RedisTopology member -- Enum.Parse throws ArgumentException,
+        // which OnInitialized's catch (ArgumentException) must also swallow.
+        var act = () => RenderFields("bogus|0|host:6379", out _);
+
+        act.Should().NotThrow();
+    }
 }

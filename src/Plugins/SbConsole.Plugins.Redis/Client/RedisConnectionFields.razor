@@ -83,10 +83,33 @@
 
     private Task RaiseChangedAsync()
     {
-        var settings = new RedisConnectionSettings(
-            _topology,
-            string.IsNullOrWhiteSpace(_host) ? [] : [_host],
-            _user, _password, _ssl, _serviceName, _preferReplica, DefaultDatabase: 0);
-        return SecretChanged.InvokeAsync(settings.ToSecretString());
+        // Immediate="true" on the host field means every keystroke lands here, including
+        // mid-typing states like "localhost:" (on the way to "localhost:6379") that
+        // ConfigurationOptions.EndPoints.Add cannot parse, and a host containing a comma (which
+        // would silently corrupt the '|'-delimited secret envelope, since ConfigurationOptions
+        // treats comma as its own field separator with no escape syntax). Building the secret
+        // string is wrapped so a not-yet-valid host just skips this keystroke's SecretChanged
+        // (the last-known-good secret stays in effect) instead of throwing out of a Blazor event
+        // handler and crashing the circuit -- there's no ErrorBoundary around the connection form.
+        if (_host.Contains(','))
+        {
+            return Task.CompletedTask;
+        }
+
+        string secret;
+        try
+        {
+            var settings = new RedisConnectionSettings(
+                _topology,
+                string.IsNullOrWhiteSpace(_host) ? [] : [_host],
+                _user, _password, _ssl, _serviceName, _preferReplica, DefaultDatabase: 0);
+            secret = settings.ToSecretString();
+        }
+        catch (ArgumentException)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SecretChanged.InvokeAsync(secret);
     }
 }
