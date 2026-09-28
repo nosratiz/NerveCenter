@@ -1,0 +1,14 @@
+.ste-summary { font-size: 13px; color: var(--rds-muted); margin-bottom: 12px; }
+.ste-check { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.ste ::deep .ste-mono input { font-family: var(--rds-mono); font-size: 13px; }
+.ste ::deep .ste-mono input::placeholder { font-family: var(--mud-typography-default-family); font-size: 14px; }
+.ste ::deep .ste-grow { flex: 1 1 auto; }
+.ste ::deep .mud-input-control { margin-top: 0; }
+.ste-answer { font-size: 13px; white-space: nowrap; }
+.ste-yes { color: var(--rds-ok); }
+.ste-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.ste-pills .rds-pill { height: 28px; padding: 0 11px; font-size: 13px; border-color: transparent; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ste-pills .rds-pill.rds-pill-accent { border-color: color-mix(in srgb, var(--rds-accent) 60%, transparent); cursor: pointer; font-family: var(--rds-mono); }
+.ste-remove { border: 0; background: none; color: var(--rds-danger); cursor: pointer; margin-left: 6px; padding: 0; font-size: 14px; line-height: 1; }
+.ste-composer { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.ste-actions { display: flex; align-items: center; gap: 16px; margin-top: 18px; }

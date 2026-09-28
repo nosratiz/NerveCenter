@@ -1,0 +1,25 @@
+.le-summary { font-size: 13px; color: var(--rds-muted); margin-bottom: 10px; }
+.le-rows { border-top: 1px solid transparent; }
+.le-row {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--rds-line);
+    font-family: var(--rds-mono);
+    font-size: 13px;
+}
+.le-row:last-child { border-bottom: 0; }
+.le-index { width: 44px; flex: none; text-align: right; color: var(--rds-muted); font-variant-numeric: tabular-nums; }
+.le-value { min-width: 0; overflow-wrap: anywhere; }
+.le-gap .le-value { color: var(--rds-muted); }
+.le-composer { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.le ::deep .le-mono input { font-family: var(--rds-mono); font-size: 13px; }
+.le ::deep .le-grow { flex: 1 1 auto; }
+.le ::deep .le-num { flex: 0 0 96px; }
+.le ::deep .mud-input-control { margin-top: 0; }
+.le-label, .le-hint { font-size: 12px; white-space: nowrap; }
+.le-danger-btn { color: var(--rds-danger); border-color: color-mix(in srgb, var(--rds-danger) 60%, transparent); }
+.le-actions { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
+.le-side-on { text-decoration: underline; text-underline-offset: 3px; }
+.le-side-off { opacity: .7; }

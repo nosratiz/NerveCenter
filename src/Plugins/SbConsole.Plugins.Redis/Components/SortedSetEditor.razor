@@ -6,44 +6,79 @@
 @inject IncrementSortedSetScoreCommandHandler IncrHandler
 @inject ISnackbar Snackbar
 
-@if (_loading)
-{
-    <MudProgressCircular Class="sortedset-editor-loading" Size="Size.Small" Indeterminate="true" />
-}
-else if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="sortedset-editor-error">@_error</MudAlert>
-}
-else
-{
-    <MudText Typo="Typo.caption" Class="sortedset-editor-cardinality mud-text-secondary">@_slice?.Cardinality member(s)</MudText>
-    <MudSimpleTable Class="sortedset-editor-members" Dense="true" Elevation="0">
-        <thead><tr><th>Member</th><th>Score</th></tr></thead>
-        <tbody>
-            @foreach (var entry in _slice?.Entries ?? [])
-            {
-                <tr class="sortedset-entry-row">
-                    <td class="sortedset-entry-member" style="font-family:monospace">@entry.Member</td>
-                    <td class="sortedset-entry-score">@entry.Score.ToString(CultureInfo.InvariantCulture)</td>
-                </tr>
-            }
-        </tbody>
-    </MudSimpleTable>
+@* Sorted-set value panel (mockup 1c, third column): a ranking, highest score first, each member
+   with a bar scaled to the top score in view; a ZRANGE window (start..stop by rank) and the two
+   write verbs this type is used through -- ZADD and ZINCRBY. *@
+<div class="ze">
+    @if (_loading && _slice is null)
+    {
+        <div class="rds-skeleton sortedset-editor-loading"></div>
+        <div class="rds-skeleton" style="width:70%"></div>
+    }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="sortedset-editor-error">@_error</MudAlert>
+    }
+    else if (_slice is not null)
+    {
+        <div class="ze-summary sortedset-editor-cardinality">ZCARD @RedisFormat.Count(_slice.Cardinality) · by score, desc</div>
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Add / set member score</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudTextField id="sortedset-editor-new-member" data-testid="sortedset-editor-new-member" T="string" Value="_newMember" ValueChanged="v => _newMember = v ?? string.Empty" Label="Member" Immediate="true" />
-        <MudNumericField id="sortedset-editor-new-score" data-testid="sortedset-editor-new-score" T="double" Value="_newScore" ValueChanged="v => _newScore = v" Label="Score" Immediate="true" HideSpinButtons="true" />
-        <MudButton Class="sortedset-editor-add-member" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_newMember)" OnClick="AddAsync">Set</MudButton>
-    </div>
+        @if (_slice.Entries.Count == 0)
+        {
+            <div class="rds-empty sortedset-editor-empty">@(_slice.Cardinality == 0 ? "This sorted set is empty." : "No members in this rank range.")</div>
+        }
+        else
+        {
+            var top = TopScore;
+            <div class="ze-rows">
+                @foreach (var entry in _slice.Entries)
+                {
+                    <div class="ze-row sortedset-entry-row">
+                        <span class="ze-member sortedset-entry-member" title="@entry.Member">@entry.Member</span>
+                        <span class="rds-bar ze-bar sortedset-entry-bar"><span style="@BarStyle(entry.Score, top)"></span></span>
+                        <span class="rds-num ze-score sortedset-entry-score">@FormatScore(entry.Score)</span>
+                    </div>
+                }
+            </div>
+        }
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Increment score</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudTextField id="sortedset-editor-incr-member" data-testid="sortedset-editor-incr-member" T="string" Value="_incrMember" ValueChanged="v => _incrMember = v ?? string.Empty" Label="Member" Immediate="true" />
-        <MudNumericField id="sortedset-editor-incr-by" data-testid="sortedset-editor-incr-by" T="double" Value="_incrBy" ValueChanged="v => _incrBy = v" Label="By" Immediate="true" HideSpinButtons="true" />
-        <MudButton Class="sortedset-editor-increment" Variant="Variant.Outlined" Disabled="@string.IsNullOrWhiteSpace(_incrMember)" OnClick="IncrementAsync">Increment</MudButton>
-    </div>
-}
+        <div class="ze-range">
+            <span class="rds-muted">Range</span>
+            <MudNumericField id="sortedset-editor-range-start" data-testid="sortedset-editor-range-start" T="long" Class="ze-mono ze-num" Value="_rangeStart"
+                             ValueChanged="OnRangeStartChangedAsync" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+            <span class="rds-muted">to</span>
+            <MudNumericField id="sortedset-editor-range-stop" data-testid="sortedset-editor-range-stop" T="long" Class="ze-mono ze-num" Value="_rangeStop"
+                             ValueChanged="OnRangeStopChangedAsync" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+        </div>
+
+        @if (_adding)
+        {
+            <div class="ze-composer">
+                <MudTextField id="sortedset-editor-new-member" data-testid="sortedset-editor-new-member" T="string" Class="ze-mono ze-grow" Value="_newMember"
+                              ValueChanged="v => _newMember = v ?? string.Empty" Placeholder="member" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudNumericField id="sortedset-editor-new-score" data-testid="sortedset-editor-new-score" T="double" Class="ze-mono ze-num" Value="_newScore"
+                                 ValueChanged="v => _newScore = v" Placeholder="score" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <button type="button" class="rds-btn-primary sortedset-editor-add-member" disabled="@string.IsNullOrWhiteSpace(_newMember)" @onclick="AddAsync">ZADD</button>
+            </div>
+        }
+
+        @if (_incrementing)
+        {
+            <div class="ze-composer">
+                <MudTextField id="sortedset-editor-incr-member" data-testid="sortedset-editor-incr-member" T="string" Class="ze-mono ze-grow" Value="_incrMember"
+                              ValueChanged="v => _incrMember = v ?? string.Empty" Placeholder="member" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudNumericField id="sortedset-editor-incr-by" data-testid="sortedset-editor-incr-by" T="double" Class="ze-mono ze-num" Value="_incrBy"
+                                 ValueChanged="v => _incrBy = v" Placeholder="by" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <button type="button" class="rds-btn-primary sortedset-editor-increment" disabled="@string.IsNullOrWhiteSpace(_incrMember)" @onclick="IncrementAsync">ZINCRBY</button>
+            </div>
+        }
+
+        <div class="ze-actions">
+            <button type="button" class="rds-btn sortedset-editor-add-toggle" @onclick="() => { _adding = !_adding; _incrementing = false; }">Add member</button>
+            <button type="button" class="rds-link sortedset-editor-incr-toggle" @onclick="() => { _incrementing = !_incrementing; _adding = false; }">Incr score</button>
+        </div>
+    }
+</div>
 
 @code {
     [Parameter] public Guid ConnectionId { get; set; }
@@ -51,32 +86,77 @@ else
     [Parameter] public int Database { get; set; }
     [Parameter] public string Key { get; set; } = "";
 
-    private const long RangeStop = 49;
+    /// <summary>Raised with ZCARD after each load.</summary>
+    [Parameter] public EventCallback<long> CountChanged { get; set; }
+
+    private const long DefaultRangeStop = 49;
 
     private SortedSetSlice? _slice;
     private bool _loading;
     private string? _error;
+    private long _rangeStart;
+    private long _rangeStop = DefaultRangeStop;
+    private bool _adding;
+    private bool _incrementing;
     private string _newMember = "";
     private double _newScore;
     private string _incrMember = "";
     private double _incrBy = 1;
+    private string? _loadedIdentity;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        var identity = $"{ConnectionId}/{Database}/{Key}";
+        if (_loadedIdentity != identity)
+        {
+            _loadedIdentity = identity;
+            _slice = null;
+            _rangeStart = 0;
+            _rangeStop = DefaultRangeStop;
+            _adding = false;
+            _incrementing = false;
+            await LoadAsync();
+        }
+    }
+
+    /// <summary>Bars scale to the largest magnitude in view (descending order puts it first, but negative scores make "first" unreliable).</summary>
+    private double TopScore => _slice is null || _slice.Entries.Count == 0 ? 0 : _slice.Entries.Max(e => Math.Abs(e.Score));
+
+    private static string BarStyle(double score, double top)
+    {
+        var pct = top <= 0 ? 0 : Math.Round(Math.Abs(score) / top * 100, 1);
+        return string.Create(CultureInfo.InvariantCulture, $"width:{pct}%");
+    }
+
+    private static string FormatScore(double score) => score.ToString("#,0.####", CultureInfo.InvariantCulture);
 
     private async Task LoadAsync()
     {
         _loading = true;
         _error = null;
-        var result = await QueryHandler.GetSortedSetRangeAsync(ConnectionId, Database, Key, 0, RangeStop, descending: true);
+        var result = await QueryHandler.GetSortedSetRangeAsync(ConnectionId, Database, Key, _rangeStart, _rangeStop, descending: true);
         if (result.IsSuccess)
         {
             _slice = result.Value;
+            await CountChanged.InvokeAsync(_slice!.Cardinality);
         }
         else
         {
             _error = result.Error;
         }
         _loading = false;
+    }
+
+    private async Task OnRangeStartChangedAsync(long value)
+    {
+        _rangeStart = Math.Max(0, value);
+        await LoadAsync();
+    }
+
+    private async Task OnRangeStopChangedAsync(long value)
+    {
+        _rangeStop = Math.Max(0, value);
+        await LoadAsync();
     }
 
     private async Task AddAsync()
@@ -92,6 +172,7 @@ else
             Snackbar.Add($"Set {_newMember}", Severity.Success);
             _newMember = "";
             _newScore = 0;
+            _adding = false;
             await LoadAsync();
         }
         else

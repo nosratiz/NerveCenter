@@ -1,0 +1,194 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject SetStringCommandHandler SetStringHandler
+@inject SetHashFieldCommandHandler SetHashFieldHandler
+@inject PushListCommandHandler PushListHandler
+@inject AddSetMemberCommandHandler AddSetMemberHandler
+@inject AddSortedSetMemberCommandHandler AddSortedSetMemberHandler
+@inject SetTtlCommandHandler SetTtlHandler
+
+@* "+ Add key" (mockup 1b header). Redis has no "create empty key" -- a key exists once it holds
+   its first value -- so this collects the name, the type and that first value, then runs the
+   type's ordinary audited write command (SET / HSET / RPUSH / SADD / ZADD) and, if a TTL was
+   given, SetTtl after it (strings take the TTL in the SET itself). It refuses a name that already
+   exists rather than silently writing into someone else's key. *@
+<MudDialog>
+    <DialogContent>
+        <div class="rds-page ak">
+            <label class="ak-label" for="addkey-name">Key name</label>
+            <MudTextField id="addkey-name" data-testid="addkey-name" T="string" Class="ak-mono" Value="_name" ValueChanged="v => _name = v ?? string.Empty"
+                          Placeholder="e.g. session:u:77120" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" AutoFocus="true" />
+
+            <div class="ak-label">Type</div>
+            <div class="rds-segmented ak-types">
+                @foreach (var (type, label) in Types)
+                {
+                    <button type="button" class="@($"addkey-type-{label}" + (type == _type ? " rds-active" : ""))" @onclick="() => _type = type">@label</button>
+                }
+            </div>
+
+            <div class="ak-label">@FirstValueLabel</div>
+            @if (_type == RedisKeyType.Hash)
+            {
+                <div class="ak-pair">
+                    <MudTextField id="addkey-field" data-testid="addkey-field" T="string" Class="ak-mono ak-field" Value="_field" ValueChanged="v => _field = v ?? string.Empty"
+                                  Placeholder="field" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <MudTextField id="addkey-value" data-testid="addkey-value" T="string" Class="ak-mono ak-grow" Value="_value" ValueChanged="v => _value = v ?? string.Empty"
+                                  Placeholder="value" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </div>
+            }
+            else if (_type == RedisKeyType.SortedSet)
+            {
+                <div class="ak-pair">
+                    <MudTextField id="addkey-value" data-testid="addkey-value" T="string" Class="ak-mono ak-grow" Value="_value" ValueChanged="v => _value = v ?? string.Empty"
+                                  Placeholder="member" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <MudNumericField id="addkey-score" data-testid="addkey-score" T="double" Class="ak-mono ak-score" Value="_score" ValueChanged="v => _score = v"
+                                     Placeholder="score" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </div>
+            }
+            else
+            {
+                <MudTextField id="addkey-value" data-testid="addkey-value" T="string" Class="ak-mono" Value="_value" ValueChanged="v => _value = v ?? string.Empty"
+                              Placeholder="@ValuePlaceholder" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="@(_type == RedisKeyType.String ? 4 : 1)" />
+            }
+
+            <label class="ak-label" for="addkey-ttl">TTL <span class="rds-muted">(seconds, optional — blank means no expiry)</span></label>
+            <MudNumericField id="addkey-ttl" data-testid="addkey-ttl" T="long?" Class="ak-mono ak-ttl" Value="_ttlSeconds" ValueChanged="v => _ttlSeconds = v"
+                             Placeholder="none" Min="1" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Class="addkey-error ak-error" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+
+            <div class="ak-actions">
+                @if (_busy)
+                {
+                    <MudProgressCircular Class="addkey-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                }
+                <button type="button" class="rds-btn addkey-cancel" @onclick="Cancel">Cancel</button>
+                <button type="button" class="rds-btn-primary addkey-submit" disabled="@(!CanSubmit || _busy)" @onclick="CreateAsync">Create @CommandName</button>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+
+    /// <summary>The dialog's result on success, so the Keys page can select the new key straight away.</summary>
+    public sealed record AddedKey(string Key, RedisKeyType Type, TimeSpan? Ttl);
+
+    private static readonly (RedisKeyType Type, string Label)[] Types =
+    [
+        (RedisKeyType.String, "string"), (RedisKeyType.Hash, "hash"), (RedisKeyType.List, "list"),
+        (RedisKeyType.Set, "set"), (RedisKeyType.SortedSet, "zset"),
+    ];
+
+    private string _name = "";
+    private RedisKeyType _type = RedisKeyType.String;
+    private string _field = "";
+    private string _value = "";
+    private double _score;
+    private long? _ttlSeconds;
+    private string? _error;
+    private bool _busy;
+
+    private bool CanSubmit => !string.IsNullOrWhiteSpace(_name) && _type switch
+    {
+        RedisKeyType.Hash => !string.IsNullOrEmpty(_field),
+        RedisKeyType.String => true,
+        _ => !string.IsNullOrEmpty(_value),
+    } && _ttlSeconds is null or > 0;
+
+    private string FirstValueLabel => _type switch
+    {
+        RedisKeyType.Hash => "First field",
+        RedisKeyType.List => "First item",
+        RedisKeyType.Set => "First member",
+        RedisKeyType.SortedSet => "First member and score",
+        _ => "Value",
+    };
+
+    private string ValuePlaceholder => _type switch
+    {
+        RedisKeyType.List => "item",
+        RedisKeyType.Set => "member",
+        _ => "value (JSON or text)",
+    };
+
+    private string CommandName => _type switch
+    {
+        RedisKeyType.Hash => "(HSET)",
+        RedisKeyType.List => "(RPUSH)",
+        RedisKeyType.Set => "(SADD)",
+        RedisKeyType.SortedSet => "(ZADD)",
+        _ => "(SET)",
+    };
+
+    private async Task CreateAsync()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var key = _name.Trim();
+            var existing = await QueryHandler.GetTypeAsync(ConnectionId, Database, key);
+            if (!existing.IsSuccess)
+            {
+                _error = existing.Error;
+                return;
+            }
+
+            if (existing.Value != RedisKeyType.Unknown)
+            {
+                _error = $"{key} already exists (a {existing.Value.ToString().ToLowerInvariant()}) — open it from the key list instead.";
+                return;
+            }
+
+            TimeSpan? ttl = _ttlSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null;
+            var written = _type switch
+            {
+                RedisKeyType.Hash => await SetHashFieldHandler.HandleAsync(new SetHashFieldCommand(ConnectionId, ConnectionName, Database, key, _field, _value)),
+                RedisKeyType.List => await PushListHandler.HandleAsync(new PushListCommand(ConnectionId, ConnectionName, Database, key, _value, AtHead: false)),
+                RedisKeyType.Set => await AddSetMemberHandler.HandleAsync(new AddSetMemberCommand(ConnectionId, ConnectionName, Database, key, _value)),
+                RedisKeyType.SortedSet => await AddSortedSetMemberHandler.HandleAsync(new AddSortedSetMemberCommand(ConnectionId, ConnectionName, Database, key, _value, _score)),
+                _ => await SetStringHandler.HandleAsync(new SetStringCommand(ConnectionId, ConnectionName, Database, key, _value, ttl)),
+            };
+            if (!written.IsSuccess)
+            {
+                _error = written.Error;
+                return;
+            }
+
+            if (ttl is { } expireIn && _type != RedisKeyType.String)
+            {
+                var expired = await SetTtlHandler.HandleAsync(new SetTtlCommand(ConnectionId, ConnectionName, new SetTtlRequest(Database, key, expireIn, null, false)));
+                if (!expired.IsSuccess)
+                {
+                    // The key exists now, just without its TTL -- say so rather than pretend it failed.
+                    _error = $"Created {key}, but setting its TTL failed: {expired.Error}";
+                    return;
+                }
+            }
+
+            MudDialog.Close(DialogResult.Ok(new AddedKey(key, _type, ttl)));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -6,50 +6,81 @@
 @inject IConfirmationService Confirmation
 @inject ISnackbar Snackbar
 
-@if (_loading)
-{
-    <MudProgressCircular Class="list-editor-loading" Size="Size.Small" Indeterminate="true" />
-}
-else if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="list-editor-error">@_error</MudAlert>
-}
-else if (_slice is not null)
-{
-    <MudText Typo="Typo.caption" Class="list-editor-length mud-text-secondary">length @_slice.Length</MudText>
-    <MudText Typo="Typo.subtitle2" Class="mt-2">Head</MudText>
-    <MudSimpleTable Class="list-editor-head" Dense="true" Elevation="0">
-        <tbody>
-            @foreach (var entry in _slice.Head)
-            {
-                <tr class="list-entry-row"><td class="list-entry-index">@entry.Index</td><td class="list-entry-value" style="font-family:monospace">@entry.Value</td></tr>
-            }
-        </tbody>
-    </MudSimpleTable>
-    <MudText Typo="Typo.subtitle2" Class="mt-2">Tail</MudText>
-    <MudSimpleTable Class="list-editor-tail" Dense="true" Elevation="0">
-        <tbody>
-            @foreach (var entry in _slice.Tail)
-            {
-                <tr class="list-entry-row"><td class="list-entry-index">@entry.Index</td><td class="list-entry-value" style="font-family:monospace">@entry.Value</td></tr>
-            }
-        </tbody>
-    </MudSimpleTable>
+@* List value panel (mockup 1c, second column): read head -> tail, so index 0 is the next LPOP;
+   the first rows, a "… n more" gap, then the tail with Redis's own negative indexes. Push is
+   one composer whose side the "Head / Tail" link flips; Trim is destructive and confirmed. *@
+<div class="le">
+    @if (_loading && _slice is null)
+    {
+        <div class="rds-skeleton list-editor-loading"></div>
+        <div class="rds-skeleton" style="width:70%"></div>
+    }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="list-editor-error">@_error</MudAlert>
+    }
+    else if (_slice is not null)
+    {
+        <div class="le-summary list-editor-length">LLEN @RedisFormat.Count(_slice.Length) · head is next to pop</div>
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Push</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudTextField id="list-editor-push-value" data-testid="list-editor-push-value" T="string" Value="_pushValue" ValueChanged="v => _pushValue = v ?? string.Empty" Label="Value" Immediate="true" />
-        <MudButton Class="list-editor-push-head" Variant="Variant.Outlined" Disabled="@string.IsNullOrEmpty(_pushValue)" OnClick="@(() => PushAsync(atHead: true))">Push head</MudButton>
-        <MudButton Class="list-editor-push-tail" Variant="Variant.Outlined" Disabled="@string.IsNullOrEmpty(_pushValue)" OnClick="@(() => PushAsync(atHead: false))">Push tail</MudButton>
-    </div>
+        @if (_slice.Length == 0)
+        {
+            <div class="rds-empty list-editor-empty">This list is empty.</div>
+        }
+        else
+        {
+            <div class="le-rows">
+                @foreach (var entry in HeadRows)
+                {
+                    @Row(entry)
+                }
+                @if (Gap > 0)
+                {
+                    <div class="le-row le-gap list-editor-gap">
+                        <span class="le-index">…</span>
+                        <span class="le-value">@RedisFormat.Count(Gap) more</span>
+                    </div>
+                }
+                @foreach (var entry in TailRows)
+                {
+                    @Row(entry)
+                }
+            </div>
+        }
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Trim (keep this range only — destructive)</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudNumericField id="list-editor-trim-start" data-testid="list-editor-trim-start" T="long" Value="_trimStart" ValueChanged="v => _trimStart = v" Label="Start" Immediate="true" HideSpinButtons="true" />
-        <MudNumericField id="list-editor-trim-stop" data-testid="list-editor-trim-stop" T="long" Value="_trimStop" ValueChanged="v => _trimStop = v" Label="Stop" Immediate="true" HideSpinButtons="true" />
-        <MudButton Class="list-editor-trim" Variant="Variant.Outlined" Color="Color.Error" OnClick="TrimAsync">Trim</MudButton>
-    </div>
-}
+        @if (_pushing)
+        {
+            <div class="le-composer">
+                <MudTextField id="list-editor-push-value" data-testid="list-editor-push-value" T="string" Class="le-mono le-grow" Value="_pushValue"
+                              ValueChanged="v => _pushValue = v ?? string.Empty" Placeholder="@($"value to push at the {(_pushHead ? "head" : "tail")}")"
+                              Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <button type="button" class="rds-btn-primary list-editor-push-submit" disabled="@string.IsNullOrEmpty(_pushValue)" @onclick="PushAsync">@(_pushHead ? "LPUSH" : "RPUSH")</button>
+            </div>
+        }
+
+        @if (_trimming)
+        {
+            <div class="le-composer">
+                <span class="rds-muted le-label">Keep</span>
+                <MudNumericField id="list-editor-trim-start" data-testid="list-editor-trim-start" T="long" Class="le-mono le-num" Value="_trimStart"
+                                 ValueChanged="v => _trimStart = v" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <span class="rds-muted le-label">to</span>
+                <MudNumericField id="list-editor-trim-stop" data-testid="list-editor-trim-stop" T="long" Class="le-mono le-num" Value="_trimStop"
+                                 ValueChanged="v => _trimStop = v" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <button type="button" class="rds-btn le-danger-btn list-editor-trim" @onclick="TrimAsync">LTRIM</button>
+                <span class="rds-muted le-hint">drops everything outside the range</span>
+            </div>
+        }
+
+        <div class="le-actions">
+            <button type="button" class="rds-btn list-editor-push" @onclick="TogglePush">Push</button>
+            <button type="button" class="rds-link list-editor-push-side" title="Which end Push writes to" @onclick="() => _pushHead = !_pushHead">
+                <span class="@(_pushHead ? "le-side-on" : "le-side-off")">Head</span> / <span class="@(_pushHead ? "le-side-off" : "le-side-on")">Tail</span>
+            </button>
+            <button type="button" class="rds-link-danger list-editor-trim-toggle" @onclick="() => _trimming = !_trimming">Trim…</button>
+        </div>
+    }
+</div>
 
 @code {
     [Parameter] public Guid ConnectionId { get; set; }
@@ -58,25 +89,80 @@ else if (_slice is not null)
     [Parameter] public string Key { get; set; } = "";
     [Parameter] public bool IsProd { get; set; }
 
-    private const int Window = 20;
+    /// <summary>Raised with LLEN after each load.</summary>
+    [Parameter] public EventCallback<long> CountChanged { get; set; }
+
+    private const int HeadWindow = 10;
+    private const int TailWindow = 3;
+    private const int PreviewChars = 96;
 
     private ListSlice? _slice;
     private bool _loading;
     private string? _error;
+    private bool _pushing;
+    private bool _pushHead = true;
+    private bool _trimming;
     private string _pushValue = "";
     private long _trimStart;
     private long _trimStop = -1;
+    private string? _loadedIdentity;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        var identity = $"{ConnectionId}/{Database}/{Key}";
+        if (_loadedIdentity != identity)
+        {
+            _loadedIdentity = identity;
+            _slice = null;
+            _pushing = false;
+            _trimming = false;
+            await LoadAsync();
+        }
+    }
+
+    private IEnumerable<ListEntry> HeadRows => _slice?.Head ?? [];
+
+    /// <summary>Tail rows that aren't already shown as head rows. When head and tail overlap (a short list) they're re-labelled with positive indexes so each element appears once.</summary>
+    private IEnumerable<ListEntry> TailRows
+    {
+        get
+        {
+            if (_slice is null)
+            {
+                return [];
+            }
+
+            var headCount = _slice.Head.Count;
+            if (_slice.Length > headCount + _slice.Tail.Count)
+            {
+                return _slice.Tail;
+            }
+
+            return _slice.Tail
+                .Select(e => e with { Index = _slice.Length + e.Index })
+                .Where(e => e.Index >= headCount);
+        }
+    }
+
+    private long Gap => _slice is null ? 0 : Math.Max(0, _slice.Length - _slice.Head.Count - _slice.Tail.Count);
+
+    private static RenderFragment Row(ListEntry entry) => __builder =>
+    {
+        <div class="le-row list-entry-row">
+            <span class="le-index list-entry-index">@entry.Index</span>
+            <span class="le-value list-entry-value" title="@(entry.Value.Length > PreviewChars && entry.Value.Length < 2048 ? entry.Value : null)">@(entry.Value.Length > PreviewChars ? entry.Value[..PreviewChars] + "…" : entry.Value)</span>
+        </div>
+    };
 
     private async Task LoadAsync()
     {
         _loading = true;
         _error = null;
-        var result = await QueryHandler.GetListSliceAsync(ConnectionId, Database, Key, Window, Window);
+        var result = await QueryHandler.GetListSliceAsync(ConnectionId, Database, Key, HeadWindow, TailWindow);
         if (result.IsSuccess)
         {
             _slice = result.Value;
+            await CountChanged.InvokeAsync(_slice!.Length);
         }
         else
         {
@@ -85,17 +171,23 @@ else if (_slice is not null)
         _loading = false;
     }
 
-    private async Task PushAsync(bool atHead)
+    private void TogglePush()
+    {
+        _pushing = !_pushing;
+        _pushValue = "";
+    }
+
+    private async Task PushAsync()
     {
         if (string.IsNullOrEmpty(_pushValue))
         {
             return;
         }
 
-        var result = await PushHandler.HandleAsync(new PushListCommand(ConnectionId, ConnectionName, Database, Key, _pushValue, atHead));
+        var result = await PushHandler.HandleAsync(new PushListCommand(ConnectionId, ConnectionName, Database, Key, _pushValue, _pushHead));
         if (result.IsSuccess)
         {
-            Snackbar.Add("Pushed", Severity.Success);
+            Snackbar.Add(_pushHead ? "Pushed to head" : "Pushed to tail", Severity.Success);
             _pushValue = "";
             await LoadAsync();
         }
@@ -118,6 +210,7 @@ else if (_slice is not null)
         if (result.IsSuccess)
         {
             Snackbar.Add($"Trimmed {Key}", Severity.Success);
+            _trimming = false;
             await LoadAsync();
         }
         else

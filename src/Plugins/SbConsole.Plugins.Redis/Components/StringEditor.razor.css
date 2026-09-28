@@ -1,0 +1,5 @@
+.se-summary { font-size: 13px; color: var(--rds-muted); margin-bottom: 12px; }
+.se-views { margin-bottom: 12px; }
+.se ::deep .se-code { min-height: 160px; max-height: 520px; overflow: auto; border-color: transparent; }
+.se-actions { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+.se ::deep .se-edit textarea { font-family: var(--rds-mono); font-size: 13px; }

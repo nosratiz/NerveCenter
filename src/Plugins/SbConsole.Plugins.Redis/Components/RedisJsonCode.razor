@@ -1,0 +1,51 @@
+@* A read-only JSON block for the value editors (mockup 1c string panel, hash JSON view): the
+   RedisJsonLayout pretty-print with keys/strings/scalars tinted. Built with RenderTreeBuilder so
+   no Razor whitespace leaks into the <pre>. Falls back to the raw text if it isn't valid JSON. *@
+<pre class="@("rds-code rjc " + Class)">@Body</pre>
+
+@code {
+    [Parameter, EditorRequired] public string Json { get; set; } = "";
+
+    /// <summary>Extra classes for the pre (test markers, sizing).</summary>
+    [Parameter] public string? Class { get; set; }
+
+    private string? _laidOutFor;
+    private IReadOnlyList<JsonToken>? _tokens;
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_laidOutFor, Json))
+        {
+            _laidOutFor = Json;
+            _tokens = RedisJsonLayout.Tokenize(Json);
+        }
+    }
+
+    private RenderFragment Body => builder =>
+    {
+        if (_tokens is null)
+        {
+            builder.AddContent(0, Json);
+            return;
+        }
+
+        foreach (var token in _tokens)
+        {
+            if (token.Kind == JsonTokenKind.Punctuation)
+            {
+                builder.AddContent(1, token.Text);
+                continue;
+            }
+
+            builder.OpenElement(2, "span");
+            builder.AddAttribute(3, "class", token.Kind switch
+            {
+                JsonTokenKind.Key => "rjc-k",
+                JsonTokenKind.String => "rjc-s",
+                _ => "rjc-n",
+            });
+            builder.AddContent(4, token.Text);
+            builder.CloseElement();
+        }
+    };
+}
