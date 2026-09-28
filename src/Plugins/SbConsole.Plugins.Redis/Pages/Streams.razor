@@ -117,7 +117,7 @@
             </RedisStatTile>
         </div>
 
-        <div class="rds-split streams-split">
+        <div class="@("rds-split streams-split" + (_groups.Count == 0 ? " streams-split-compact" : ""))">
             @* ---- left: consumer groups + the selected group's consumers ---- *@
             <div class="rds-pane">
                 <div class="rds-pane-section">
@@ -564,9 +564,10 @@
 
             _pendingByGroup = pending;
 
+            // Open on the group most worth looking at (mockup 1d opens on the backed-up one), else the first.
             if (_selectedGroup is null || _groups.All(g => g.Name != _selectedGroup))
             {
-                _selectedGroup = _groups.FirstOrDefault()?.Name;
+                _selectedGroup = HotGroup ?? _groups.FirstOrDefault()?.Name;
             }
 
             var visible = Pending.Select(p => p.Id).ToHashSet();

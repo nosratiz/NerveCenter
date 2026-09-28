@@ -194,7 +194,7 @@ public class StreamsPageTests : RedisPageTestBase
     // ---- consumer groups ----
 
     [Fact]
-    public async Task Groups_are_listed_with_lag_pending_and_consumers_and_the_first_is_selected()
+    public async Task Groups_are_listed_with_lag_pending_and_consumers_and_the_hot_group_is_selected()
     {
         SetupOrders();
         var cut = await RenderStreamsAsync();
@@ -203,8 +203,24 @@ public class StreamsPageTests : RedisPageTestBase
         billing.QuerySelector(".group-row-lag")!.TextContent.Should().Be("140");
         billing.QuerySelector(".group-row-pending")!.TextContent.Should().Be("3");
         billing.QuerySelector(".group-row-consumers")!.TextContent.Should().Be("2");
+        cut.Find(".group-row[data-group='billing']").ClassList.Should().Contain("rds-selected");
+        cut.Find(".group-row[data-group='fulfilment']").ClassList.Should().NotContain("rds-selected");
+        cut.Find(".streams-consumers-label").TextContent.Should().Be("billing — consumers");
+    }
+
+    [Fact]
+    public async Task Without_a_hot_group_the_first_group_is_selected()
+    {
+        SetupOrders();
+        Operations.GetStreamConsumerGroupsAsync(Secret, 0, Key, Arg.Any<CancellationToken>()).Returns((IReadOnlyList<StreamConsumerGroupSummary>)
+        [
+            new("fulfilment", 3, 2, LastId, 12),
+            new("analytics", 2, 0, LastId, 20),
+        ]);
+        var cut = await RenderStreamsAsync();
+
         cut.Find(".group-row[data-group='fulfilment']").ClassList.Should().Contain("rds-selected");
-        cut.Find(".streams-consumers-label").TextContent.Should().Be("fulfilment — consumers");
+        cut.FindAll(".rds-warn.group-row-lag").Should().BeEmpty();
     }
 
     [Fact]
@@ -263,6 +279,7 @@ public class StreamsPageTests : RedisPageTestBase
     {
         SetupOrders();
         var cut = await RenderStreamsAsync();
+        await SelectGroupAsync(cut, "fulfilment");
 
         cut.FindAll(".streams-stalled").Should().BeEmpty();
         cut.FindAll(".consumer-row.rds-row-danger").Should().BeEmpty();

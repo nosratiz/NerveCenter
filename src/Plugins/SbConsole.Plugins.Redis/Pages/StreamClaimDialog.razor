@@ -19,7 +19,7 @@
             <div class="d-flex flex-wrap gap-2 mt-2">
                 @foreach (var consumer in Consumers)
                 {
-                    <MudButton Class="streams-claim-pick" data-consumer="@consumer" Size="Size.Small"
+                    <MudButton Class="streams-claim-pick" data-consumer="@consumer" Size="Size.Small" Style="text-transform:none; font-family:monospace"
                                Variant="@(consumer == _consumer ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
                                OnClick="@(() => _consumer = consumer)">@consumer</MudButton>
                 }
