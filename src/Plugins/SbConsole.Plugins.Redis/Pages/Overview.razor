@@ -1,0 +1,153 @@
+@* src/Plugins/SbConsole.Plugins.Redis/Pages/Overview.razor *@
+@page "/p/redis/overview"
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Overview
+@using SbConsole.Sdk
+@inject IConnectionProvider Connections
+@inject GetOverviewQueryHandler GetOverview
+@inject GetMemoryByPrefixQueryHandler GetMemoryByPrefix
+@inject GetSlowLogQueryHandler GetSlowLog
+@implements IAsyncDisposable
+
+<PageTitle>Redis overview</PageTitle>
+<h1>Overview</h1>
+
+<MudSelect T="Guid" Label="Connection" Value="_connectionId" ValueChanged="OnConnectionChangedAsync" Class="redis-overview-connection">
+    @foreach (var c in _connections)
+    {
+        <MudSelectItem Value="c.Id">@c.Name</MudSelectItem>
+    }
+</MudSelect>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="redis-overview-error">@_error</MudAlert>
+}
+else if (_overview is not null)
+{
+    <MudGrid>
+        <MudItem xs="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption">Memory</MudText>
+                <MudText Typo="Typo.h5" Class="redis-overview-memory-used">
+                    @FormatBytes(_overview.UsedMemoryBytes)
+                    @if (_overview.MaxMemoryBytes is { } max)
+                    {
+                        <span>(@((100.0 * _overview.UsedMemoryBytes / max).ToString("N0", CultureInfo.InvariantCulture))%)</span>
+                    }
+                </MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="2">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption">Hit ratio</MudText>
+                <MudText Typo="Typo.h5" Class="redis-overview-hit-ratio">@_overview.HitRatioPercent.ToString("N1", CultureInfo.InvariantCulture)%</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="2">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption">Ops / sec</MudText>
+                <MudText Typo="Typo.h5" Class="redis-overview-ops">@_overview.OpsPerSecond.ToString("N0", CultureInfo.InvariantCulture)</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="2">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption">Evicted (total)</MudText>
+                <MudText Typo="Typo.h5" Class="redis-overview-evicted">@_overview.EvictedKeysTotal.ToString("N0", CultureInfo.InvariantCulture)</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudTable Items="_memoryByPrefix" Class="redis-overview-memory-by-prefix" T="MemoryByPrefixEntry">
+        <HeaderContent>
+            <MudTh>Prefix</MudTh><MudTh>Bytes (sampled)</MudTh><MudTh>Keys</MudTh><MudTh>No TTL</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.Prefix</MudTd>
+            <MudTd>@FormatBytes(context.SampledBytes)</MudTd>
+            <MudTd>@context.SampledKeyCount</MudTd>
+            <MudTd>@context.KeysWithoutTtlCount</MudTd>
+        </RowTemplate>
+    </MudTable>
+
+    <MudTable Items="_slowLog" Class="redis-overview-slowlog" T="SlowLogEntry">
+        <HeaderContent>
+            <MudTh>Time</MudTh><MudTh>ms</MudTh><MudTh>Command</MudTh><MudTh>Client</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</MudTd>
+            <MudTd>@context.Duration.TotalMilliseconds.ToString("N0", CultureInfo.InvariantCulture)</MudTd>
+            <MudTd>@context.Command</MudTd>
+            <MudTd>@context.ClientAddress</MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private Guid _connectionId;
+    private ServerOverview? _overview;
+    private IReadOnlyList<MemoryByPrefixEntry> _memoryByPrefix = [];
+    private IReadOnlyList<SlowLogEntry> _slowLog = [];
+    private string? _error;
+    private CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync("redis", _cts.Token);
+        if (_connections.Count > 0)
+        {
+            _connectionId = _connections[0].Id;
+            await LoadAsync();
+        }
+    }
+
+    private async Task OnConnectionChangedAsync(Guid connectionId)
+    {
+        _connectionId = connectionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+
+        var overviewResult = await GetOverview.HandleAsync(_connectionId, _cts.Token);
+        if (!overviewResult.IsSuccess)
+        {
+            _error = overviewResult.Error;
+            _overview = null;
+            return;
+        }
+        _overview = overviewResult.Value;
+
+        var memoryResult = await GetMemoryByPrefix.HandleAsync(_connectionId, database: 0, ct: _cts.Token);
+        _memoryByPrefix = memoryResult.IsSuccess ? memoryResult.Value! : [];
+
+        var slowLogResult = await GetSlowLog.HandleAsync(_connectionId, _cts.Token);
+        _slowLog = slowLogResult.IsSuccess ? slowLogResult.Value! : [];
+    }
+
+    // Decimal (1000-based) scaling, matching Redis's own INFO memory metrics convention -- not
+    // the binary (1024-based) KiB/MiB/GiB some other plugins use for broker-native byte counters.
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var unit = 0;
+        while (value >= 1000 && unit < units.Length - 1)
+        {
+            value /= 1000;
+            unit++;
+        }
+        return $"{value.ToString("N1", CultureInfo.InvariantCulture)} {units[unit]}";
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}
