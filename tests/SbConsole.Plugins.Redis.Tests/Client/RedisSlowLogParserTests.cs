@@ -38,10 +38,36 @@ public class RedisSlowLogParserTests
     }
 
     [Fact]
-    public void Blank_client_name_field_does_not_affect_client_address()
+    public void Nonblank_client_name_field_does_not_affect_client_address()
     {
+        // fields[5] (client name) is "my-client" here, not blank -- this proves the parser reads
+        // ClientAddress from fields[4] regardless of what's in the unrelated client-name field.
         var reply = Arr(Arr(Scalar(1), Scalar(1000), Scalar(500), Arr(Scalar("PING")), Scalar("127.0.0.1:1"), Scalar("my-client")));
 
         RedisSlowLogParser.Parse(reply)[0].ClientAddress.Should().Be("127.0.0.1:1");
+    }
+
+    [Fact]
+    public void Blank_client_address_field_normalizes_to_null()
+    {
+        var reply = Arr(Arr(Scalar(1), Scalar(1000), Scalar(500), Arr(Scalar("PING")), Scalar(""), Scalar("")));
+
+        RedisSlowLogParser.Parse(reply)[0].ClientAddress.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_four_field_entry_from_a_pre_4_0_server_does_not_throw()
+    {
+        // Older Redis versions return a 4-field SLOWLOG entry (id, timestamp, duration, command)
+        // with no client address/name fields at all -- Parse must not index fields[4]/fields[5]
+        // unconditionally in that case.
+        var reply = Arr(Arr(Scalar(1), Scalar(1000), Scalar(500), Arr(Scalar("PING"))));
+
+        IReadOnlyList<SlowLogEntry>? entries = null;
+        var act = () => entries = RedisSlowLogParser.Parse(reply);
+
+        act.Should().NotThrow();
+        entries.Should().ContainSingle();
+        entries![0].ClientAddress.Should().BeNull();
     }
 }

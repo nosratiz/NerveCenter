@@ -15,14 +15,18 @@ internal static class HandlerRunner
         Func<string, Task<T>> run,
         CancellationToken ct)
     {
-        var secret = await connections.GetSecretAsync(connectionId, ct);
-        if (secret is null)
-        {
-            return PluginResult<T>.Fail(ConnectionNotFound);
-        }
-
         try
         {
+            // Resolved inside the try, matching RabbitMQ's HandlerRunner.QueryAsync: a
+            // secret-decryption failure (e.g. a rotated SBC_DATA_KEY) must be caught and reduced
+            // to a friendly failed result here, not propagate raw out of a page's
+            // OnInitializedAsync, which has no guard of its own.
+            var secret = await connections.GetSecretAsync(connectionId, ct);
+            if (secret is null)
+            {
+                return PluginResult<T>.Fail(ConnectionNotFound);
+            }
+
             var value = await run(secret);
             return PluginResult<T>.Ok(value);
         }

@@ -6,6 +6,22 @@ namespace SbConsole.Plugins.Redis.Tests;
 
 public class RedisPluginDashboardTests
 {
+    [Fact]
+    public async Task Dashboard_metrics_are_empty_because_the_host_sums_same_label_metrics_across_connections()
+    {
+        // The host's dashboard (Home.razor) sums same-label PluginDashboardMetric values across
+        // every connection of a plugin -- fine for counts, meaningless for a percentage (two Redis
+        // connections at 60% and 90% memory would show "150"). The real memory-pressure signal is
+        // already surfaced correctly, per-connection, via GetDashboardProblemsAsync, which is not
+        // affected by summing since problems are listed individually. So this hook reports nothing
+        // for now rather than a summable metric invented without a real consumer.
+        var plugin = new RedisPlugin();
+
+        var metrics = await plugin.GetDashboardMetricsAsync("standalone|0|localhost:6379");
+
+        metrics.Should().BeEmpty();
+    }
+
     private static ServerOverview OverviewAt(double usedPercentOfMax)
     {
         const long max = 8_000_000_000;

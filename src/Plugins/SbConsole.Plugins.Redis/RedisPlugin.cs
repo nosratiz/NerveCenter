@@ -14,7 +14,7 @@ public sealed class RedisPlugin : IPlugin
 
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [
-        new PluginNavItem("Overview", "/p/redis/overview", "speedometer"),
+        new PluginNavItem("Overview", "/p/redis/overview"),
     ];
 
     public Type? ConnectionFormComponentType => typeof(RedisConnectionFields);
@@ -59,17 +59,16 @@ public sealed class RedisPlugin : IPlugin
 
     private const double MemoryProblemThresholdPercent = 90.0;
 
-    public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(
-        string connectionString, CancellationToken ct = default)
-    {
-        var overview = await new RedisOperations().GetOverviewAsync(connectionString, ct);
-        return
-        [
-            new PluginDashboardMetric("Used memory %", overview.MaxMemoryBytes is { } max && max > 0
-                ? (int)(100.0 * overview.UsedMemoryBytes / max) : 0),
-            new PluginDashboardMetric("Hit ratio %", (int)overview.HitRatioPercent),
-        ];
-    }
+    // The host's dashboard (Home.razor) sums same-label PluginDashboardMetric values across every
+    // connection of a plugin -- correct for a count, meaningless for a percentage (two Redis
+    // connections at 60% and 90% memory would render as "150"). The real memory-pressure signal is
+    // already surfaced correctly, per-connection, via GetDashboardProblemsAsync below, which isn't
+    // affected by summing since problems are listed individually rather than aggregated. So this
+    // hook reports nothing for now, rather than inventing a new summable metric (e.g. a
+    // connections-over-threshold count) without an actual dashboard consumer for it.
+    public Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(
+        string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginDashboardMetric>>([]);
 
     public Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>

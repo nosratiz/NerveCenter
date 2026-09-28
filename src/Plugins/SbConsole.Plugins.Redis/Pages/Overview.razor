@@ -59,6 +59,10 @@ else if (_overview is not null)
         </MudItem>
     </MudGrid>
 
+    @if (_memoryByPrefixError is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Class="redis-overview-memory-by-prefix-error">@_memoryByPrefixError</MudAlert>
+    }
     <MudTable Items="_memoryByPrefix" Class="redis-overview-memory-by-prefix" T="MemoryByPrefixEntry">
         <HeaderContent>
             <MudTh>Prefix</MudTh><MudTh>Bytes (sampled)</MudTh><MudTh>Keys</MudTh><MudTh>No TTL</MudTh>
@@ -71,6 +75,10 @@ else if (_overview is not null)
         </RowTemplate>
     </MudTable>
 
+    @if (_slowLogError is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Class="redis-overview-slowlog-error">@_slowLogError</MudAlert>
+    }
     <MudTable Items="_slowLog" Class="redis-overview-slowlog" T="SlowLogEntry">
         <HeaderContent>
             <MudTh>Time</MudTh><MudTh>ms</MudTh><MudTh>Command</MudTh><MudTh>Client</MudTh>
@@ -91,6 +99,8 @@ else if (_overview is not null)
     private IReadOnlyList<MemoryByPrefixEntry> _memoryByPrefix = [];
     private IReadOnlyList<SlowLogEntry> _slowLog = [];
     private string? _error;
+    private string? _memoryByPrefixError;
+    private string? _slowLogError;
     private CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
@@ -122,11 +132,16 @@ else if (_overview is not null)
         }
         _overview = overviewResult.Value;
 
+        // A failed sub-call must not blank the whole page (the overview tiles above are already
+        // loaded) -- but per the design spec, an ACL/NOPERM failure must be surfaced to the user,
+        // not silently rendered as an empty table indistinguishable from "no data".
         var memoryResult = await GetMemoryByPrefix.HandleAsync(_connectionId, database: 0, ct: _cts.Token);
         _memoryByPrefix = memoryResult.IsSuccess ? memoryResult.Value! : [];
+        _memoryByPrefixError = memoryResult.IsSuccess ? null : memoryResult.Error;
 
         var slowLogResult = await GetSlowLog.HandleAsync(_connectionId, _cts.Token);
         _slowLog = slowLogResult.IsSuccess ? slowLogResult.Value! : [];
+        _slowLogError = slowLogResult.IsSuccess ? null : slowLogResult.Error;
     }
 
     // Binary (1024-based) scaling, matching Redis's own INFO/redis-cli memory metrics convention

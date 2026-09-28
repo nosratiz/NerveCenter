@@ -52,4 +52,41 @@ public class OverviewPageTests : RedisPageTestBase
 
         cut.Find(".redis-overview-error").Should().NotBeNull();
     }
+
+    [Fact]
+    public async Task Shows_an_inline_warning_when_memory_by_prefix_fails_without_blocking_the_rest_of_the_page()
+    {
+        // The design spec explicitly wants ACL/NOPERM errors surfaced, not hidden -- LoadAsync
+        // used to map a failed sub-result to [] silently, so a NOPERM on MEMORY USAGE looked
+        // identical to "no keys". The rest of the page (memory tiles, slow log) must still render.
+        Operations.GetOverviewAsync(Secret, Arg.Any<CancellationToken>()).Returns(SampleOverview());
+        Operations.GetMemoryByPrefixAsync(Secret, 0, ':', 5000, Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<MemoryByPrefixEntry>>>(_ =>
+                throw new InvalidOperationException("Command refused by ACL (NOPERM): no permission for 'memory'"));
+        Operations.GetSlowLogAsync(Secret, 10, Arg.Any<CancellationToken>())
+            .Returns((IReadOnlyList<SlowLogEntry>)[]);
+
+        var cut = Render<SbConsole.Plugins.Redis.Pages.Overview>();
+        await SettleAsync(cut);
+
+        cut.Find(".redis-overview-memory-by-prefix-error").TextContent.Should().Contain("NOPERM");
+        cut.Find(".redis-overview-memory-used").Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Shows_an_inline_warning_when_the_slow_log_fails_without_blocking_the_rest_of_the_page()
+    {
+        Operations.GetOverviewAsync(Secret, Arg.Any<CancellationToken>()).Returns(SampleOverview());
+        Operations.GetMemoryByPrefixAsync(Secret, 0, ':', 5000, Arg.Any<CancellationToken>())
+            .Returns((IReadOnlyList<MemoryByPrefixEntry>)[]);
+        Operations.GetSlowLogAsync(Secret, 10, Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<SlowLogEntry>>>(_ =>
+                throw new InvalidOperationException("Command refused by ACL (NOPERM): no permission for 'slowlog'"));
+
+        var cut = Render<SbConsole.Plugins.Redis.Pages.Overview>();
+        await SettleAsync(cut);
+
+        cut.Find(".redis-overview-slowlog-error").TextContent.Should().Contain("NOPERM");
+        cut.Find(".redis-overview-memory-used").Should().NotBeNull();
+    }
 }
