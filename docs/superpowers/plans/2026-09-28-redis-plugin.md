@@ -522,6 +522,23 @@ public class RedisPluginTests
     {
         new RedisPlugin().GetConnectionSummary("not a valid secret").Should().BeEmpty();
     }
+
+    [Fact]
+    public void Connection_summary_is_empty_for_a_well_formed_but_invalid_topology_token()
+    {
+        // Three '|'-delimited parts (so it does NOT hit the FormatException branch), but
+        // "bogus" isn't a RedisTopology member — Enum.Parse throws ArgumentException, which
+        // GetConnectionSummary must also swallow, not just FormatException.
+        new RedisPlugin().GetConnectionSummary("bogus|0|host:6379").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Connection_summary_is_empty_for_a_configuration_options_keyword_it_rejects()
+    {
+        // ConfigurationOptions.Parse throws ArgumentException on an unrecognized keyword —
+        // a different source of the same exception type as the case above, still must not throw.
+        new RedisPlugin().GetConnectionSummary("standalone|0|host:6379,notarealkeyword=1").Should().BeEmpty();
+    }
 }
 ```
 
@@ -667,8 +684,12 @@ public sealed class RedisPlugin : IPlugin
                 ["Topology"] = settings.Topology.ToString(),
             };
         }
-        catch (FormatException)
+        catch (Exception)
         {
+            // RedisConnectionSettings.Parse can throw FormatException (wrong '|' count) or
+            // ArgumentException (bad topology token, or a ConfigurationOptions keyword it
+            // rejects) — this method's contract is "never throw", so both are swallowed the
+            // same way: an unparsable secret just gets no summary chips.
             return new Dictionary<string, string>();
         }
     }
@@ -692,7 +713,7 @@ public sealed class RedisPlugin : IPlugin
 - [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `dotnet test tests/SbConsole.Plugins.Redis.Tests --filter "FullyQualifiedName~RedisPluginTests"`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 8: Register the plugin with the host**
 
