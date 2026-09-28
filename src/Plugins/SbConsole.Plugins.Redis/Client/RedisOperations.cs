@@ -30,6 +30,14 @@ public sealed class RedisOperations : IRedisOperations
         }
     }
 
+    public async Task<ServerOverview> GetOverviewAsync(string secret, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var server = muxer.GetServer(muxer.GetEndPoints()[0]);
+        var sections = await GetInfoSectionsAsync(server, ct);
+        return RedisInfoParser.Parse(sections);
+    }
+
     internal static async Task<Dictionary<string, IReadOnlyDictionary<string, string>>> GetInfoSectionsAsync(
         IServer server, CancellationToken ct)
     {

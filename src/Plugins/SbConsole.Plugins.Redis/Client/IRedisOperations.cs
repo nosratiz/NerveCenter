@@ -10,4 +10,6 @@ namespace SbConsole.Plugins.Redis.Client;
 public interface IRedisOperations
 {
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
+
+    Task<ServerOverview> GetOverviewAsync(string secret, CancellationToken ct = default);
 }

@@ -48,6 +48,7 @@ public sealed class RedisPlugin : IPlugin
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<IRedisOperations, RedisOperations>();
+        services.AddScoped<Overview.GetOverviewQueryHandler>();
         // A new handler must be added here or its page fails to render at runtime.
     }
 
