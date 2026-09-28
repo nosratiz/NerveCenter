@@ -1,0 +1,105 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Streams
+@inject AddStreamEntryCommandHandler AddEntryHandler
+
+@* The Streams header's XADD action (mockup 1d): build up field/value pairs, then append one entry
+   with a server-generated id. Closes with that id so the page can confirm it. *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2 mud-text-secondary">
+            Appends one entry to <span style="font-family:monospace">@Key</span>. Redis assigns the id (<span style="font-family:monospace">*</span>).
+        </MudText>
+        <div class="d-flex gap-2 align-end">
+            <MudTextField id="streams-newfield-name" data-testid="streams-newfield-name" Class="streams-newfield-name" T="string" Value="_newFieldName"
+                          ValueChanged="v => _newFieldName = v ?? string.Empty" Label="Field" Immediate="true" />
+            <MudTextField id="streams-newfield-value" data-testid="streams-newfield-value" Class="streams-newfield-value" T="string" Value="_newFieldValue"
+                          ValueChanged="v => _newFieldValue = v ?? string.Empty" Label="Value" Immediate="true" />
+            <MudButton Class="streams-newfield-add" Variant="Variant.Outlined"
+                       Disabled="@(string.IsNullOrWhiteSpace(_newFieldName))" OnClick="AddFieldRow">Add field</MudButton>
+        </div>
+        @if (_fields.Count > 0)
+        {
+            <MudSimpleTable Class="streams-pendingfields-table mt-3" Dense="true" Elevation="0">
+                <tbody>
+                    @foreach (var field in _fields)
+                    {
+                        <tr class="pendingfield-row"><td style="font-family:monospace">@field.Field</td><td style="font-family:monospace">@field.Value</td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="streams-xadd-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="streams-xadd-submit" Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(!CanSubmit || _busy)" OnClick="SubmitAsync">Add entry</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private readonly List<StreamFieldValue> _fields = [];
+    private string _newFieldName = "";
+    private string _newFieldValue = "";
+    private string? _error;
+    private bool _busy;
+
+    // A field typed into the inputs but not yet "added" still counts -- submitting shouldn't silently drop it.
+    private bool CanSubmit => _fields.Count > 0 || !string.IsNullOrWhiteSpace(_newFieldName);
+
+    private void AddFieldRow()
+    {
+        if (string.IsNullOrWhiteSpace(_newFieldName))
+        {
+            return;
+        }
+
+        _fields.Add(new StreamFieldValue(_newFieldName, _newFieldValue));
+        _newFieldName = "";
+        _newFieldValue = "";
+    }
+
+    private async Task SubmitAsync()
+    {
+        AddFieldRow();
+        if (_fields.Count == 0)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await AddEntryHandler.HandleAsync(new AddStreamEntryCommand(ConnectionId, ConnectionName, Database, Key, [.. _fields]));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(result.Value));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

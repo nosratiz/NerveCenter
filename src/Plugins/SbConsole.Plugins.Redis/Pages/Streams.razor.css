@@ -1,0 +1,118 @@
+/* Streams page (mockup 1d). Colors only from --rds-* (defined on .rds-page) / --mud-palette-* tokens. */
+
+.streams-crumb { display: inline-flex; align-items: center; gap: 8px; }
+.streams-crumb ::deep .mud-menu { display: inline-flex; }
+.streams-crumb .rds-chip { color: var(--mud-palette-text-primary); }
+.streams-no-stream { font-style: italic; }
+.streams-option-key { font-family: var(--rds-mono); margin-right: 16px; }
+.streams-option-length { font-family: var(--rds-mono); font-size: 12px; opacity: .6; }
+
+.streams-alert { padding: 12px 20px 0; }
+
+/* The LAST ID value is a 15-digit id: tile-size digits would overflow a quarter-width tile. */
+.streams-tiles ::deep .streams-lastid { font-size: 17px; line-height: 1.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.streams-split { margin-top: 16px; border-top: 1px solid var(--rds-line); min-height: 480px; }
+.streams-split.streams-split-compact { min-height: 0; }
+.streams-split .rds-pane-section + .rds-pane-section { border-top: 0; padding-top: 4px; }
+
+.streams-empty { color: var(--rds-muted); font-size: 13px; line-height: 1.5; }
+.streams-pane-pad { padding: 18px 20px; }
+
+.streams-groups-table td { font-size: 14px; padding-top: 9px; padding-bottom: 9px; }
+
+/* ---- consumer cards ---- */
+.streams-consumer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    border-radius: 8px;
+    background: var(--rds-faint);
+    font-size: 14px;
+}
+.streams-consumer + .streams-consumer { margin-top: 8px; }
+.streams-consumer-name { flex: 1 1 auto; min-width: 0; font-family: var(--rds-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.streams-consumer-idle { color: var(--rds-muted); font-size: 13px; white-space: nowrap; }
+.streams-consumer-pending { min-width: 48px; text-align: right; font-family: var(--rds-mono); font-variant-numeric: tabular-nums; }
+.streams-consumer.rds-row-danger { background: color-mix(in srgb, var(--rds-danger) 14%, transparent); }
+.streams-consumer.rds-row-danger .streams-consumer-idle,
+.streams-consumer.rds-row-danger .streams-consumer-pending { color: var(--rds-danger); }
+.rds-dot.streams-dot-idle { background: var(--rds-muted); }
+
+.streams-stalled { margin-top: 14px; }
+.streams-stalled-text { margin: 0; font-size: 13px; line-height: 1.55; color: var(--rds-muted); }
+.streams-stalled-actions { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
+.streams-delete-consumer-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--rds-danger) 55%, transparent);
+    background: color-mix(in srgb, var(--rds-danger) 8%, transparent);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.streams-delete-consumer-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.streams-delete-consumer-go { border-color: var(--rds-danger); color: var(--rds-danger); }
+
+/* ---- pending entries ---- */
+.streams-pending-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 60px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--rds-line);
+}
+.streams-pending-head .rds-section-label { margin: 0; }
+.streams-pending-selected { font-size: 13px; color: var(--rds-muted); }
+.streams-pending-actions { gap: 12px; }
+
+.streams-pending-wrap { max-height: 340px; overflow-y: auto; }
+.streams-pending-table th { padding-top: 12px; padding-bottom: 12px; }
+.streams-pending-table td { font-size: 14px; padding-top: 11px; padding-bottom: 11px; vertical-align: middle; }
+.streams-pending-table th:last-child, .streams-pending-table td:last-child { padding-right: 24px; }
+.streams-check-col { width: 52px; padding-left: 20px !important; }
+.pending-row-check {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-grid;
+    place-content: center;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    vertical-align: middle;
+    border: 1.5px solid color-mix(in srgb, var(--mud-palette-text-primary) 28%, transparent);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+}
+.pending-row-check:hover { border-color: var(--rds-accent); }
+.pending-row-check:focus-visible { outline: 2px solid var(--rds-accent); outline-offset: 2px; }
+.pending-row-check:checked { background: var(--rds-accent); border-color: var(--rds-accent); }
+.pending-row-check:checked::after {
+    content: "";
+    width: 9px;
+    height: 5px;
+    border-left: 2px solid var(--mud-palette-primary-text);
+    border-bottom: 2px solid var(--mud-palette-primary-text);
+    transform: translateY(-1px) rotate(-45deg);
+}
+
+.streams-entry-detail { padding: 16px 20px; border-top: 1px solid var(--rds-line); }
+.streams-entry-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
+.streams-entry-id { font-size: 14px; }
+.streams-entry-deliveries { font-size: 13px; }
+.streams-entry-table td { font-size: 14px; padding-top: 9px; padding-bottom: 9px; }
+.streams-entry-field { width: 30%; }
+.streams-entry-value { word-break: break-word; }
+.streams-entry-footnote { margin: 12px 0 0; }
+
+/* ---- recent entries ---- */
+.streams-recent { padding: 16px 20px 20px; border-top: 1px solid var(--rds-line); }
+.streams-recent-sub { margin-left: 8px; text-transform: none; letter-spacing: 0; font-family: var(--rds-mono); opacity: .7; }
+.streams-entries-table td.entry-row-id { white-space: nowrap; width: 1%; padding-right: 24px; }
+.streams-entries-table td.entry-row-fields { color: var(--rds-muted); word-break: break-word; }

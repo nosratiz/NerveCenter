@@ -25,7 +25,9 @@ public class StreamsEmptyStateTests : RedisPageTestBase
         var cut = RenderWithPopovers(page);
         await SettleAsync(cut);
 
-        cut.Find(".streams-list-empty").TextContent.Should().Contain("No streams found");
-        cut.FindAll(".stream-row").Should().BeEmpty();
+        cut.Find(".streams-list-empty").TextContent.Should().Contain("No streams found in db0");
+        cut.FindAll(".streams-option").Should().BeEmpty();
+        cut.FindAll(".streams-tile-length").Should().BeEmpty();
+        cut.FindAll(".streams-xadd-open").Should().BeEmpty();
     }
 }

@@ -1,206 +1,338 @@
-@* src/Plugins/SbConsole.Plugins.Redis/Pages/Streams.razor *@
+@* src/Plugins/SbConsole.Plugins.Redis/Pages/Streams.razor -- mockup docs/superpowers/specs/redis-mockup/1d-streams.png *@
 @page "/p/redis/streams"
-@using System.Globalization
+@using Microsoft.AspNetCore.WebUtilities
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Streams
 @inject StreamsQueryHandler QueryHandler
-@inject AddStreamEntryCommandHandler AddEntryHandler
-@inject TrimStreamCommandHandler TrimHandler
 @inject AcknowledgeStreamEntriesCommandHandler AckHandler
-@inject ClaimStreamEntriesCommandHandler ClaimHandler
 @inject DeleteStreamEntriesCommandHandler DeleteEntriesHandler
+@inject DeleteStreamConsumerCommandHandler DeleteConsumerHandler
 @inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 
 <PageTitle>Redis streams</PageTitle>
-<h1>Streams</h1>
 
-<RedisConnectionDatabasePicker SelectionChanged="OnSelectionChangedAsync" Loading="_scanning" />
-
-@if (_selection is not null)
-{
-    <div class="d-flex align-center flex-wrap gap-2 mb-2">
-        <MudTextField id="streams-pattern" data-testid="streams-pattern" Class="streams-pattern" T="string" Value="_pattern"
-                      ValueChanged="v => _pattern = v ?? string.Empty" Label="Pattern (glob)" Immediate="true" Style="max-width:260px" />
-        <MudButton Class="streams-scan" Variant="Variant.Filled" Color="Color.Primary" Disabled="_scanning" OnClick="RescanAsync">Scan</MudButton>
-    </div>
-
-    <MudText Typo="Typo.caption" Class="streams-scan-progress mud-text-secondary">
-        @_streams.Count stream(s) found
-        @if (!_complete)
-        {
-            <span> · scanning…</span>
-        }
-    </MudText>
+<div class="rds-page streams-page">
+    <RedisPageHeader Title="Streams">
+        <Chips>
+            <RedisConnectionDatabasePicker SelectionChanged="OnSelectionChangedAsync" Loading="@(_scanning || _detailLoading)" />
+        </Chips>
+        <Meta>
+            @if (_selection is { } selection)
+            {
+                <span class="streams-crumb">
+                    <span>db@(selection.Database) /</span>
+                    @if (_streams.Count > 0)
+                    {
+                        <MudMenu Class="streams-stream-menu" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" MaxHeight="420">
+                            <ActivatorContent>
+                                <span class="rds-chip">
+                                    <span class="selected-stream">@_selectedStreamKey</span>
+                                    <span class="rds-chip-caret">▾</span>
+                                </span>
+                            </ActivatorContent>
+                            <ChildContent>
+                                @foreach (var stream in _streams)
+                                {
+                                    <MudMenuItem Class="streams-option" data-stream="@stream.Key" OnClick="@(() => SelectStreamAsync(stream.Key))">
+                                        <span class="streams-option-key">@stream.Key</span>
+                                        <span class="streams-option-length">@RedisFormat.Count(stream.Length)</span>
+                                    </MudMenuItem>
+                                }
+                            </ChildContent>
+                        </MudMenu>
+                    }
+                    else
+                    {
+                        <span class="streams-no-stream">@(_complete ? "no streams" : "scanning…")</span>
+                    }
+                </span>
+            }
+        </Meta>
+        <Actions>
+            @if (_selectedStreamKey is not null)
+            {
+                <div class="rds-actions">
+                    <button type="button" class="rds-btn streams-xadd-open" @onclick="OpenAddEntryAsync">XADD</button>
+                    <button type="button" class="rds-link-danger streams-trim-open" @onclick="OpenTrimAsync">Trim…</button>
+                </div>
+            }
+        </Actions>
+    </RedisPageHeader>
 
     @if (_error is not null)
     {
-        <MudAlert Severity="Severity.Error" Class="streams-error my-2">@_error</MudAlert>
+        <div class="streams-alert"><MudAlert Severity="Severity.Error" Dense="true" Class="streams-error">@_error</MudAlert></div>
     }
 
-    <MudGrid Class="mt-2">
-        <MudItem xs="12" md="4">
-            <MudPaper Class="streams-list pa-3" Outlined="true">
-                @if (_complete && _streams.Count == 0)
-                {
-                    <MudText Class="streams-list-empty mud-text-secondary" Typo="Typo.body2">No streams found matching this pattern.</MudText>
-                }
-                else
-                {
-                    <MudSimpleTable Class="streams-list-table" Dense="true" Elevation="0">
-                        <thead><tr><th>Stream</th><th>Length</th></tr></thead>
-                        <tbody>
-                            @foreach (var stream in _streams)
-                            {
-                                <tr class="@("stream-row" + (stream.Key == _selectedStreamKey ? " stream-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectStreamAsync(stream))">
-                                    <td class="stream-row-key" style="font-family:monospace">@stream.Key</td>
-                                    <td class="stream-row-length">@stream.Length</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                }
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="12" md="8">
-            <MudPaper Class="streams-detail pa-3" Outlined="true">
-                @if (_selectedStreamKey is null)
-                {
-                    <MudText Class="streams-detail-empty mud-text-secondary" Typo="Typo.body2">Select a stream to view its detail.</MudText>
-                }
-                else if (_detailLoading)
-                {
-                    <MudProgressCircular Class="streams-detail-loading" Size="Size.Small" Indeterminate="true" />
-                }
-                else
-                {
-                    @if (_detailError is not null)
-                    {
-                        <MudAlert Severity="Severity.Error" Class="streams-detail-error mb-2">@_detailError</MudAlert>
-                    }
+    @if (_selection is null)
+    {
+        @* Picker still resolving, or no Redis connections (the picker explains that itself). *@
+    }
+    else if (_complete && _streams.Count == 0)
+    {
+        <div class="rds-empty streams-list-empty">
+            No streams found in db@(_selection.Database). A stream appears here once something XADDs to a key
+            @if (!string.IsNullOrEmpty(_selection.Connection.Name))
+            {
+                <text> on @_selection.Connection.Name</text>
+            }.
+        </div>
+    }
+    else if (_selectedStreamKey is null || (_detailLoading && _overview is null))
+    {
+        <div class="rds-skeleton" style="width:40%"></div>
+        <div class="rds-skeleton" style="width:65%"></div>
+    }
+    else
+    {
+        @if (_detailError is not null)
+        {
+            <div class="streams-alert"><MudAlert Severity="Severity.Error" Dense="true" Class="streams-detail-error">@_detailError</MudAlert></div>
+        }
+        @if (_actionError is not null)
+        {
+            <div class="streams-alert"><MudAlert Severity="Severity.Error" Dense="true" Class="streams-action-error" ShowCloseIcon="true" CloseIconClicked="() => _actionError = null">@_actionError</MudAlert></div>
+        }
 
-                    <MudText Class="streams-detail-key" Typo="Typo.h6" Style="font-family:monospace">@_selectedStreamKey</MudText>
+        @* ---- LENGTH · LAST ID · GROUPS · PENDING ---- *@
+        <div class="rds-tiles streams-tiles" style="grid-template-columns: repeat(4, minmax(0, 1fr))">
+            <RedisStatTile Class="streams-tile-length" Label="Length">
+                <Value>@(_overview is { } o ? RedisFormat.Count(o.Length) : "—")</Value>
+                <Caption>@FirstEntryCaption</Caption>
+            </RedisStatTile>
+            <RedisStatTile Class="streams-tile-lastid" Label="Last id" ValueClass="rds-mono streams-lastid">
+                <Value>@(_overview?.LastGeneratedId ?? "—")</Value>
+                <Caption>@LastIdCaption</Caption>
+            </RedisStatTile>
+            <RedisStatTile Class="streams-tile-groups" Label="Groups">
+                <Value>@RedisFormat.Count(_groups.Count)</Value>
+                <Caption>@RedisFormat.Count(_groups.Sum(g => (long)g.ConsumerCount)) consumers</Caption>
+            </RedisStatTile>
+            <RedisStatTile Class="streams-tile-pending" Label="Pending" LabelClass="@(TotalPending > 0 ? "rds-warn" : null)" ValueClass="@(TotalPending > 0 ? "rds-warn" : null)">
+                <Value>@RedisFormat.Count(TotalPending)</Value>
+                <Caption>@PendingCaption</Caption>
+            </RedisStatTile>
+        </div>
 
-                    @if (_overview is { } overview)
+        <div class="@("rds-split streams-split" + (_groups.Count == 0 ? " streams-split-compact" : ""))">
+            @* ---- left: consumer groups + the selected group's consumers ---- *@
+            <div class="rds-pane">
+                <div class="rds-pane-section">
+                    <div class="rds-section-label">Consumer groups</div>
+                    @if (_groups.Count == 0)
                     {
-                        <div class="d-flex flex-wrap gap-4 my-2">
-                            <MudText Class="streams-overview-length" Typo="Typo.body2">Length: @overview.Length</MudText>
-                            <MudText Class="streams-overview-groups" Typo="Typo.body2">Groups: @overview.ConsumerGroupCount</MudText>
-                            <MudText Class="streams-overview-radix" Typo="Typo.body2">Radix tree: @overview.RadixTreeKeys keys / @overview.RadixTreeNodes nodes</MudText>
-                            <MudText Class="streams-overview-lastid" Typo="Typo.body2">Last id: @overview.LastGeneratedId</MudText>
+                        <div class="streams-empty streams-groups-empty">
+                            No consumer groups on @_selectedStreamKey. Entries are only being appended (or read with plain XREAD);
+                            create a group with <span class="rds-mono">XGROUP CREATE</span> to track delivery and pending entries.
                         </div>
                     }
+                    else
+                    {
+                        var hot = HotGroup;
+                        <table class="rds-table streams-groups-table">
+                            <thead>
+                                <tr><th>Group</th><th class="rds-num">Lag</th><th class="rds-num">Pending</th><th class="rds-num">Cons.</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var group in _groups)
+                                {
+                                    var warn = group.Name == hot ? " rds-warn" : "";
+                                    <tr class="@("group-row rds-clickable" + (group.Name == _selectedGroup ? " rds-selected" : ""))" data-group="@group.Name"
+                                        @onclick="@(() => SelectGroupAsync(group.Name))">
+                                        <td class="group-row-name">@group.Name</td>
+                                        <td class="@("group-row-lag rds-num" + warn)">@(group.Lag is { } lag ? RedisFormat.Count(lag) : "—")</td>
+                                        <td class="@("group-row-pending rds-num" + warn)">@RedisFormat.Count(group.PendingCount)</td>
+                                        <td class="group-row-consumers rds-num">@group.ConsumerCount</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
 
-                    <MudText Typo="Typo.subtitle2" Class="mt-3">Trim (destructive — drops entries permanently)</MudText>
-                    <div class="d-flex gap-2 align-end mt-1">
-                        <MudNumericField id="streams-trim-maxlen" data-testid="streams-trim-maxlen" Class="streams-trim-maxlen" T="long" Value="_trimMaxLen"
-                                          ValueChanged="v => _trimMaxLen = v" Label="Max length" Min="0" Immediate="true" HideSpinButtons="true" />
-                        <MudButton Class="streams-trim-submit" Variant="Variant.Outlined" Color="Color.Error" OnClick="TrimAsync">Trim</MudButton>
+                @if (_selectedGroup is { } selectedGroup)
+                {
+                    <div class="rds-pane-section">
+                        <div class="rds-section-label streams-consumers-label">@selectedGroup — consumers</div>
+                        @if (_consumers.Count == 0)
+                        {
+                            <div class="streams-empty streams-consumers-empty">No consumers have read from @selectedGroup yet.</div>
+                        }
+                        @foreach (var consumer in _consumers)
+                        {
+                            var stalled = IsStalled(consumer);
+                            <div class="@("streams-consumer consumer-row" + (stalled ? " rds-row-danger" : ""))" data-consumer="@consumer.Name">
+                                <span class="@("rds-dot" + (stalled ? " rds-dot-danger" : consumer.Idle < HealthyIdle ? "" : " streams-dot-idle"))"></span>
+                                <span class="streams-consumer-name consumer-row-name">@consumer.Name</span>
+                                <span class="streams-consumer-idle consumer-row-idle">idle @RedisFormat.Duration(consumer.Idle)</span>
+                                <span class="streams-consumer-pending consumer-row-pending">@RedisFormat.Count(consumer.PendingCount)</span>
+                            </div>
+                        }
+
+                        @foreach (var consumer in _consumers.Where(IsStalled))
+                        {
+                            var live = LiveConsumer(consumer.Name);
+                            <div class="streams-stalled" data-consumer="@consumer.Name">
+                                <p class="streams-stalled-text">@consumer.Name stopped reading @RedisFormat.Duration(consumer.Idle) ago and is holding @RedisFormat.Count(consumer.PendingCount) entries. Claim them onto a live consumer, or delete the consumer once they're moved.</p>
+                                <div class="streams-stalled-actions">
+                                    @if (live is not null)
+                                    {
+                                        <button type="button" class="rds-btn streams-claim-to-live" @onclick="@(() => ClaimToLiveAsync(consumer, live))">Claim to @live.Name…</button>
+                                    }
+                                    <button type="button" class="rds-link-danger streams-consumer-delete" @onclick="@(() => _confirmingDeleteConsumer = consumer.Name)">Delete consumer</button>
+                                </div>
+                                @if (_confirmingDeleteConsumer == consumer.Name)
+                                {
+                                    <div class="streams-delete-consumer-confirm">
+                                        <span>
+                                            XGROUP DELCONSUMER is permanent: @consumer.Name's @RedisFormat.Count(consumer.PendingCount) pending @(consumer.PendingCount == 1 ? "entry leaves" : "entries leave") the PEL with it
+                                            and won't be redelivered to anyone in @selectedGroup. Claim them first if they still need processing.
+                                        </span>
+                                        <span class="streams-delete-consumer-actions">
+                                            <button type="button" class="rds-btn streams-delete-consumer-cancel" @onclick="@(() => _confirmingDeleteConsumer = null)">Cancel</button>
+                                            <button type="button" class="rds-btn streams-delete-consumer-go" @onclick="@(() => DeleteConsumerAsync(consumer))">Delete @consumer.Name</button>
+                                        </span>
+                                    </div>
+                                }
+                            </div>
+                        }
                     </div>
+                }
+            </div>
 
-                    <MudText Typo="Typo.subtitle2" Class="mt-4">Consumer groups</MudText>
-                    <MudSimpleTable Class="streams-groups-table" Dense="true" Elevation="0">
-                        <thead><tr><th>Group</th><th>Consumers</th><th>Pending</th><th>Last delivered</th></tr></thead>
-                        <tbody>
-                            @foreach (var group in _groups)
-                            {
-                                <tr class="@("group-row" + (group.Name == _selectedGroup ? " group-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectGroupAsync(group.Name))">
-                                    <td class="group-row-name">@group.Name</td>
-                                    <td class="group-row-consumers">@group.ConsumerCount</td>
-                                    <td class="group-row-pending">@group.PendingCount</td>
-                                    <td class="group-row-lastdelivered">@group.LastDeliveredId</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-
+            @* ---- right: the selected group's pending entries + entry detail ---- *@
+            <div class="rds-pane">
+                <div class="streams-pending-head">
+                    <span class="rds-section-label streams-pending-label">Pending entries@(_selectedGroup is null ? "" : $" — {_selectedGroup}")</span>
+                    @if (_checked.Count > 0)
+                    {
+                        <span class="streams-pending-selected">@_checked.Count selected</span>
+                    }
+                    <span class="rds-spacer"></span>
                     @if (_selectedGroup is not null)
                     {
-                        <MudText Typo="Typo.subtitle2" Class="mt-4">Consumers — @_selectedGroup</MudText>
-                        <MudSimpleTable Class="streams-consumers-table" Dense="true" Elevation="0">
-                            <thead><tr><th>Consumer</th><th>Pending</th><th>Idle</th></tr></thead>
-                            <tbody>
-                                @foreach (var consumer in _consumers)
-                                {
-                                    <tr class="consumer-row">
-                                        <td class="consumer-row-name">@consumer.Name</td>
-                                        <td class="consumer-row-pending">@consumer.PendingCount</td>
-                                        <td class="consumer-row-idle">@FormatDuration(consumer.Idle)</td>
-                                    </tr>
-                                }
-                            </tbody>
-                        </MudSimpleTable>
-
-                        <MudText Typo="Typo.subtitle2" Class="mt-4">Pending entries — @_selectedGroup</MudText>
-                        <div class="d-flex gap-2 align-end mb-2">
-                            <MudTextField id="streams-claim-consumer" data-testid="streams-claim-consumer" Class="streams-claim-consumer" T="string" Value="_claimConsumer"
-                                          ValueChanged="v => _claimConsumer = v ?? string.Empty" Label="Claim to consumer" Immediate="true" />
-                            <MudNumericField id="streams-claim-minidle" data-testid="streams-claim-minidle" Class="streams-claim-minidle" T="long" Value="_claimMinIdleMs"
-                                              ValueChanged="v => _claimMinIdleMs = v" Label="Min idle (ms)" Immediate="true" HideSpinButtons="true" />
+                        <div class="rds-actions streams-pending-actions">
+                            <button type="button" class="rds-btn streams-pending-claim" disabled="@(_checked.Count == 0)" @onclick="ClaimSelectedAsync">Claim</button>
+                            <button type="button" class="rds-btn streams-pending-ack" disabled="@(_checked.Count == 0)" @onclick="AckSelectedAsync">Ack</button>
+                            <button type="button" class="rds-link-danger streams-pending-delete" disabled="@(_checked.Count == 0)" @onclick="DeleteSelectedAsync">XDEL</button>
                         </div>
-                        <MudSimpleTable Class="streams-pending-table" Dense="true" Elevation="0">
-                            <thead><tr><th>Id</th><th>Consumer</th><th>Idle</th><th>Deliveries</th><th></th></tr></thead>
+                    }
+                </div>
+
+                @if (_selectedGroup is null)
+                {
+                    <div class="streams-empty streams-pending-empty streams-pane-pad">
+                        @(_groups.Count == 0
+                            ? "Pending entries are tracked per consumer group — this stream has none yet."
+                            : "Select a consumer group to see its pending entries.")
+                    </div>
+                }
+                else if (Pending.Count == 0)
+                {
+                    <div class="streams-empty streams-pending-empty streams-pane-pad">
+                        No pending entries — @_selectedGroup is caught up: everything delivered so far has been acknowledged.
+                    </div>
+                }
+                else
+                {
+                    <div class="streams-pending-wrap">
+                        <table class="rds-table streams-pending-table">
+                            <thead>
+                                <tr><th class="streams-check-col"></th><th>Entry id</th><th>Owner</th><th class="rds-num">Idle</th><th class="rds-num">Deliv.</th></tr>
+                            </thead>
                             <tbody>
-                                @foreach (var entry in _pending)
+                                @foreach (var entry in Pending)
                                 {
-                                    <tr class="pending-row">
-                                        <td class="pending-row-id" style="font-family:monospace">@entry.Id</td>
-                                        <td class="pending-row-consumer">@entry.Consumer</td>
-                                        <td class="pending-row-idle">@FormatDuration(entry.Idle)</td>
-                                        <td class="pending-row-deliveries">@entry.DeliveryCount</td>
-                                        <td class="d-flex gap-1">
-                                            <MudButton Class="pending-row-ack" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => AckAsync(entry))">Ack</MudButton>
-                                            <MudButton Class="pending-row-claim" Size="Size.Small" Variant="Variant.Outlined"
-                                                       Disabled="@string.IsNullOrWhiteSpace(_claimConsumer)" OnClick="@(() => ClaimAsync(entry))">Claim</MudButton>
-                                            <MudButton Class="pending-row-delete" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => DeleteEntryAsync(entry))">Delete</MudButton>
+                                    <tr class="@("pending-row rds-clickable" + (entry.Id == _detailId ? " rds-selected" : ""))" data-entry-id="@entry.Id"
+                                        @onclick="@(() => ShowEntryAsync(entry))">
+                                        <td class="streams-check-col" @onclick:stopPropagation="true">
+                                            <input type="checkbox" class="pending-row-check" aria-label="@($"Select {entry.Id}")" checked="@_checked.Contains(entry.Id)"
+                                                   @onchange="@(e => ToggleChecked(entry.Id, e.Value is true))" />
                                         </td>
+                                        <td class="pending-row-id">@entry.Id</td>
+                                        <td class="pending-row-consumer rds-muted">@entry.Consumer</td>
+                                        <td class="@("pending-row-idle rds-num" + (entry.Idle > StalledIdle ? " rds-warn" : ""))">@RedisFormat.Duration(entry.Idle)</td>
+                                        <td class="@("pending-row-deliveries rds-num" + (entry.DeliveryCount >= PoisonDeliveries ? " rds-danger" : ""))">@entry.DeliveryCount</td>
                                     </tr>
                                 }
                             </tbody>
-                        </MudSimpleTable>
-                    }
-
-                    <MudText Typo="Typo.subtitle2" Class="mt-4">Add entry (XADD)</MudText>
-                    <div class="d-flex gap-2 align-end mt-1">
-                        <MudTextField id="streams-newfield-name" data-testid="streams-newfield-name" Class="streams-newfield-name" T="string" Value="_newFieldName"
-                                      ValueChanged="v => _newFieldName = v ?? string.Empty" Label="Field" Immediate="true" />
-                        <MudTextField id="streams-newfield-value" data-testid="streams-newfield-value" Class="streams-newfield-value" T="string" Value="_newFieldValue"
-                                      ValueChanged="v => _newFieldValue = v ?? string.Empty" Label="Value" Immediate="true" />
-                        <MudButton Class="streams-newfield-add" Variant="Variant.Outlined"
-                                   Disabled="@(string.IsNullOrWhiteSpace(_newFieldName))" OnClick="AddFieldRow">Add field</MudButton>
+                        </table>
                     </div>
-                    @if (_pendingFields.Count > 0)
-                    {
-                        <MudSimpleTable Class="streams-pendingfields-table" Dense="true" Elevation="0">
-                            <tbody>
-                                @foreach (var field in _pendingFields)
-                                {
-                                    <tr class="pendingfield-row"><td>@field.Field</td><td>@field.Value</td></tr>
-                                }
-                            </tbody>
-                        </MudSimpleTable>
-                    }
-                    <MudButton Class="streams-xadd-submit mt-2" Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="@(_pendingFields.Count == 0)" OnClick="AddEntryAsync">Add entry</MudButton>
-
-                    <MudText Typo="Typo.subtitle2" Class="mt-4">Recent entries</MudText>
-                    <MudSimpleTable Class="streams-entries-table" Dense="true" Elevation="0">
-                        <thead><tr><th>Id</th><th>Fields</th></tr></thead>
-                        <tbody>
-                            @foreach (var entry in _recentEntries)
-                            {
-                                <tr class="entry-row">
-                                    <td class="entry-row-id" style="font-family:monospace">@entry.Id</td>
-                                    <td class="entry-row-fields">@string.Join(", ", entry.Fields.Select(f => $"{f.Field}={f.Value}"))</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
                 }
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
-}
+
+                @if (_detailId is { } detailId)
+                {
+                    <div class="streams-entry-detail">
+                        <div class="streams-entry-head">
+                            <span class="streams-entry-id rds-mono">@detailId</span>
+                            @if (_detailDeliveries is { } deliveries)
+                            {
+                                var poison = deliveries >= PoisonDeliveries;
+                                <span class="@("streams-entry-deliveries" + (poison ? " rds-danger" : " rds-muted"))">delivered @(deliveries)×@(poison ? " — likely poison" : "")</span>
+                            }
+                        </div>
+                        @if (_entryLoading)
+                        {
+                            <div class="rds-skeleton" style="margin: 10px 0; width: 50%"></div>
+                        }
+                        else if (_entryError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="streams-entry-error">@_entryError</MudAlert>
+                        }
+                        else if (_detailEntry is null)
+                        {
+                            <div class="streams-empty streams-entry-missing">
+                                This entry is no longer in the stream — it was deleted or trimmed, though it's still pending in the group until acked.
+                            </div>
+                        }
+                        else
+                        {
+                            <table class="rds-table streams-entry-table">
+                                <tbody>
+                                    @foreach (var field in _detailEntry.Fields)
+                                    {
+                                        <tr>
+                                            <td class="streams-entry-field rds-muted">@field.Field</td>
+                                            <td class="streams-entry-value">@field.Value</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        <p class="rds-footnote streams-entry-footnote">Stream entries are flat field/value pairs, so they render as a table — no body/properties split as on Service Bus.</p>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ---- recent entries (not in the mockup; kept as a secondary section) ---- *@
+        <div class="streams-recent">
+            <div class="rds-section-label">Recent entries <span class="streams-recent-sub">newest @RecentEntriesCount</span></div>
+            @if (_recentEntries.Count == 0)
+            {
+                <div class="streams-empty streams-entries-empty">The stream is empty.</div>
+            }
+            else
+            {
+                <table class="rds-table streams-entries-table">
+                    <thead><tr><th>Id</th><th>Fields</th></tr></thead>
+                    <tbody>
+                        @foreach (var entry in _recentEntries)
+                        {
+                            <tr class="entry-row">
+                                <td class="entry-row-id">@entry.Id</td>
+                                <td class="entry-row-fields">@string.Join(", ", entry.Fields.Select(f => $"{f.Field}={f.Value}"))</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+</div>
 
 @code {
     private const int ScanCount = 1000;
@@ -209,8 +341,28 @@
     private const int RecentEntriesCount = 20;
     private const int PendingEntriesCount = 50;
 
+    // "Claim to {live consumer}…" moves every entry the stalled consumer holds, so it re-reads the
+    // group's PEL with a larger page than the table shows (XPENDING has no consumer filter in
+    // IRedisOperations). A consumer holding more than this needs a second click.
+    private const int ClaimSweepCount = 1000;
+
+    /// <summary>A consumer idle for less than this is "live" (green dot).</summary>
+    internal static readonly TimeSpan HealthyIdle = TimeSpan.FromSeconds(60);
+
+    /// <summary>A consumer idle for longer than this while still holding pending entries is stalled; a pending entry idle this long is warn-colored.</summary>
+    internal static readonly TimeSpan StalledIdle = TimeSpan.FromMinutes(5);
+
+    /// <summary>An entry delivered this many times without an ack is probably crashing its consumer.</summary>
+    internal const int PoisonDeliveries = 5;
+
+    /// <summary>
+    /// Only one group row is warn-colored: the one with the largest backlog (lag + pending), and only
+    /// once that backlog reaches this many entries. One hot row draws the eye to where the trouble is
+    /// (mockup 1d); a group that's merely a few entries behind a busy stream isn't worth flagging.
+    /// </summary>
+    internal const long HotBacklogThreshold = 100;
+
     private RedisSelection? _selection;
-    private string _pattern = "*";
     private List<StreamSummary> _streams = [];
     private long _cursor;
     private bool _complete = true;
@@ -220,29 +372,82 @@
     private string? _selectedStreamKey;
     private StreamOverview? _overview;
     private List<StreamConsumerGroupSummary> _groups = [];
+    private Dictionary<string, IReadOnlyList<StreamPendingEntry>> _pendingByGroup = [];
     private string? _selectedGroup;
     private List<StreamConsumer> _consumers = [];
-    private List<StreamPendingEntry> _pending = [];
     private List<StreamEntry> _recentEntries = [];
     private bool _detailLoading;
     private string? _detailError;
+    private string? _actionError;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
 
-    private readonly List<StreamFieldValue> _pendingFields = [];
-    private string _newFieldName = "";
-    private string _newFieldValue = "";
-    private long _trimMaxLen = 1000;
+    private readonly HashSet<string> _checked = [];
+    private string? _confirmingDeleteConsumer;
 
-    private string _claimConsumer = "";
-    private long _claimMinIdleMs;
+    private string? _detailId;
+    private int? _detailDeliveries;
+    private StreamEntry? _detailEntry;
+    private bool _entryLoading;
+    private string? _entryError;
+
+    private IReadOnlyList<StreamPendingEntry> Pending =>
+        _selectedGroup is { } group && _pendingByGroup.TryGetValue(group, out var entries) ? entries : [];
+
+    private long TotalPending => _groups.Sum(g => g.PendingCount);
+
+    private string? HotGroup => _groups
+        .Select(g => (g.Name, Backlog: (g.Lag ?? 0) + g.PendingCount))
+        .Where(g => g.Backlog >= HotBacklogThreshold)
+        .OrderByDescending(g => g.Backlog)
+        .Select(g => g.Name)
+        .FirstOrDefault();
+
+    private string? FirstEntryCaption =>
+        _overview?.FirstEntryId is { } id && RedisFormat.StreamIdTime(id) is { } at ? $"first entry {RedisFormat.Ago(at, _now)}" : null;
+
+    private string? LastIdCaption =>
+        _overview?.LastGeneratedId is { } id && RedisFormat.StreamIdTime(id) is { } at && at.ToUnixTimeMilliseconds() > 0 ? RedisFormat.Ago(at, _now) : null;
+
+    // The oldest idle time among the pending entries loaded for every group (each group's first
+    // PendingEntriesCount entries -- XPENDING returns them oldest-id first, which is where the
+    // longest-idle ones live).
+    private string? PendingCaption
+    {
+        get
+        {
+            if (TotalPending == 0)
+            {
+                return "nothing pending";
+            }
+
+            var idle = _pendingByGroup.Values.SelectMany(e => e).Select(e => (TimeSpan?)e.Idle).Max();
+            return idle is { } max ? $"oldest idle {RedisFormat.Duration(max)}" : null;
+        }
+    }
+
+    private static bool IsStalled(StreamConsumer consumer) => consumer.Idle > StalledIdle && consumer.PendingCount > 0;
+
+    /// <summary>The most recently active consumer that isn't itself stalled -- the natural home for a stalled consumer's entries.</summary>
+    private StreamConsumer? LiveConsumer(string except) =>
+        _consumers.Where(c => c.Name != except && !IsStalled(c)).MinBy(c => c.Idle);
 
     private async Task OnSelectionChangedAsync(RedisSelection selection)
     {
         _selection = selection;
-        _selectedStreamKey = null;
-        await RescanAsync();
+        await ScanAllAsync();
+
+        // ?stream= (the Keys page links here with it) wins when that stream exists in this database;
+        // otherwise the first stream found.
+        var wanted = QueryParameter("stream");
+        var key = wanted is not null && _streams.Any(s => s.Key == wanted) ? wanted : _streams.FirstOrDefault()?.Key;
+        await SelectStreamAsync(key);
     }
 
-    private Task RescanAsync() => ScanAllAsync();
+    private string? QueryParameter(string name)
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        return query.TryGetValue(name, out var value) && !string.IsNullOrEmpty(value.ToString()) ? value.ToString() : null;
+    }
 
     private async Task ScanAllAsync()
     {
@@ -262,11 +467,12 @@
             var steps = 0;
             while (!_complete && _streams.Count < MaxStreams && steps < MaxSteps)
             {
-                var request = new ScanStreamsRequest(selection.Database, _pattern, _cursor, ScanCount);
+                var request = new ScanStreamsRequest(selection.Database, "*", _cursor, ScanCount);
                 var result = await QueryHandler.ScanAsync(selection.Connection.Id, request);
                 if (!result.IsSuccess)
                 {
                     _error = result.Error;
+                    _complete = true;
                     break;
                 }
 
@@ -275,8 +481,11 @@
                 _cursor = page.Cursor;
                 _complete = page.Complete;
                 steps++;
-                StateHasChanged();
             }
+
+            // Busiest (longest) stream first, so "auto-select the first stream" lands on the one most worth looking at.
+            _streams = [.. _streams.OrderByDescending(s => s.Length).ThenBy(s => s.Key, StringComparer.Ordinal)];
+            _complete = true;
         }
         finally
         {
@@ -284,15 +493,35 @@
         }
     }
 
-    private async Task SelectStreamAsync(StreamSummary stream)
+    private async Task SelectStreamAsync(string? key)
     {
-        _selectedStreamKey = stream.Key;
+        _selectedStreamKey = key;
+        _overview = null;
+        _groups = [];
+        _pendingByGroup = [];
         _selectedGroup = null;
         _consumers = [];
-        _pending = [];
-        _pendingFields.Clear();
-        _trimMaxLen = 1000;
+        _recentEntries = [];
+        _actionError = null;
+        ResetPendingSelection();
+
+        var uri = Navigation.GetUriWithQueryParameter("stream", key);
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
         await LoadDetailAsync();
+    }
+
+    private void ResetPendingSelection()
+    {
+        _checked.Clear();
+        _confirmingDeleteConsumer = null;
+        _detailId = null;
+        _detailEntry = null;
+        _detailDeliveries = null;
+        _entryError = null;
     }
 
     private async Task LoadDetailAsync()
@@ -304,6 +533,7 @@
 
         _detailLoading = true;
         _detailError = null;
+        _now = DateTimeOffset.UtcNow;
         try
         {
             var overviewResult = await QueryHandler.GetOverviewAsync(selection.Connection.Id, selection.Database, key);
@@ -317,10 +547,36 @@
             }
 
             var groupsResult = await QueryHandler.GetConsumerGroupsAsync(selection.Connection.Id, selection.Database, key);
-            _groups = groupsResult.IsSuccess ? groupsResult.Value!.ToList() : [];
+            _groups = groupsResult.IsSuccess ? [.. groupsResult.Value!] : [];
+            if (!groupsResult.IsSuccess)
+            {
+                _detailError ??= groupsResult.Error;
+            }
+
+            // Every group's first page of pending entries: the PENDING tile's "oldest idle" needs all
+            // of them, and the selected group's table reuses its page without a second round trip.
+            var pending = new Dictionary<string, IReadOnlyList<StreamPendingEntry>>();
+            foreach (var group in _groups)
+            {
+                var pendingResult = await QueryHandler.GetPendingEntriesAsync(selection.Connection.Id, selection.Database, key, group.Name, PendingEntriesCount);
+                pending[group.Name] = pendingResult.IsSuccess ? pendingResult.Value! : [];
+            }
+
+            _pendingByGroup = pending;
+
+            // Open on the group most worth looking at (mockup 1d opens on the backed-up one), else the first.
+            if (_selectedGroup is null || _groups.All(g => g.Name != _selectedGroup))
+            {
+                _selectedGroup = HotGroup ?? _groups.FirstOrDefault()?.Name;
+            }
+
+            var visible = Pending.Select(p => p.Id).ToHashSet();
+            _checked.IntersectWith(visible);
+
+            await LoadConsumersAsync();
 
             var entriesResult = await QueryHandler.GetEntriesAsync(selection.Connection.Id, selection.Database, key, null, RecentEntriesCount);
-            _recentEntries = entriesResult.IsSuccess ? entriesResult.Value!.ToList() : [];
+            _recentEntries = entriesResult.IsSuccess ? [.. entriesResult.Value!] : [];
         }
         finally
         {
@@ -328,148 +584,289 @@
         }
     }
 
-    private async Task SelectGroupAsync(string group)
-    {
-        _selectedGroup = group;
-        await LoadGroupDetailAsync();
-    }
-
-    private async Task LoadGroupDetailAsync()
+    private async Task LoadConsumersAsync()
     {
         if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
         {
+            _consumers = [];
             return;
         }
 
         var consumersResult = await QueryHandler.GetConsumersAsync(selection.Connection.Id, selection.Database, key, group);
-        _consumers = consumersResult.IsSuccess ? consumersResult.Value!.ToList() : [];
-
-        var pendingResult = await QueryHandler.GetPendingEntriesAsync(selection.Connection.Id, selection.Database, key, group, PendingEntriesCount);
-        _pending = pendingResult.IsSuccess ? pendingResult.Value!.ToList() : [];
+        _consumers = consumersResult.IsSuccess ? [.. consumersResult.Value!] : [];
     }
 
-    private void AddFieldRow()
+    private async Task SelectGroupAsync(string group)
     {
-        if (string.IsNullOrWhiteSpace(_newFieldName))
+        if (group == _selectedGroup)
         {
             return;
         }
 
-        _pendingFields.Add(new StreamFieldValue(_newFieldName, _newFieldValue));
-        _newFieldName = "";
-        _newFieldValue = "";
+        _selectedGroup = group;
+        ResetPendingSelection();
+        await LoadConsumersAsync();
     }
 
-    private async Task AddEntryAsync()
+    private void ToggleChecked(string id, bool isChecked)
     {
-        if (_selection is not { } selection || _selectedStreamKey is not { } key || _pendingFields.Count == 0)
+        if (isChecked)
         {
-            return;
-        }
-
-        var result = await AddEntryHandler.HandleAsync(new AddStreamEntryCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, [.. _pendingFields]));
-        if (result.IsSuccess)
-        {
-            Snackbar.Add($"Added entry {result.Value}", Severity.Success);
-            _pendingFields.Clear();
-            await LoadDetailAsync();
+            _checked.Add(id);
         }
         else
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            _checked.Remove(id);
         }
     }
 
-    private async Task TrimAsync()
+    /// <summary>Checked ids in table order, so commands and confirmations list them the way the user sees them.</summary>
+    private List<string> CheckedIds() => [.. Pending.Where(p => _checked.Contains(p.Id)).Select(p => p.Id)];
+
+    private async Task ShowEntryAsync(StreamPendingEntry entry)
     {
         if (_selection is not { } selection || _selectedStreamKey is not { } key)
         {
             return;
         }
 
-        // IsProd comes from the server-resolved connection picker, never the client.
-        if (!await Confirmation.ConfirmAsync("Trim", key, selection.Connection.IsProd))
+        _detailId = entry.Id;
+        _detailDeliveries = entry.DeliveryCount;
+        _detailEntry = null;
+        _entryError = null;
+        _entryLoading = true;
+        try
+        {
+            var result = await QueryHandler.GetEntryAsync(selection.Connection.Id, selection.Database, key, entry.Id);
+            if (result.IsSuccess)
+            {
+                _detailEntry = result.Value;
+            }
+            else
+            {
+                _entryError = result.Error;
+            }
+        }
+        finally
+        {
+            _entryLoading = false;
+        }
+    }
+
+    // ---- header actions ----
+
+    private async Task OpenAddEntryAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key)
         {
             return;
         }
 
-        var result = await TrimHandler.HandleAsync(new TrimStreamCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, _trimMaxLen));
-        if (result.IsSuccess)
+        var parameters = new DialogParameters
+        {
+            [nameof(StreamAddEntryDialog.ConnectionId)] = selection.Connection.Id,
+            [nameof(StreamAddEntryDialog.ConnectionName)] = selection.Connection.Name,
+            [nameof(StreamAddEntryDialog.Database)] = selection.Database,
+            [nameof(StreamAddEntryDialog.Key)] = key,
+        };
+        var dialog = await DialogService.ShowAsync<StreamAddEntryDialog>($"XADD {key}", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if (await DialogResultAsync(dialog) is { Canceled: false, Data: string id })
+        {
+            Snackbar.Add($"Added entry {id}", Severity.Success);
+            await LoadDetailAsync();
+        }
+    }
+
+    private async Task OpenTrimAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            [nameof(StreamTrimDialog.ConnectionId)] = selection.Connection.Id,
+            [nameof(StreamTrimDialog.ConnectionName)] = selection.Connection.Name,
+            [nameof(StreamTrimDialog.Database)] = selection.Database,
+            [nameof(StreamTrimDialog.Key)] = key,
+            // IsProd comes from the server-resolved connection picker, never the client.
+            [nameof(StreamTrimDialog.IsProd)] = selection.Connection.IsProd,
+            [nameof(StreamTrimDialog.Length)] = _overview?.Length ?? 0L,
+        };
+        var dialog = await DialogService.ShowAsync<StreamTrimDialog>($"Trim {key}", parameters, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        if (await DialogResultAsync(dialog) is { Canceled: false })
         {
             Snackbar.Add($"Trimmed {key}", Severity.Success);
             await LoadDetailAsync();
         }
-        else
-        {
-            Snackbar.Add(result.Error!, Severity.Error);
-        }
     }
 
-    private async Task AckAsync(StreamPendingEntry entry)
+    // ---- consumers ----
+
+    private async Task ClaimToLiveAsync(StreamConsumer stalled, StreamConsumer live)
     {
         if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
         {
             return;
         }
 
-        var result = await AckHandler.HandleAsync(new AcknowledgeStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, [entry.Id]));
-        if (result.IsSuccess)
+        _actionError = null;
+        var result = await QueryHandler.GetPendingEntriesAsync(selection.Connection.Id, selection.Database, key, group, ClaimSweepCount);
+        if (!result.IsSuccess)
         {
-            Snackbar.Add($"Acked {entry.Id}", Severity.Success);
-            _pending.RemoveAll(p => p.Id == entry.Id);
+            _actionError = result.Error;
+            return;
+        }
+
+        var ids = result.Value!.Where(p => p.Consumer == stalled.Name).Select(p => p.Id).ToList();
+        if (ids.Count == 0)
+        {
+            _actionError = $"{stalled.Name} no longer holds any pending entries.";
             await LoadDetailAsync();
+            return;
         }
-        else
-        {
-            Snackbar.Add(result.Error!, Severity.Error);
-        }
+
+        await OpenClaimDialogAsync(ids, live.Name, stalled.Name);
     }
 
-    private async Task ClaimAsync(StreamPendingEntry entry)
+    private async Task DeleteConsumerAsync(StreamConsumer consumer)
     {
-        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group || string.IsNullOrWhiteSpace(_claimConsumer))
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
         {
             return;
         }
 
-        var result = await ClaimHandler.HandleAsync(new ClaimStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, _claimConsumer, _claimMinIdleMs, [entry.Id]));
+        // Destructive: IsProd comes from the server-resolved connection picker, never the client.
+        if (!await Confirmation.ConfirmAsync("Delete consumer", consumer.Name, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        _confirmingDeleteConsumer = null;
+        var result = await DeleteConsumerHandler.HandleAsync(new DeleteStreamConsumerCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, consumer.Name));
         if (result.IsSuccess)
         {
-            Snackbar.Add($"Claimed {result.Value!.Count} entry(ies)", Severity.Success);
-            await LoadGroupDetailAsync();
+            _actionError = null;
+            Snackbar.Add($"Deleted consumer {consumer.Name}", Severity.Success);
+            ResetPendingSelection();
+            await LoadDetailAsync();
         }
         else
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            _actionError = result.Error;
         }
     }
 
-    private async Task DeleteEntryAsync(StreamPendingEntry entry)
+    // ---- pending entries: bulk actions on the checked rows ----
+
+    private async Task ClaimSelectedAsync()
+    {
+        var ids = CheckedIds();
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var owners = Pending.Where(p => _checked.Contains(p.Id)).Select(p => p.Consumer).ToHashSet();
+        var target = _consumers.Where(c => !IsStalled(c) && !owners.Contains(c.Name)).MinBy(c => c.Idle)
+            ?? _consumers.Where(c => !IsStalled(c)).MinBy(c => c.Idle);
+        await OpenClaimDialogAsync(ids, target?.Name ?? "", null);
+    }
+
+    private async Task OpenClaimDialogAsync(IReadOnlyList<string> ids, string consumer, string? from)
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            [nameof(StreamClaimDialog.ConnectionId)] = selection.Connection.Id,
+            [nameof(StreamClaimDialog.ConnectionName)] = selection.Connection.Name,
+            [nameof(StreamClaimDialog.Database)] = selection.Database,
+            [nameof(StreamClaimDialog.Key)] = key,
+            [nameof(StreamClaimDialog.Group)] = group,
+            [nameof(StreamClaimDialog.EntryIds)] = ids,
+            [nameof(StreamClaimDialog.Consumers)] = (IReadOnlyList<string>)[.. _consumers.Select(c => c.Name)],
+            [nameof(StreamClaimDialog.Consumer)] = consumer,
+            [nameof(StreamClaimDialog.From)] = from,
+        };
+        var dialog = await DialogService.ShowAsync<StreamClaimDialog>("Claim pending entries", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if (await DialogResultAsync(dialog) is { Canceled: false, Data: int claimed })
+        {
+            Snackbar.Add($"Claimed {claimed} of {ids.Count} entr{(ids.Count == 1 ? "y" : "ies")}", Severity.Success);
+            _checked.Clear();
+            await LoadDetailAsync();
+        }
+    }
+
+    private async Task AckSelectedAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
+        {
+            return;
+        }
+
+        var ids = CheckedIds();
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var result = await AckHandler.HandleAsync(new AcknowledgeStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, ids));
+        if (result.IsSuccess)
+        {
+            _actionError = null;
+            Snackbar.Add($"Acked {ids.Count} entr{(ids.Count == 1 ? "y" : "ies")}", Severity.Success);
+            _checked.Clear();
+            await LoadDetailAsync();
+        }
+        else
+        {
+            _actionError = result.Error;
+        }
+    }
+
+    private async Task DeleteSelectedAsync()
     {
         if (_selection is not { } selection || _selectedStreamKey is not { } key)
         {
             return;
         }
 
-        // IsProd comes from the server-resolved connection picker, never the client.
-        if (!await Confirmation.ConfirmAsync("Delete", entry.Id, selection.Connection.IsProd))
+        var ids = CheckedIds();
+        if (ids.Count == 0)
         {
             return;
         }
 
-        var result = await DeleteEntriesHandler.HandleAsync(new DeleteStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, [entry.Id]));
+        // Destructive: IsProd comes from the server-resolved connection picker, never the client.
+        // One entry confirms against its id; several against the stream, with a count.
+        var confirmed = ids.Count == 1
+            ? await Confirmation.ConfirmAsync("Delete", ids[0], selection.Connection.IsProd)
+            : await Confirmation.ConfirmAsync("Delete", key, selection.Connection.IsProd, ids.Count);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var result = await DeleteEntriesHandler.HandleAsync(new DeleteStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, ids));
         if (result.IsSuccess)
         {
-            Snackbar.Add($"Deleted {entry.Id}", Severity.Success);
-            _pending.RemoveAll(p => p.Id == entry.Id);
+            _actionError = null;
+            Snackbar.Add($"Deleted {ids.Count} entr{(ids.Count == 1 ? "y" : "ies")}", Severity.Success);
+            ResetPendingSelection();
             await LoadDetailAsync();
         }
         else
         {
-            Snackbar.Add(result.Error!, Severity.Error);
+            _actionError = result.Error;
         }
     }
 
-    private static string FormatDuration(TimeSpan duration) =>
-        duration.TotalDays >= 1 ? $"{duration.TotalDays:N0}d" : duration.TotalHours >= 1 ? $"{duration.TotalHours:N0}h" : duration.TotalMinutes >= 1 ? $"{duration.TotalMinutes:N0}m" : $"{duration.TotalSeconds:N0}s";
+    /// <summary>A substituted IDialogService in tests hands back a reference whose Result is null; treat that as cancelled.</summary>
+    private static async Task<DialogResult?> DialogResultAsync(IDialogReference? dialog) =>
+        dialog?.Result is { } result ? await result : null;
 }
