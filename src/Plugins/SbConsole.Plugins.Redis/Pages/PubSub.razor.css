@@ -1,0 +1,92 @@
+/* Pub/Sub page -- scoped on top of the shared rds-* classes in wwwroot/redis.css. Colors only
+   from --rds-* (defined on .rds-page) or --mud-palette-* tokens. */
+
+.pubsub-split { min-height: 620px; }
+
+.pubsub-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+/* ---- boxed inputs, matching the mockup's search/filter fields ---- */
+.pubsub-field { display: flex; min-width: 0; }
+.pubsub-field-grow { flex: 1 1 200px; }
+.pubsub-input {
+    width: 100%;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--rds-line);
+    border-radius: 6px;
+    background: var(--mud-palette-background);
+    color: var(--mud-palette-text-primary);
+    font-family: var(--rds-mono);
+    font-size: 13px;
+    outline: none;
+}
+.pubsub-input::placeholder { color: var(--rds-muted); opacity: .8; }
+.pubsub-input:focus { border-color: var(--rds-accent); box-shadow: 0 0 0 1px var(--rds-accent); }
+.pubsub-input:disabled { opacity: .65; cursor: not-allowed; }
+
+.pubsub-tail-mode > button { font-family: var(--rds-mono); font-size: 11px; height: 32px; letter-spacing: .02em; }
+.pubsub-tail-mode > button:disabled { cursor: not-allowed; opacity: .6; }
+.pubsub-toolbar .rds-btn, .pubsub-toolbar .rds-btn-primary { height: 34px; }
+.pubsub-stop { border-color: var(--rds-danger); color: var(--rds-danger); }
+.pubsub-stop:hover { background: color-mix(in srgb, var(--rds-danger) 12%, transparent); }
+
+/* ---- scrolling list areas ---- */
+.pubsub-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; max-height: 560px; }
+.pubsub-channels .pubsub-scroll { padding: 4px 12px 8px; }
+.pubsub-messages { padding: 0 12px 8px; }
+.pubsub-channels-table td:first-child, .pubsub-tail-table td:first-child { padding-left: 10px; }
+.pubsub-channels-table th:first-child, .pubsub-tail-table th:first-child { padding-left: 10px; }
+
+.pubsub-alert { margin: 10px 20px 0; }
+.pubsub-alert-flush { margin-top: 10px; }
+
+/* ---- empty states ---- */
+.pubsub-channels-empty { line-height: 1.55; padding: 22px 10px; }
+.pubsub-channels-empty p { margin: 8px 0 0; }
+.pubsub-empty-title { color: var(--mud-palette-text-primary); font-size: 14px; }
+.pubsub-channels-empty .rds-mono { font-size: 12px; }
+.pubsub-empty-suggest { font-size: 12px; }
+.pubsub-tail-empty, .pubsub-tail-idle { padding: 22px 10px; }
+.pubsub-skeleton-short { width: 55%; }
+
+/* ---- live tail ---- */
+.pubsub-tail-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--rds-muted);
+}
+.pubsub-tail-status .rds-mono { font-size: 13px; }
+.pubsub-dot-idle { background: var(--rds-muted); opacity: .6; }
+
+.pubsub-messages-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 12px 22px 4px;
+    border-top: 1px solid var(--rds-line);
+}
+.pubsub-inline-label { margin: 0; }
+
+.pubsub-col-time { width: 84px; }
+.pubsub-col-channel { width: 200px; }
+.pubsub-tail-table { table-layout: fixed; }
+.pubsub-message-row-time { font-variant-numeric: tabular-nums; }
+.pubsub-message-row-channel, .pubsub-message-row-payload {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pubsub-message-detail td { padding: 4px 8px 10px; background: color-mix(in srgb, var(--rds-accent) 6%, transparent); }
+.pubsub-message-full { max-height: 320px; overflow: auto; font-size: 12px; }
+
+/* ---- publish footer ---- */
+.rds-pane-footer.pubsub-publish { flex-direction: column; align-items: stretch; gap: 6px; }
+.pubsub-publish-channel { flex: 0 1 220px; }
