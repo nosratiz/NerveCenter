@@ -1,3 +1,7 @@
+@using System.Globalization
+@using System.Text.Encodings.Web
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Web
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Keys
 @inject KeysQueryHandler QueryHandler
@@ -6,53 +10,107 @@
 @inject RevealHashFieldCommandHandler RevealHandler
 @inject ISnackbar Snackbar
 
-@if (_loading)
-{
-    <MudProgressCircular Class="hash-editor-loading" Size="Size.Small" Indeterminate="true" />
-}
-else if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="hash-editor-error">@_error</MudAlert>
-}
-else
-{
-    <MudText Typo="Typo.caption" Class="hash-editor-field-count mud-text-secondary">@_page?.TotalFieldCount field(s)</MudText>
-    <MudSimpleTable Class="hash-editor-fields" Dense="true" Elevation="0">
-        <thead><tr><th>Field</th><th>Value</th><th>Size</th><th></th></tr></thead>
-        <tbody>
-            @foreach (var field in _page?.Fields ?? [])
-            {
-                var masked = RedisSecretFieldMasking.IsSensitive(field.Field) && !_revealed.Contains(field.Field);
-                <tr class="hash-field-row">
-                    <td class="hash-field-name" style="font-family:monospace">@field.Field</td>
-                    <td class="hash-field-value" style="font-family:monospace">@(masked ? "••••••••" : field.Value)</td>
-                    <td class="hash-field-size">@field.SizeBytes B</td>
-                    <td>
-                        <div class="d-flex gap-1">
-                            @if (masked)
-                            {
-                                <MudButton Class="hash-field-reveal" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => RevealAsync(field.Field))">Reveal</MudButton>
-                            }
-                            <MudButton Class="hash-field-delete" Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => DeleteFieldAsync(field.Field))">Delete</MudButton>
-                        </div>
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </MudSimpleTable>
-    @if (_page is { Complete: false })
+@* Hash value panel (mockup 1b, right pane): an HSCAN MATCH filter, "+ Field", a Table/JSON
+   toggle, then FIELD / VALUE / SIZE / ⋯ rows. Secret-looking fields stay masked (in both views)
+   until an audited reveal; values are previewed, never dumped whole, since one field can be MBs. *@
+<div class="he">
+    <div class="he-toolbar">
+        <MudTextField id="hash-editor-filter" data-testid="hash-editor-filter" T="string" Class="he-filter" Value="_filter"
+                      ValueChanged="v => _filter = v ?? string.Empty" Placeholder="Filter fields (HSCAN)…" Immediate="true"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" OnKeyDown="OnFilterKeyDownAsync" />
+        <button type="button" class="rds-link hash-editor-add-toggle" @onclick="ToggleAdd">+ Field</button>
+        <span class="rds-spacer"></span>
+        <div class="rds-segmented">
+            <button type="button" class="@("hash-editor-view-table" + (_jsonView ? "" : " rds-active"))" @onclick="() => _jsonView = false">Table</button>
+            <button type="button" class="@("hash-editor-view-json" + (_jsonView ? " rds-active" : ""))" @onclick="() => _jsonView = true">JSON</button>
+        </div>
+    </div>
+
+    @if (_adding)
     {
-        <MudButton Class="hash-editor-load-more mt-2" Size="Size.Small" Variant="Variant.Text" OnClick="LoadMoreAsync">Load more</MudButton>
+        <div class="he-add">
+            <MudTextField id="hash-editor-new-field" data-testid="hash-editor-new-field" T="string" Class="he-mono" Value="_newField"
+                          ValueChanged="v => _newField = v ?? string.Empty" Placeholder="field" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField id="hash-editor-new-value" data-testid="hash-editor-new-value" T="string" Class="he-mono he-grow" Value="_newValue"
+                          ValueChanged="v => _newValue = v ?? string.Empty" Placeholder="value" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <button type="button" class="rds-btn-primary hash-editor-add-field" disabled="@string.IsNullOrWhiteSpace(_newField)" @onclick="AddFieldAsync">HSET</button>
+            <button type="button" class="rds-link" @onclick="() => _adding = false">Cancel</button>
+        </div>
     }
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Add / update field</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudTextField id="hash-editor-new-field" data-testid="hash-editor-new-field" T="string" Value="_newField" ValueChanged="v => _newField = v ?? string.Empty" Label="Field" Immediate="true" />
-        <MudTextField id="hash-editor-new-value" data-testid="hash-editor-new-value" T="string" Value="_newValue" ValueChanged="v => _newValue = v ?? string.Empty" Label="Value" Immediate="true" />
-        <MudButton Class="hash-editor-add-field" Color="Color.Primary" Variant="Variant.Filled"
-                   Disabled="@string.IsNullOrWhiteSpace(_newField)" OnClick="AddFieldAsync">Set field</MudButton>
-    </div>
-}
+    @if (_loading && _page is null)
+    {
+        <div class="rds-skeleton hash-editor-loading"></div>
+        <div class="rds-skeleton" style="width:70%"></div>
+        <div class="rds-skeleton" style="width:50%"></div>
+    }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="hash-editor-error">@_error</MudAlert>
+    }
+    else if (_page is not null)
+    {
+        @if (_jsonView)
+        {
+            <pre class="rds-code he-json hash-editor-json">@JsonView</pre>
+        }
+        else if (_page.Fields.Count == 0)
+        {
+            <div class="rds-empty hash-editor-empty">@(string.IsNullOrEmpty(_appliedPattern) ? "This hash has no fields." : "No fields match this filter.")</div>
+        }
+        else
+        {
+            <table class="rds-table hash-editor-fields">
+                <thead>
+                    <tr><th>Field</th><th>Value</th><th class="rds-num">Size</th><th class="he-menu-col"></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var field in _page.Fields)
+                    {
+                        var masked = IsMasked(field.Field);
+                        var age = masked ? null : AgeHint(field.Value);
+                        <tr class="hash-field-row">
+                            <td class="he-field hash-field-name">@field.Field</td>
+                            <td class="he-value hash-field-value">
+                                @if (masked)
+                                {
+                                    <span class="he-mask">••••••••</span>
+                                    <button type="button" class="rds-link he-reveal hash-field-reveal" @onclick="() => RevealAsync(field.Field)">reveal</button>
+                                }
+                                else
+                                {
+                                    @Preview(field.Value)
+                                    @if (age is not null)
+                                    {
+                                        <span class="he-age rds-warn hash-field-age">@age</span>
+                                    }
+                                }
+                            </td>
+                            <td class="@("rds-num he-size hash-field-size" + (field.SizeBytes > 1024 ? " rds-warn" : ""))">@RedisFormat.Bytes(field.SizeBytes)</td>
+                            <td class="he-menu-col">
+                                <MudMenu Class="hash-field-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" Dense="true"
+                                         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"Actions for {field.Field}")">
+                                    <MudMenuItem Class="hash-field-edit" OnClick="() => StartEdit(field)">Edit field</MudMenuItem>
+                                    <MudMenuItem Class="hash-field-delete" OnClick="() => DeleteFieldAsync(field.Field)">
+                                        <span class="rds-danger">Delete field</span>
+                                    </MudMenuItem>
+                                </MudMenu>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <div class="he-footer">
+            <span class="rds-muted hash-editor-field-count">@RedisFormat.Count(_page.Fields.Count) of @RedisFormat.Count(_page.TotalFieldCount) fields@(string.IsNullOrEmpty(_appliedPattern) ? "" : " (filtered)")</span>
+            @if (!_page.Complete)
+            {
+                <button type="button" class="rds-link hash-editor-load-more" @onclick="LoadMoreAsync">Load more</button>
+            }
+        </div>
+    }
+</div>
 
 @code {
     [Parameter] public Guid ConnectionId { get; set; }
@@ -60,32 +118,75 @@ else
     [Parameter] public int Database { get; set; }
     [Parameter] public string Key { get; set; } = "";
 
+    /// <summary>Raised with HLEN (the page's "{n} fields" meta) after each load.</summary>
+    [Parameter] public EventCallback<long> CountChanged { get; set; }
+
     private const int PageSize = 200;
+    private const int PreviewChars = 72;
+    private const int ArrayPreviewItems = 2;
+    private const int StaleAfterDays = 30;
+
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private HashFieldPage? _page;
     private readonly HashSet<string> _revealed = [];
     private bool _loading;
     private string? _error;
+    private string _filter = "";
+    private string? _appliedPattern;
+    private bool _jsonView;
+    private bool _adding;
     private string _newField = "";
     private string _newValue = "";
+    private string? _loadedIdentity;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        var identity = $"{ConnectionId}/{Database}/{Key}";
+        if (_loadedIdentity != identity)
+        {
+            _loadedIdentity = identity;
+            _page = null;
+            _filter = "";
+            _appliedPattern = null;
+            _revealed.Clear();
+            await LoadAsync();
+        }
+    }
+
+    private bool IsMasked(string field) => RedisSecretFieldMasking.IsSensitive(field) && !_revealed.Contains(field);
 
     private async Task LoadAsync()
     {
         _loading = true;
         _error = null;
-        _revealed.Clear();
-        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, null, 0, PageSize);
+        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, _appliedPattern, 0, PageSize);
         if (result.IsSuccess)
         {
             _page = result.Value;
+            if (string.IsNullOrEmpty(_appliedPattern))
+            {
+                await CountChanged.InvokeAsync(_page!.TotalFieldCount);
+            }
         }
         else
         {
             _error = result.Error;
         }
         _loading = false;
+    }
+
+    private async Task OnFilterKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter")
+        {
+            return;
+        }
+
+        var text = _filter.Trim();
+        // A bare word is a substring search; anything with glob syntax goes to HSCAN MATCH as typed.
+        _appliedPattern = text.Length == 0 ? null : text.IndexOfAny(['*', '?', '[']) >= 0 ? text : $"*{text}*";
+        await LoadAsync();
     }
 
     private async Task LoadMoreAsync()
@@ -95,7 +196,7 @@ else
             return;
         }
 
-        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, null, _page.Cursor, PageSize);
+        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, _appliedPattern, _page.Cursor, PageSize);
         if (result.IsSuccess)
         {
             var merged = _page.Fields.Concat(result.Value!.Fields).ToList();
@@ -105,6 +206,89 @@ else
         {
             Snackbar.Add(result.Error!, Severity.Error);
         }
+    }
+
+    private string JsonView
+    {
+        get
+        {
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var entry in _page?.Fields ?? [])
+            {
+                fields[entry.Field] = IsMasked(entry.Field) ? "••••••••" : entry.Value;
+            }
+
+            return JsonSerializer.Serialize(fields, Indented);
+        }
+    }
+
+    /// <summary>Short values verbatim; a long JSON array as its first items plus "… N more ]"; anything else cut with "…".</summary>
+    internal static string Preview(string value)
+    {
+        if (value.Length <= PreviewChars)
+        {
+            return value;
+        }
+
+        if (value.TrimStart().StartsWith('['))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(value);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    var items = doc.RootElement.EnumerateArray().ToList();
+                    var shown = items.Take(ArrayPreviewItems).Select(i => Cut(i.GetRawText(), 30));
+                    var rest = items.Count - Math.Min(items.Count, ArrayPreviewItems);
+                    return rest > 0
+                        ? $"[ {string.Join(", ", shown)}, … {RedisFormat.Count(rest)} more ]"
+                        : $"[ {string.Join(", ", shown)} ]";
+                }
+            }
+            catch (JsonException)
+            {
+                // Not actually JSON -- fall through to the plain cut.
+            }
+        }
+
+        return Cut(value, PreviewChars);
+    }
+
+    private static string Cut(string value, int max) => value.Length <= max ? value : value[..max] + "…";
+
+    /// <summary>"57 days old" for an ISO-8601 timestamp more than 30 days in the past -- stale sessions are the usual reason to open a hash.</summary>
+    internal static string? AgeHint(string value)
+    {
+        // Cheap shape check first ("yyyy-MM-ddT..."), so ordinary values never hit the parser.
+        if (value.Length is < 19 or > 40 || !char.IsAsciiDigit(value[0]) || value[4] != '-' || value[7] != '-' || value[10] != 'T')
+        {
+            return null;
+        }
+
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
+        {
+            return null;
+        }
+
+        var days = (int)Math.Floor((DateTimeOffset.UtcNow - at).TotalDays);
+        return days > StaleAfterDays ? $"{days} days old" : null;
+    }
+
+    private void ToggleAdd()
+    {
+        _adding = !_adding;
+        if (_adding)
+        {
+            _newField = "";
+            _newValue = "";
+        }
+    }
+
+    private void StartEdit(HashFieldEntry field)
+    {
+        _newField = field.Field;
+        _newValue = IsMasked(field.Field) ? "" : field.Value;
+        _adding = true;
     }
 
     private async Task RevealAsync(string field)
@@ -140,6 +324,7 @@ else
             Snackbar.Add($"Set field {_newField}", Severity.Success);
             _newField = "";
             _newValue = "";
+            _adding = false;
             await LoadAsync();
         }
         else

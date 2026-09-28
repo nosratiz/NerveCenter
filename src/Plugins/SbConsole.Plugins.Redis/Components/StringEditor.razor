@@ -1,31 +1,62 @@
+@using System.Text
+@using Microsoft.JSInterop
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Keys
 @inject KeysQueryHandler QueryHandler
 @inject SetStringCommandHandler SetStringHandler
+@inject IJSRuntime JS
 @inject ISnackbar Snackbar
 
-@if (_loading)
-{
-    <MudProgressCircular Class="string-editor-loading" Size="Size.Small" Indeterminate="true" />
-}
-else if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="string-editor-error">@_error</MudAlert>
-}
-else if (_value is not null)
-{
-    <div class="d-flex align-center gap-3 mb-2">
-        <MudText Class="string-editor-size" Typo="Typo.caption">@_value.SizeBytes bytes</MudText>
-        @if (_value.LooksLikeJson)
+@* String value panel (mockup 1c, first column): size/TTL/JSON summary, a JSON/Text/Hex view
+   toggle over one read-only code block, and Edit/Copy actions. Edit swaps the block for a text
+   field; Save keeps the key's current TTL (SET would otherwise clear it). *@
+<div class="se">
+    @if (_loading && _value is null)
+    {
+        <div class="rds-skeleton string-editor-loading"></div>
+        <div class="rds-skeleton" style="width:60%"></div>
+    }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="string-editor-error">@_error</MudAlert>
+    }
+    else if (_value is not null)
+    {
+        <div class="se-summary string-editor-summary">
+            @RedisFormat.Bytes(_value.SizeBytes) · TTL @(_value.Ttl is { } ttl ? RedisFormat.Duration(ttl) : "none")
+            @if (_value.LooksLikeJson)
+            {
+                <span class="string-editor-json-badge"> · detected JSON</span>
+            }
+        </div>
+
+        @if (_editing)
         {
-            <MudChip T="string" Class="string-editor-json-badge" Size="Size.Small" Variant="Variant.Outlined">JSON</MudChip>
+            <MudTextField id="string-editor-value" data-testid="string-editor-value" T="string" Class="se-edit" Value="_draft"
+                          ValueChanged="v => _draft = v ?? string.Empty" Lines="12" Variant="Variant.Outlined" Immediate="true" />
+            <div class="se-actions">
+                <button type="button" class="rds-btn-primary string-editor-save" disabled="@(_saving || _draft == _value.RawValue)" @onclick="SaveAsync">Save</button>
+                <button type="button" class="rds-link string-editor-cancel" @onclick="CancelEdit">Cancel</button>
+            </div>
         }
-    </div>
-    <MudTextField id="string-editor-value" data-testid="string-editor-value" T="string" Value="_draft" ValueChanged="v => _draft = v ?? string.Empty"
-                  Lines="8" Variant="Variant.Outlined" Immediate="true" />
-    <MudButton Class="string-editor-save mt-2" Color="Color.Primary" Variant="Variant.Filled"
-               Disabled="@(_saving || _draft == _value.RawValue)" OnClick="SaveAsync">Save</MudButton>
-}
+        else
+        {
+            <div class="rds-segmented se-views">
+                @if (_value.LooksLikeJson)
+                {
+                    <button type="button" class="@ViewClass(View.Json, "string-editor-view-json")" @onclick="() => _view = View.Json">JSON</button>
+                }
+                <button type="button" class="@ViewClass(View.Text, "string-editor-view-text")" @onclick="() => _view = View.Text">Text</button>
+                <button type="button" class="@ViewClass(View.Hex, "string-editor-view-hex")" @onclick="() => _view = View.Hex">Hex</button>
+            </div>
+            <pre class="rds-code se-code string-editor-code">@RenderedCode</pre>
+            <div class="se-actions">
+                <button type="button" class="rds-btn string-editor-edit" @onclick="StartEdit">Edit</button>
+                <button type="button" class="rds-link string-editor-copy" @onclick="CopyAsync">Copy</button>
+            </div>
+        }
+    }
+</div>
 
 @code {
     [Parameter] public Guid ConnectionId { get; set; }
@@ -33,13 +64,32 @@ else if (_value is not null)
     [Parameter] public int Database { get; set; }
     [Parameter] public string Key { get; set; } = "";
 
+    /// <summary>Hex view cap: a hex dump triples the size, and a multi-MB string would swamp the circuit.</summary>
+    private const int MaxHexBytes = 4096;
+
+    private enum View { Json, Text, Hex }
+
     private StringValue? _value;
     private string _draft = "";
     private bool _loading;
     private bool _saving;
+    private bool _editing;
     private string? _error;
+    private View _view = View.Text;
+    private IReadOnlyList<JsonToken>? _jsonTokens;
+    private string? _loadedKey;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        var identity = $"{ConnectionId}/{Database}/{Key}";
+        if (_loadedKey != identity)
+        {
+            _loadedKey = identity;
+            _value = null;
+            _editing = false;
+            await LoadAsync();
+        }
+    }
 
     private async Task LoadAsync()
     {
@@ -50,12 +100,103 @@ else if (_value is not null)
         {
             _value = result.Value;
             _draft = _value!.RawValue;
+            _jsonTokens = _value.LooksLikeJson ? RedisJsonLayout.Tokenize(_value.RawValue) : null;
+            _view = _jsonTokens is not null ? View.Json : View.Text;
         }
         else
         {
             _error = result.Error;
         }
         _loading = false;
+    }
+
+    private string ViewClass(View view, string marker) => view == _view ? $"{marker} rds-active" : marker;
+
+    /// <summary>The code block's content: JSON as tinted tokens (built by hand so no Razor whitespace leaks into the pre), else plain text.</summary>
+    private RenderFragment RenderedCode => builder =>
+    {
+        if (_value is null)
+        {
+            return;
+        }
+
+        if (_view == View.Json && _jsonTokens is { } tokens)
+        {
+            foreach (var token in tokens)
+            {
+                if (token.Kind == JsonTokenKind.Punctuation)
+                {
+                    builder.AddContent(0, token.Text);
+                    continue;
+                }
+
+                builder.OpenElement(1, "span");
+                builder.AddAttribute(2, "class", token.Kind switch
+                {
+                    JsonTokenKind.Key => "se-k",
+                    JsonTokenKind.String => "se-s",
+                    _ => "se-n",
+                });
+                builder.AddContent(3, token.Text);
+                builder.CloseElement();
+            }
+
+            return;
+        }
+
+        builder.AddContent(4, _view == View.Hex ? Hex(_value.RawValue) : _value.RawValue);
+    };
+
+    private static string Hex(string raw)
+    {
+        var bytes = Encoding.UTF8.GetBytes(raw);
+        var shown = Math.Min(bytes.Length, MaxHexBytes);
+        var sb = new StringBuilder();
+        for (var offset = 0; offset < shown; offset += 16)
+        {
+            var count = Math.Min(16, shown - offset);
+            sb.Append(offset.ToString("x8", System.Globalization.CultureInfo.InvariantCulture)).Append("  ");
+            sb.Append(Convert.ToHexString(bytes, offset, count).ToLowerInvariant()
+                .Chunk(2).Select(c => new string(c)).Aggregate((a, b) => a + " " + b));
+            sb.Append('\n');
+        }
+
+        if (bytes.Length > shown)
+        {
+            sb.Append($"… {RedisFormat.Bytes(bytes.Length - shown)} more");
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private void StartEdit()
+    {
+        _draft = _value?.RawValue ?? "";
+        _editing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _draft = _value?.RawValue ?? "";
+        _editing = false;
+    }
+
+    private async Task CopyAsync()
+    {
+        if (_value is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _value.RawValue);
+            Snackbar.Add("Copied", Severity.Info);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Clipboard not available", Severity.Warning);
+        }
     }
 
     private async Task SaveAsync()
@@ -67,6 +208,7 @@ else if (_value is not null)
             if (result.IsSuccess)
             {
                 Snackbar.Add($"Saved {Key}", Severity.Success);
+                _editing = false;
                 await LoadAsync();
             }
             else

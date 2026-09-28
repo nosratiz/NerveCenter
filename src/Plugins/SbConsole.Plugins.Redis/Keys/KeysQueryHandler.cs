@@ -49,6 +49,12 @@ public sealed class KeysQueryHandler(
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.set.scan",
             secret => operations.ScanSetMembersAsync(secret, database, key, cursor, count, ct), ct);
 
+    /// <summary>SISMEMBER, for the set editor's "Is member?" check (mockup 1c).</summary>
+    public Task<PluginResult<bool>> IsSetMemberAsync(
+        Guid connectionId, int database, string key, string member, CancellationToken ct = default) =>
+        HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.set.ismember",
+            secret => operations.IsSetMemberAsync(secret, database, key, member, ct), ct);
+
     public Task<PluginResult<DryRunDeleteByPatternResult>> DryRunDeleteByPatternAsync(
         Guid connectionId, int database, string pattern, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.pattern.dryrun",

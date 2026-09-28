@@ -144,4 +144,25 @@ public class QueryHandlerTests : HandlerTestBase
 
         result.Error.Should().Be(TimeoutText);
     }
+
+    [Fact]
+    public async Task IsSetMember_returns_the_answer_from_operations()
+    {
+        Operations.IsSetMemberAsync(Secret, Database, "flags:beta", "acme-uk", Arg.Any<CancellationToken>()).Returns(true);
+
+        var result = await Handler.IsSetMemberAsync(ConnectionId, Database, "flags:beta", "acme-uk");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsSetMember_failure_is_friendly()
+    {
+        Operations.IsSetMemberAsync(Secret, Database, "k", "m", Arg.Any<CancellationToken>()).ThrowsAsync(Timeout);
+
+        var result = await Handler.IsSetMemberAsync(ConnectionId, Database, "k", "m");
+
+        result.Error.Should().Be(TimeoutText);
+    }
 }

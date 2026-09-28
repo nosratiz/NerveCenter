@@ -1,3 +1,4 @@
+@using Microsoft.AspNetCore.Components.Web
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Keys
 @inject KeysQueryHandler QueryHandler
@@ -5,39 +6,74 @@
 @inject RemoveSetMemberCommandHandler RemoveHandler
 @inject ISnackbar Snackbar
 
-@if (_loading)
-{
-    <MudProgressCircular Class="set-editor-loading" Size="Size.Small" Indeterminate="true" />
-}
-else if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="set-editor-error">@_error</MudAlert>
-}
-else
-{
-    <MudText Typo="Typo.caption" Class="set-editor-cardinality mud-text-secondary">@_page?.Cardinality member(s)</MudText>
-    <MudSimpleTable Class="set-editor-members" Dense="true" Elevation="0">
-        <tbody>
-            @foreach (var member in _page?.Members ?? [])
-            {
-                <tr class="set-member-row">
-                    <td class="set-member-value" style="font-family:monospace">@member</td>
-                    <td><MudButton Class="set-member-remove" Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => RemoveAsync(member))">Remove</MudButton></td>
-                </tr>
-            }
-        </tbody>
-    </MudSimpleTable>
-    @if (_page is { Complete: false })
+@* Set value panel (mockup 1c, fourth column): membership check first (SISMEMBER -- how sets are
+   actually used), then the members as pills with a trailing "+n" that reveals more (SSCAN-paged,
+   so a huge set never loads whole). Remove… switches the pills into a removable state. *@
+<div class="ste">
+    @if (_loading && _page is null)
     {
-        <MudButton Class="set-editor-load-more mt-2" Size="Size.Small" Variant="Variant.Text" OnClick="LoadMoreAsync">Load more</MudButton>
+        <div class="rds-skeleton set-editor-loading"></div>
+        <div class="rds-skeleton" style="width:70%"></div>
     }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="set-editor-error">@_error</MudAlert>
+    }
+    else if (_page is not null)
+    {
+        <div class="ste-summary set-editor-cardinality">SCARD @RedisFormat.Count(_page.Cardinality) · unordered</div>
 
-    <MudText Typo="Typo.subtitle2" Class="mt-4">Add member</MudText>
-    <div class="d-flex gap-2 align-end mt-1">
-        <MudTextField id="set-editor-new-member" data-testid="set-editor-new-member" T="string" Value="_newMember" ValueChanged="v => _newMember = v ?? string.Empty" Label="Member" Immediate="true" />
-        <MudButton Class="set-editor-add-member" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_newMember)" OnClick="AddAsync">Add</MudButton>
-    </div>
-}
+        <div class="ste-check">
+            <MudTextField id="set-editor-ismember" data-testid="set-editor-ismember" T="string" Class="ste-mono ste-grow" Value="_candidate"
+                          ValueChanged="OnCandidateChanged" Placeholder="Is member? (SISMEMBER)" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" OnKeyDown="OnCandidateKeyDownAsync" />
+            @if (_answer is { } answer)
+            {
+                <span class="@("ste-answer set-editor-ismember-answer " + (answer.IsMember ? "ste-yes" : "rds-muted"))">
+                    @(answer.IsMember ? "✓ is a member" : "✗ not a member")
+                </span>
+            }
+        </div>
+
+        @if (_page.Members.Count == 0)
+        {
+            <div class="rds-empty set-editor-empty">This set is empty.</div>
+        }
+        else
+        {
+            <div class="ste-pills">
+                @foreach (var member in _page.Members.Take(_visible))
+                {
+                    <span class="rds-pill set-member-pill" title="@member">
+                        @member
+                        @if (_removing)
+                        {
+                            <button type="button" class="ste-remove set-member-remove" aria-label="@($"Remove {member}")" @onclick="() => RemoveAsync(member)">×</button>
+                        }
+                    </span>
+                }
+                @if (HasMore)
+                {
+                    <button type="button" class="rds-pill rds-pill-accent ste-more set-editor-more" @onclick="ShowMoreAsync">@($"+{RedisFormat.Count(Remaining)}")</button>
+                }
+            </div>
+        }
+
+        @if (_adding)
+        {
+            <div class="ste-composer">
+                <MudTextField id="set-editor-new-member" data-testid="set-editor-new-member" T="string" Class="ste-mono ste-grow" Value="_newMember"
+                              ValueChanged="v => _newMember = v ?? string.Empty" Placeholder="member" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <button type="button" class="rds-btn-primary set-editor-add-member" disabled="@string.IsNullOrWhiteSpace(_newMember)" @onclick="AddAsync">SADD</button>
+            </div>
+        }
+
+        <div class="ste-actions">
+            <button type="button" class="rds-btn set-editor-add-toggle" @onclick="() => _adding = !_adding">Add</button>
+            <button type="button" class="@(_removing ? "rds-link set-editor-remove-toggle" : "rds-link-danger set-editor-remove-toggle")" @onclick="() => _removing = !_removing">@(_removing ? "Done" : "Remove…")</button>
+        </div>
+    }
+</div>
 
 @code {
     [Parameter] public Guid ConnectionId { get; set; }
@@ -45,14 +81,44 @@ else
     [Parameter] public int Database { get; set; }
     [Parameter] public string Key { get; set; } = "";
 
+    /// <summary>Raised with SCARD after each load.</summary>
+    [Parameter] public EventCallback<long> CountChanged { get; set; }
+
     private const int PageSize = 200;
+    private const int VisibleStep = 24;
 
     private SetPage? _page;
+    private int _visible = VisibleStep;
     private bool _loading;
     private string? _error;
+    private bool _adding;
+    private bool _removing;
     private string _newMember = "";
+    private string _candidate = "";
+    private (string Member, bool IsMember)? _answer;
+    private string? _loadedIdentity;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        var identity = $"{ConnectionId}/{Database}/{Key}";
+        if (_loadedIdentity != identity)
+        {
+            _loadedIdentity = identity;
+            _page = null;
+            _visible = VisibleStep;
+            _adding = false;
+            _removing = false;
+            _candidate = "";
+            _answer = null;
+            await LoadAsync();
+        }
+    }
+
+    private int Shown => Math.Min(_visible, _page?.Members.Count ?? 0);
+
+    private long Remaining => Math.Max(0, (_page?.Cardinality ?? 0) - Shown);
+
+    private bool HasMore => _page is not null && Remaining > 0 && (Shown < _page.Members.Count || !_page.Complete);
 
     private async Task LoadAsync()
     {
@@ -62,6 +128,7 @@ else
         if (result.IsSuccess)
         {
             _page = result.Value;
+            await CountChanged.InvokeAsync(_page!.Cardinality);
         }
         else
         {
@@ -70,18 +137,48 @@ else
         _loading = false;
     }
 
-    private async Task LoadMoreAsync()
+    private async Task ShowMoreAsync()
     {
         if (_page is null)
         {
             return;
         }
 
-        var result = await QueryHandler.ScanSetMembersAsync(ConnectionId, Database, Key, _page.Cursor, PageSize);
+        _visible += VisibleStep * 2;
+        // SSCAN pages may come back short (or empty) mid-iteration, so keep going until the new
+        // window is filled or the cursor wraps.
+        while (_page.Members.Count < _visible && !_page.Complete)
+        {
+            var result = await QueryHandler.ScanSetMembersAsync(ConnectionId, Database, Key, _page.Cursor, PageSize);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+                return;
+            }
+
+            var merged = _page.Members.Concat(result.Value!.Members).Distinct(StringComparer.Ordinal).ToList();
+            _page = result.Value! with { Members = merged };
+        }
+    }
+
+    private void OnCandidateChanged(string? value)
+    {
+        _candidate = value ?? "";
+        _answer = null;
+    }
+
+    private async Task OnCandidateKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || string.IsNullOrEmpty(_candidate))
+        {
+            return;
+        }
+
+        var member = _candidate;
+        var result = await QueryHandler.IsSetMemberAsync(ConnectionId, Database, Key, member);
         if (result.IsSuccess)
         {
-            var merged = _page.Members.Concat(result.Value!.Members).ToList();
-            _page = result.Value! with { Members = merged };
+            _answer = (member, result.Value);
         }
         else
         {
@@ -101,6 +198,8 @@ else
         {
             Snackbar.Add($"Added {_newMember}", Severity.Success);
             _newMember = "";
+            _adding = false;
+            _answer = null;
             await LoadAsync();
         }
         else
@@ -115,6 +214,7 @@ else
         if (result.IsSuccess)
         {
             Snackbar.Add($"Removed {member}", Severity.Success);
+            _answer = null;
             await LoadAsync();
         }
         else

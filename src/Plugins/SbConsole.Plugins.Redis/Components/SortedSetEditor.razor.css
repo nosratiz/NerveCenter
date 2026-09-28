@@ -1,0 +1,13 @@
+.ze-summary { font-size: 13px; color: var(--rds-muted); margin-bottom: 12px; }
+.ze-rows { max-width: 720px; display: grid; grid-template-columns: minmax(80px, max-content) minmax(80px, 1fr) max-content; column-gap: 20px; row-gap: 14px; align-items: center; }
+.ze-row { display: contents; }
+.ze-member { font-family: var(--rds-mono); font-size: 13px; min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ze-bar { height: 6px; }
+.ze-score { font-family: var(--rds-mono); font-size: 13px; }
+.ze-range { display: flex; align-items: center; gap: 10px; margin-top: 18px; font-size: 13px; }
+.ze-composer { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.ze ::deep .ze-mono input { font-family: var(--rds-mono); font-size: 13px; }
+.ze ::deep .ze-grow { flex: 1 1 auto; }
+.ze ::deep .ze-num { flex: 0 0 90px; }
+.ze ::deep .mud-input-control { margin-top: 0; }
+.ze-actions { display: flex; align-items: center; gap: 16px; margin-top: 18px; }

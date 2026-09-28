@@ -1,0 +1,18 @@
+.he-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.he ::deep .he-filter { flex: 0 1 320px; margin: 0; }
+.he-add { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.he ::deep .he-mono input { font-family: var(--rds-mono); font-size: 13px; }
+.he ::deep .he-grow { flex: 1 1 auto; }
+.he ::deep .mud-input-control { margin-top: 0; }
+.he-field { white-space: nowrap; width: 28%; }
+.he-value { word-break: break-word; }
+.he-size { white-space: nowrap; color: var(--rds-muted); width: 72px; }
+.he-size.rds-warn { color: var(--rds-warn); }
+.he-mask { letter-spacing: .15em; color: var(--rds-muted); margin-right: 14px; }
+.he-reveal { font-family: inherit; font-size: 12px; }
+.he-age { font-family: "Inter", system-ui, sans-serif; font-size: 12px; margin-left: 12px; white-space: nowrap; }
+.he-menu-col { width: 40px; text-align: right; padding-top: 1px !important; padding-bottom: 1px !important; vertical-align: middle !important; }
+.he ::deep .hash-field-menu .mud-icon-button { color: var(--rds-muted); padding: 4px; }
+.he ::deep tr:hover td { background: var(--rds-faint); }
+.he-json { max-height: 560px; overflow: auto; }
+.he-footer { display: flex; align-items: center; gap: 16px; padding: 14px 0 4px; font-size: 13px; }
