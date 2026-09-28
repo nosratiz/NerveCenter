@@ -166,6 +166,87 @@ public class RabbitMqPluginDashboardTests
         retried.Should().BeSameAs(snapshot);
     }
 
+    [Fact]
+    public async Task GetCachedSnapshotAsync_single_flights_concurrent_misses()
+    {
+        var secret = $"s-{Guid.NewGuid()}";
+        var calls = 0;
+        var pending = new TaskCompletionSource<RabbitMqPlugin.BrokerSnapshot>();
+        Task<RabbitMqPlugin.BrokerSnapshot> Fetch(string s, CancellationToken ct) { Interlocked.Increment(ref calls); return pending.Task; }
+
+        var now = DateTimeOffset.UtcNow;
+        var first = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+        var second = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+        var snapshot = Snapshot();
+        pending.SetResult(snapshot);
+
+        (await first).Should().BeSameAs(snapshot);
+        (await second).Should().BeSameAs(snapshot);
+        calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetCachedSnapshotAsync_drops_an_in_flight_fetch_that_faults()
+    {
+        var secret = $"s-{Guid.NewGuid()}";
+        var calls = 0;
+        var failing = new TaskCompletionSource<RabbitMqPlugin.BrokerSnapshot>();
+        var snapshot = Snapshot();
+        Task<RabbitMqPlugin.BrokerSnapshot> Fetch(string s, CancellationToken ct) =>
+            Interlocked.Increment(ref calls) == 1 ? failing.Task : Task.FromResult(snapshot);
+
+        var now = DateTimeOffset.UtcNow;
+        var first = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+        var second = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+        failing.SetException(new HttpRequestException("down"));
+
+        await first.Invoking(t => t).Should().ThrowAsync<HttpRequestException>();
+        await second.Invoking(t => t).Should().ThrowAsync<HttpRequestException>();
+        var retried = await RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+
+        retried.Should().BeSameAs(snapshot);
+        calls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetCachedSnapshotAsync_a_cancelled_waiter_does_not_cancel_the_shared_fetch()
+    {
+        var secret = $"s-{Guid.NewGuid()}";
+        var pending = new TaskCompletionSource<RabbitMqPlugin.BrokerSnapshot>();
+        Task<RabbitMqPlugin.BrokerSnapshot> Fetch(string s, CancellationToken ct) => pending.Task;
+        using var cts = new CancellationTokenSource();
+
+        var now = DateTimeOffset.UtcNow;
+        var cancelled = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, cts.Token);
+        var patient = RabbitMqPlugin.GetCachedSnapshotAsync(secret, now, Fetch, CancellationToken.None);
+        cts.Cancel();
+        var snapshot = Snapshot();
+        pending.SetResult(snapshot);
+
+        await cancelled.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
+        (await patient).Should().BeSameAs(snapshot);
+    }
+
+    [Fact]
+    public async Task GetCachedSnapshotAsync_keys_on_a_hash_and_sweeps_expired_entries_on_write()
+    {
+        var stale = $"password=s-{Guid.NewGuid()}";
+        var fresh = $"password=s-{Guid.NewGuid()}";
+        Task<RabbitMqPlugin.BrokerSnapshot> Fetch(string s, CancellationToken ct) => Task.FromResult(Snapshot());
+
+        var now = DateTimeOffset.UtcNow;
+        await RabbitMqPlugin.GetCachedSnapshotAsync(stale, now, Fetch, CancellationToken.None);
+
+        RabbitMqPlugin.SnapshotCacheKeys.Should().NotContain(k => k.Contains(stale));
+        RabbitMqPlugin.SnapshotCacheKeys.Should().Contain(RabbitMqPlugin.SnapshotCacheKey(stale));
+        RabbitMqPlugin.SnapshotCacheKey(stale).Should().MatchRegex("^[0-9A-F]{64}$");
+
+        await RabbitMqPlugin.GetCachedSnapshotAsync(fresh, now.AddSeconds(61), Fetch, CancellationToken.None);
+
+        RabbitMqPlugin.SnapshotCacheKeys.Should().NotContain(RabbitMqPlugin.SnapshotCacheKey(stale));
+        RabbitMqPlugin.SnapshotCacheKeys.Should().Contain(RabbitMqPlugin.SnapshotCacheKey(fresh));
+    }
+
     // --- nav badges ---
 
     [Fact]

@@ -205,12 +205,38 @@ public class RoutingMatcherTests
     }
 
     [Fact]
-    public void Headers_values_compare_as_invariant_strings()
+    public void Headers_typed_binding_values_never_match_the_string_headers_a_publish_sends()
     {
+        // The broker compares types: a long 3 is not the string "3", and published headers are strings.
         var b = HeadersBinding("q", ("urgent", true), ("count", 3L), ("ratio", 1.5d));
 
-        RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "true"), ("count", "3"), ("ratio", "1.5"))).Matched.Should().Equal(b);
-        RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "True"), ("count", "3"), ("ratio", "1.5"))).Matched.Should().BeEmpty();
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("urgent", "true"), ("count", "3"), ("ratio", "1.5")));
+
+        preview.Matched.Should().BeEmpty();
+        preview.TypedHeaderArguments.Should().Equal("count", "ratio", "urgent");
+    }
+
+    [Fact]
+    public void Headers_any_still_matches_on_a_string_argument_beside_a_typed_one()
+    {
+        var b = HeadersBinding("q", ("x-match", "any"), ("count", 3L), ("region", "eu"));
+
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("count", "3"), ("region", "eu")));
+
+        preview.Matched.Should().Equal(b);
+        preview.TypedHeaderArguments.Should().Equal("count");
+    }
+
+    [Fact]
+    public void Headers_string_values_compare_ordinally_and_ignored_x_arguments_are_not_reported()
+    {
+        var b = HeadersBinding("q", ("x-match", "all"), ("x-priority", 5L), ("region", "eu"));
+
+        var preview = RoutingMatcher.Resolve(Headers, [b], "", H(("region", "eu")));
+
+        preview.Matched.Should().Equal(b);
+        preview.TypedHeaderArguments.Should().BeEmpty();
+        RoutingMatcher.Resolve(Headers, [b], "", H(("region", "EU"))).Matched.Should().BeEmpty();
     }
 
     [Fact]
@@ -234,5 +260,130 @@ public class RoutingMatcherTests
     {
         var e2e = Binding("t", "other.exchange", "a.#", destinationType: "exchange");
         RoutingMatcher.Resolve(Exchange("t", "topic"), [e2e], "a.b", NoHeaders).Matched.Should().Equal(e2e);
+    }
+
+    // ------------------------------------------------------------------ ResolveDeep
+
+    private static readonly ExchangeSummary[] HopExchanges =
+    [
+        Exchange("order-events", "topic"),
+        Exchange("audit.fanout", "fanout"),
+        Exchange("eu.only", "direct"),
+        Exchange("loop.a", "fanout"),
+        Exchange("loop.b", "fanout"),
+    ];
+
+    [Fact]
+    public void ResolveDeep_follows_an_exchange_binding_to_its_queues_and_reports_the_path()
+    {
+        BindingInfo[] bindings =
+        [
+            Binding("order-events", "order-events.q", "order.*.created"),
+            Binding("order-events", "audit.fanout", "order.#", destinationType: "exchange"),
+            Binding("audit.fanout", "audit.sink", ""),
+        ];
+
+        var deep = RoutingMatcher.ResolveDeep(HopExchanges[0], HopExchanges, bindings, "order.uk.created", NoHeaders);
+
+        deep.Queues.Select(q => (q.Queue, string.Join(" → ", q.Path))).Should().Equal(
+            ("order-events.q", "order-events → order-events.q"),
+            ("audit.sink", "order-events → audit.fanout → audit.sink"));
+        deep.Root.Matched.Should().HaveCount(2);
+        deep.ReachedHopLimit.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveDeep_evaluates_each_hop_with_the_same_routing_key()
+    {
+        BindingInfo[] bindings =
+        [
+            Binding("order-events", "eu.only", "order.#", destinationType: "exchange"),
+            Binding("eu.only", "eu.q", "order.eu.created"),
+        ];
+
+        RoutingMatcher.ResolveDeep(HopExchanges[0], HopExchanges, bindings, "order.uk.created", NoHeaders)
+            .Queues.Should().BeEmpty();
+        RoutingMatcher.ResolveDeep(HopExchanges[0], HopExchanges, bindings, "order.eu.created", NoHeaders)
+            .Queues.Should().ContainSingle().Which.Queue.Should().Be("eu.q");
+    }
+
+    [Fact]
+    public void ResolveDeep_survives_a_cycle_and_lists_each_queue_once()
+    {
+        BindingInfo[] bindings =
+        [
+            Binding("loop.a", "loop.b", "", destinationType: "exchange"),
+            Binding("loop.b", "loop.a", "", destinationType: "exchange"),
+            Binding("loop.a", "shared.q", ""),
+            Binding("loop.b", "shared.q", ""),
+        ];
+
+        var deep = RoutingMatcher.ResolveDeep(HopExchanges[3], HopExchanges, bindings, "", NoHeaders);
+
+        deep.Queues.Should().ContainSingle().Which.Path.Should().Equal("loop.a", "shared.q");
+    }
+
+    [Fact]
+    public void ResolveDeep_stops_at_the_hop_limit()
+    {
+        var exchanges = Enumerable.Range(0, 12).Select(i => Exchange($"x{i}", "fanout")).ToArray();
+        var bindings = Enumerable.Range(0, 11)
+            .Select(i => Binding($"x{i}", $"x{i + 1}", "", destinationType: "exchange"))
+            .Append(Binding("x11", "deep.q", ""))
+            .ToArray();
+
+        var deep = RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "", NoHeaders);
+
+        deep.ReachedHopLimit.Should().BeTrue();
+        deep.Queues.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ResolveDeep_uses_a_hops_alternate_exchange_only_when_that_hop_matches_nothing()
+    {
+        ExchangeSummary[] exchanges =
+        [
+            Exchange("front", "fanout"),
+            Exchange("picky", "direct", alternateExchange: "catch.all"),
+            Exchange("catch.all", "fanout"),
+        ];
+        BindingInfo[] bindings =
+        [
+            Binding("front", "picky", "", destinationType: "exchange"),
+            Binding("picky", "picky.q", "wanted"),
+            Binding("catch.all", "unrouted.q", ""),
+        ];
+
+        RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "other", NoHeaders)
+            .Queues.Should().ContainSingle().Which.Path.Should().Equal("front", "picky", "catch.all", "unrouted.q");
+        RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "wanted", NoHeaders)
+            .Queues.Should().ContainSingle().Which.Queue.Should().Be("picky.q");
+    }
+
+    [Fact]
+    public void ResolveDeep_reports_a_plugin_typed_hop_as_unpredictable()
+    {
+        ExchangeSummary[] exchanges = [Exchange("front", "fanout"), Exchange("hash", "x-consistent-hash")];
+        BindingInfo[] bindings = [Binding("front", "hash", "", destinationType: "exchange"), Binding("hash", "h.q", "1")];
+
+        var deep = RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "", NoHeaders);
+
+        deep.UnpredictableExchanges.Should().Equal("hash");
+        deep.Queues.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ResolveDeep_reaches_a_queue_exactly_at_the_hop_limit()
+    {
+        var exchanges = Enumerable.Range(0, 9).Select(i => Exchange($"x{i}", "fanout")).ToArray();
+        var bindings = Enumerable.Range(0, 8)
+            .Select(i => Binding($"x{i}", $"x{i + 1}", "", destinationType: "exchange"))
+            .Append(Binding("x8", "edge.q", ""))
+            .ToArray();
+
+        var deep = RoutingMatcher.ResolveDeep(exchanges[0], exchanges, bindings, "", NoHeaders);
+
+        deep.Queues.Select(q => q.Queue).Should().Contain("edge.q");
+        deep.ReachedHopLimit.Should().BeFalse();
     }
 }

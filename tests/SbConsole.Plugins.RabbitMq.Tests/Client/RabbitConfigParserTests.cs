@@ -73,4 +73,24 @@ public class RabbitConfigParserTests
         echo.Should().NotContain("hunter2");
         echo.Should().NotContain("password");
     }
+
+    [Theory]
+    [InlineData("http://admin:hunter2@h:15672/", "http://h:15672/")]
+    [InlineData("https://ad@min:hun@ter2@h/rabbit", "https://h/rabbit")]
+    [InlineData("admin:hunter2@h:15672", "h:15672")]
+    [InlineData("http://h:15672/path@x", "http://h:15672/path@x")]
+    [InlineData("/relative@x", "/relative@x")]
+    [InlineData("http:///", "http:///")]
+    public void SafeEcho_strips_userinfo_from_the_management_url(string managementUrl, string shown)
+    {
+        var secret = RabbitConfigParser.Serialize(new Dictionary<string, string>
+        {
+            ["host"] = "h", ["managementUrl"] = managementUrl, ["username"] = "u", ["password"] = "p",
+        });
+
+        var echo = RabbitConfigParser.SafeEcho(secret);
+
+        echo.Should().Contain($"managementUrl={shown}");
+        echo.Should().NotContain("hunter2").And.NotContain("hun@ter2");
+    }
 }

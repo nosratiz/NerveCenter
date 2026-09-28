@@ -111,11 +111,23 @@ public sealed record RabbitConnectionSettings
             : throw new InvalidOperationException($"Connection has an invalid '{key}' (expected true or false).");
     }
 
-    private static Uri ParseManagementUrl(string text) =>
-        Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
-            ? uri
-            : throw new InvalidOperationException("Connection has an invalid 'managementUrl' (expected an http or https URL).");
+    private static Uri ParseManagementUrl(string text)
+    {
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException("Connection has an invalid 'managementUrl' (expected an http or https URL).");
+        }
+
+        // Credentials in the URL would bypass the encrypted password field and get echoed or
+        // logged along with the URL.
+        if (uri.UserInfo.Length > 0)
+        {
+            throw new InvalidOperationException("Put the username and password in their own fields, not in the management URL.");
+        }
+
+        return uri;
+    }
 
     private static Uri WithTrailingSlash(Uri uri) =>
         uri.AbsolutePath.EndsWith('/') ? uri : new UriBuilder(uri) { Path = uri.AbsolutePath + "/" }.Uri;

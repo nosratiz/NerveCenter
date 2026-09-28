@@ -1,4 +1,3 @@
-using System.Globalization;
 using SbConsole.Plugins.RabbitMq.Client;
 
 namespace SbConsole.Plugins.RabbitMq.Routing;
@@ -12,15 +11,41 @@ public sealed record RoutePreview(
     IReadOnlyList<BindingInfo> Matched,
     IReadOnlyList<BindingInfo> Closest,
     bool HasAlternateExchange,
-    bool IsUnknownType);
+    bool IsUnknownType)
+{
+    /// <summary>
+    /// Headers exchanges only: the (sorted, distinct) binding argument keys whose value is typed
+    /// (number, bool, ...). The broker compares header values with their types, and the console
+    /// publishes every header as a string, so those arguments can never be satisfied from here.
+    /// </summary>
+    public IReadOnlyList<string> TypedHeaderArguments { get; init; } = [];
+}
+
+/// <summary>A queue a message would reach, and the exchanges it passes through on the way (first = the publish exchange).</summary>
+public sealed record RoutedQueue(string Queue, IReadOnlyList<string> Path, BindingInfo Binding);
+
+/// <summary>
+/// <see cref="Root"/> is the single-hop preview of the publish exchange (drives the blocked/closest
+/// UI); <see cref="Queues"/> is every queue reached through any number of exchange hops.
+/// </summary>
+public sealed record DeepRoutePreview(
+    RoutePreview Root,
+    IReadOnlyList<RoutedQueue> Queues,
+    bool ReachedHopLimit,
+    IReadOnlyList<string> UnpredictableExchanges);
 
 /// <summary>
 /// Predicts which bindings of an exchange a message would match (design spec §5). Pure.
-/// Exchange-to-exchange bindings are matched like any other and not followed.
+/// Resolve matches one exchange's bindings; ResolveDeep follows exchange-to-exchange bindings.
 /// </summary>
 public static class RoutingMatcher
 {
     private const int MaxClosest = 3;
+
+    /// <summary>Exchange hops followed before giving up (the broker has no limit; a preview needs one).</summary>
+    public const int MaxHops = 8;
+
+    public static string ExchangeLabel(ExchangeSummary exchange) => exchange.IsDefault ? "(AMQP default)" : exchange.Name;
 
     public static RoutePreview Resolve(
         ExchangeSummary exchange,
@@ -50,7 +75,86 @@ public static class RoutingMatcher
             ? RankClosest(sourceBindings, routingKey)
             : [];
 
-        return new RoutePreview(matched, closest, hasAlternate, IsUnknownType: false);
+        return new RoutePreview(matched, closest, hasAlternate, IsUnknownType: false)
+        {
+            TypedHeaderArguments = type == "headers" ? TypedArguments(sourceBindings) : [],
+        };
+    }
+
+    /// <summary>
+    /// Follows exchange-to-exchange bindings breadth-first with the same routing key and headers,
+    /// evaluating each exchange at most once (a cycle is not an error -- the broker also delivers
+    /// one copy per queue). A hop that matches nothing falls through to its alternate exchange.
+    /// A plugin-typed hop can't be predicted and is reported, not followed. Queues keep the first
+    /// (shortest) path that reached them.
+    /// </summary>
+    public static DeepRoutePreview ResolveDeep(
+        ExchangeSummary root,
+        IReadOnlyList<ExchangeSummary> exchanges,
+        IReadOnlyList<BindingInfo> vhostBindings,
+        string routingKey,
+        IReadOnlyDictionary<string, string> headers)
+    {
+        var byName = new Dictionary<string, ExchangeSummary>(StringComparer.Ordinal);
+        foreach (var e in exchanges) byName.TryAdd(e.Name, e);
+
+        IReadOnlyList<BindingInfo> BindingsOf(ExchangeSummary e) =>
+            vhostBindings.Where(b => string.Equals(b.Source, e.Name, StringComparison.Ordinal)).ToList();
+
+        var rootPreview = Resolve(root, BindingsOf(root), routingKey, headers);
+        var queues = new List<RoutedQueue>();
+        var seenQueues = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal) { root.Name };
+        var unpredictable = new List<string>();
+        var reachedLimit = false;
+
+        var frontier = new Queue<(ExchangeSummary Exchange, RoutePreview Preview, List<string> Path)>();
+        frontier.Enqueue((root, rootPreview, [ExchangeLabel(root)]));
+
+        while (frontier.Count > 0)
+        {
+            var (exchange, preview, path) = frontier.Dequeue();
+            if (preview.IsUnknownType)
+            {
+                if (!ReferenceEquals(exchange, root)) unpredictable.Add(exchange.Name);
+                continue;
+            }
+
+            void Follow(string next)
+            {
+                if (!byName.TryGetValue(next, out var nextExchange) || !visited.Add(next)) return;
+                if (path.Count > MaxHops)
+                {
+                    reachedLimit = true;
+                    return;
+                }
+
+                frontier.Enqueue((nextExchange, Resolve(nextExchange, BindingsOf(nextExchange), routingKey, headers), [.. path, next]));
+            }
+
+            if (preview.Matched.Count == 0 && !string.IsNullOrEmpty(exchange.AlternateExchange))
+            {
+                Follow(exchange.AlternateExchange);
+                continue;
+            }
+
+            foreach (var binding in preview.Matched)
+            {
+                if (binding.IsToQueue)
+                {
+                    if (seenQueues.Add(binding.Destination))
+                    {
+                        queues.Add(new RoutedQueue(binding.Destination, [.. path, binding.Destination], binding));
+                    }
+                }
+                else
+                {
+                    Follow(binding.Destination);
+                }
+            }
+        }
+
+        return new DeepRoutePreview(rootPreview, queues, reachedLimit, unpredictable);
     }
 
     /// <summary>
@@ -98,8 +202,26 @@ public static class RoutingMatcher
 
     private static bool HeadersMatch(IReadOnlyDictionary<string, object?> bindingArgs, IReadOnlyDictionary<string, string> headers)
     {
-        var mode = bindingArgs.TryGetValue("x-match", out var m) ? AsString(m) : "all";
-        var (any, withX) = mode switch
+        var any = MatchMode(bindingArgs).Any;
+
+        bool Satisfied(KeyValuePair<string, object?> arg) =>
+            headers.TryGetValue(arg.Key, out var value)
+            && arg.Value switch
+            {
+                // A void (null) binding value matches on presence alone, as in RabbitMQ.
+                null => true,
+                string expected => string.Equals(expected, value, StringComparison.Ordinal),
+                // Typed (number/bool/...) never equals a string header: the broker compares types.
+                _ => false,
+            };
+
+        // Matches RabbitMQ: "all" over no arguments matches everything, "any" over none matches nothing.
+        var considered = ConsideredArguments(bindingArgs);
+        return any ? considered.Any(Satisfied) : considered.All(Satisfied);
+    }
+
+    private static (bool Any, bool WithX) MatchMode(IReadOnlyDictionary<string, object?> bindingArgs) =>
+        (bindingArgs.TryGetValue("x-match", out var m) ? m as string : null) switch
         {
             "any" => (true, false),
             "any-with-x" => (true, true),
@@ -107,27 +229,22 @@ public static class RoutingMatcher
             _ => (false, false),
         };
 
-        var considered = bindingArgs
+    private static List<KeyValuePair<string, object?>> ConsideredArguments(IReadOnlyDictionary<string, object?> bindingArgs)
+    {
+        var withX = MatchMode(bindingArgs).WithX;
+        return bindingArgs
             .Where(a => a.Key != "x-match" && (withX || !a.Key.StartsWith("x-", StringComparison.Ordinal)))
             .ToList();
-
-        bool Satisfied(KeyValuePair<string, object?> arg) =>
-            headers.TryGetValue(arg.Key, out var value)
-            // A void (null) binding value matches on presence alone, as in RabbitMQ.
-            && (arg.Value is null || string.Equals(AsString(arg.Value), value, StringComparison.Ordinal));
-
-        // Matches RabbitMQ: "all" over no arguments matches everything, "any" over none matches nothing.
-        return any ? considered.Any(Satisfied) : considered.All(Satisfied);
     }
 
-    private static string? AsString(object? value) => value switch
-    {
-        null => null,
-        string s => s,
-        bool b => b ? "true" : "false",
-        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-        _ => value.ToString(),
-    };
+    private static List<string> TypedArguments(IEnumerable<BindingInfo> bindings) =>
+        bindings
+            .SelectMany(b => ConsideredArguments(b.Arguments))
+            .Where(a => a.Value is not null and not string)
+            .Select(a => a.Key)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
 
     // ------------------------------------------------------------------ closest
 

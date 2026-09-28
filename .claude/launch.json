@@ -7,5 +7,6 @@
       "runtimeArgs": ["run", "--project", "src/SbConsole.Web", "--launch-profile", "http"],
       "port": 5249
     }
-  ]
+  ],
+  "autoVerify": false
 }

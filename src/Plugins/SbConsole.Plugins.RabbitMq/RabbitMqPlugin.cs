@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.RabbitMq.Client;
 using SbConsole.Plugins.RabbitMq.Routing;
@@ -134,11 +136,25 @@ public sealed class RabbitMqPlugin : IPlugin
     // Same shape and reasoning as AwsPlugin.GetCachedQueuesAsync: NavMenu polls the badges every
     // 60 s per circuit, Home/Wallboard call the dashboard hooks on every render, and the metrics
     // collector calls GetResourceMetricsAsync periodically -- all over identical data. `static`
-    // because plugins are new()'d per call. Keyed by the secret, which is already held in memory
-    // throughout. A failed fetch throws before the cache is written, so failures are never cached.
-    private static readonly ConcurrentDictionary<string, (DateTimeOffset ExpiresAt, BrokerSnapshot Snapshot)> SnapshotCache = new();
+    // because plugins are new()'d per call. Keyed by a SHA-256 of the secret (the plaintext never
+    // sits in a long-lived dictionary), holding the in-flight Task so concurrent misses share one
+    // fetch. A fetch that faults or is cancelled is removed, so failures are never cached; expired
+    // entries are swept on every write so rotated secrets don't accumulate.
+    private sealed class SnapshotCacheEntry(DateTimeOffset expiresAt, Lazy<Task<BrokerSnapshot>> snapshot)
+    {
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+
+        public Lazy<Task<BrokerSnapshot>> Snapshot { get; } = snapshot;
+    }
+
+    private static readonly ConcurrentDictionary<string, SnapshotCacheEntry> SnapshotCache = new(StringComparer.Ordinal);
 
     private static readonly TimeSpan SnapshotCacheTtl = TimeSpan.FromSeconds(60);
+
+    internal static string SnapshotCacheKey(string secret) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
+
+    internal static IReadOnlyCollection<string> SnapshotCacheKeys => SnapshotCache.Keys.ToList();
 
     private static Task<BrokerSnapshot> GetCachedSnapshotAsync(string secret, CancellationToken ct) =>
         GetCachedSnapshotAsync(
@@ -147,21 +163,56 @@ public sealed class RabbitMqPlugin : IPlugin
             static (s, t) => FetchSnapshotAsync(new RabbitOperations(), s, t),
             ct);
 
-    // `now` and `fetch` are parameters so reuse/expiry is unit-testable without a broker.
-    internal static async Task<BrokerSnapshot> GetCachedSnapshotAsync(
+    // `now` and `fetch` are parameters so reuse/expiry/single-flight are unit-testable without a
+    // broker. The shared fetch runs without any one caller's token (a caller that gives up must not
+    // fail the others); each caller stops waiting on its own token.
+    internal static Task<BrokerSnapshot> GetCachedSnapshotAsync(
         string secret,
         DateTimeOffset now,
         Func<string, CancellationToken, Task<BrokerSnapshot>> fetch,
         CancellationToken ct)
     {
-        if (SnapshotCache.TryGetValue(secret, out var cached) && cached.ExpiresAt > now)
+        var key = SnapshotCacheKey(secret);
+        while (true)
         {
-            return cached.Snapshot;
-        }
+            if (SnapshotCache.TryGetValue(key, out var existing) && existing.ExpiresAt > now)
+            {
+                return existing.Snapshot.Value.WaitAsync(ct);
+            }
 
-        var snapshot = await fetch(secret, ct);
-        SnapshotCache[secret] = (now + SnapshotCacheTtl, snapshot);
-        return snapshot;
+            var candidate = new SnapshotCacheEntry(
+                now + SnapshotCacheTtl,
+                new Lazy<Task<BrokerSnapshot>>(() => RunFetchAsync(fetch, secret)));
+            var stored = existing is null ? SnapshotCache.TryAdd(key, candidate) : SnapshotCache.TryUpdate(key, candidate, existing);
+            if (!stored)
+            {
+                continue; // Another caller won the race; use its entry.
+            }
+
+            SweepExpired(now);
+            var task = candidate.Snapshot.Value;
+            _ = task.ContinueWith(
+                _ => SnapshotCache.TryRemove(new KeyValuePair<string, SnapshotCacheEntry>(key, candidate)),
+                CancellationToken.None,
+                TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return task.WaitAsync(ct);
+        }
+    }
+
+    // async so a fetch that throws synchronously still becomes a faulted Task (never a cached throw in the Lazy).
+    private static async Task<BrokerSnapshot> RunFetchAsync(Func<string, CancellationToken, Task<BrokerSnapshot>> fetch, string secret) =>
+        await fetch(secret, CancellationToken.None);
+
+    private static void SweepExpired(DateTimeOffset now)
+    {
+        foreach (var entry in SnapshotCache)
+        {
+            if (entry.Value.ExpiresAt <= now)
+            {
+                SnapshotCache.TryRemove(entry);
+            }
+        }
     }
 
     private const string OverviewNavHref = "/p/rabbitmq/overview";

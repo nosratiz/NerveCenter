@@ -63,7 +63,7 @@
             var result = await BindingsHandler.HandleAsync(ConnectionId, Vhost, Exchange);
             if (result.IsSuccess)
             {
-                _bindings = result.Value!;
+                _bindings = result.Value!.Outgoing;
             }
             else
             {

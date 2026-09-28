@@ -213,4 +213,111 @@ public class DeadLetterTopologyTests
 
         perVhost["a"].RouteOut("work")!.TargetQueues.Should().BeEmpty();
     }
+
+    [Fact]
+    public void A_queue_reached_from_a_dlx_through_an_exchange_hop_is_a_dlq()
+    {
+        QueueSummary[] queues = [Queue("work.q", "work.dlx", null), Queue("dlq.archive")];
+        BindingInfo[] bindings =
+        [
+            Binding("work.dlx", "dlq.fan", "", destinationType: "exchange"),
+            Binding("dlq.fan", "dlq.archive", ""),
+        ];
+        ExchangeSummary[] exchanges = [Exchange("work.dlx", "fanout"), Exchange("dlq.fan", "fanout")];
+
+        var topology = DeadLetterTopology.Compute(queues, bindings, exchanges);
+
+        topology.IsDeadLetterQueue("dlq.archive").Should().BeTrue();
+        topology.RouteOut("work.q")!.TargetQueues.Should().Equal("dlq.archive");
+        topology.SourcesOf("dlq.archive").Should().Equal("work.q");
+    }
+
+    [Fact]
+    public void SourcesOf_lists_every_queue_whose_dead_letters_can_land_in_the_dlq()
+    {
+        Seeded().SourcesOf("payments-dlq").Should().Equal("billing.payments.q", "order-events.q");
+        Seeded().SourcesOf("audit.sink").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Fanout_DLX_through_an_e2e_topic_hop_narrows_by_the_queues_DLRK()
+    {
+        var queues = new[] { Queue("work", "work.dlx", "a.x"), Queue("q1"), Queue("q2") };
+        var bindings = new[]
+        {
+            Binding("work.dlx", "t", "", destinationType: "exchange"),
+            Binding("t", "q1", "a.*"),
+            Binding("t", "q2", "b.*"),
+        };
+        var exchanges = new[] { Exchange("work.dlx", "fanout"), Exchange("t", "topic") };
+
+        var route = DeadLetterTopology.Compute(queues, bindings, exchanges).RouteOut("work")!;
+
+        route.TargetQueues.Should().Equal("q1");
+        route.DependsOnMessageRoutingKey.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Fanout_DLX_through_an_e2e_topic_hop_without_a_DLRK_lists_every_queue_and_flags_it()
+    {
+        var queues = new[] { Queue("work", "work.dlx", null), Queue("q1"), Queue("q2") };
+        var bindings = new[]
+        {
+            Binding("work.dlx", "t", "", destinationType: "exchange"),
+            Binding("t", "q1", "a.*"),
+            Binding("t", "q2", "b.*"),
+        };
+        var exchanges = new[] { Exchange("work.dlx", "fanout"), Exchange("t", "topic") };
+
+        var route = DeadLetterTopology.Compute(queues, bindings, exchanges).RouteOut("work")!;
+
+        route.TargetQueues.Should().Equal("q1", "q2");
+        route.DependsOnMessageRoutingKey.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Direct_DLX_through_an_e2e_hop_into_a_plugin_typed_exchange_is_flagged_uncertain()
+    {
+        var queues = new[] { Queue("work", "work.dlx", "k"), Queue("h.q") };
+        var bindings = new[]
+        {
+            Binding("work.dlx", "hash", "k", destinationType: "exchange"),
+            Binding("hash", "h.q", "1"),
+        };
+        var exchanges = new[] { Exchange("work.dlx", "direct"), Exchange("hash", "x-consistent-hash") };
+
+        var route = DeadLetterTopology.Compute(queues, bindings, exchanges).RouteOut("work")!;
+
+        route.TargetQueues.Should().Contain("h.q");
+        route.DependsOnMessageRoutingKey.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Fanout_DLX_through_an_e2e_hop_into_an_undeclared_exchange_that_itself_binds_a_queue_is_flagged_uncertain()
+    {
+        var queues = new[] { Queue("work", "work.dlx", "k"), Queue("m.q") };
+        var bindings = new[]
+        {
+            Binding("work.dlx", "mystery", "", destinationType: "exchange"),
+            Binding("mystery", "m.q", "k"),
+        };
+        var exchanges = new[] { Exchange("work.dlx", "fanout") };
+
+        var route = DeadLetterTopology.Compute(queues, bindings, exchanges).RouteOut("work")!;
+
+        route.TargetQueues.Should().Contain("m.q");
+        route.DependsOnMessageRoutingKey.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Plain_fanout_DLX_with_only_queue_bindings_and_no_DLRK_is_not_flagged()
+    {
+        var queues = new[] { Queue("work", "dlx.fan", null), Queue("dead1"), Queue("dead2") };
+        var bindings = new[] { Binding("dlx.fan", "dead1", ""), Binding("dlx.fan", "dead2", "x") };
+
+        var route = DeadLetterTopology.Compute(queues, bindings, [Exchange("dlx.fan", "fanout")]).RouteOut("work")!;
+
+        route.TargetQueues.Should().Equal("dead1", "dead2");
+        route.DependsOnMessageRoutingKey.Should().BeFalse();
+    }
 }

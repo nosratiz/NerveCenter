@@ -323,6 +323,26 @@ internal sealed class ManagementApiClient
         SendAsync(settings, HttpMethod.Delete,
             $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(exchange)}/q/{Seg(queue)}/{Seg(propertiesKey)}", null, ct);
 
+    /// <summary>Exchange-to-exchange binding: POST /api/bindings/{vhost}/e/{source}/e/{destination}.</summary>
+    public Task AddExchangeBindingAsync(
+        RabbitConnectionSettings settings, string vhost, string source, string destination, string routingKey,
+        IReadOnlyDictionary<string, object?> arguments, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["routing_key"] = routingKey,
+            ["arguments"] = arguments,
+        };
+        return SendAsync(settings, HttpMethod.Post, $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(source)}/e/{Seg(destination)}", body, ct);
+    }
+
+    /// <summary>Same properties_key escaping rule as <see cref="RemoveBindingAsync"/>.</summary>
+    public Task RemoveExchangeBindingAsync(
+        RabbitConnectionSettings settings, string vhost, string source, string destination, string propertiesKey,
+        CancellationToken ct = default) =>
+        SendAsync(settings, HttpMethod.Delete,
+            $"api/bindings/{Seg(vhost)}/e/{ExchangeSeg(source)}/e/{Seg(destination)}/{Seg(propertiesKey)}", null, ct);
+
     public Task CreateShovelAsync(RabbitConnectionSettings settings, string vhost, CreateShovelRequest request, CancellationToken ct = default)
     {
         var toQueue = !string.IsNullOrEmpty(request.DestinationQueue);
@@ -442,7 +462,24 @@ internal sealed class ManagementApiClient
 
     private static readonly string[] KnownShovelStates = ["running", "starting", "terminated"];
 
-    private static string Seg(string value) => Uri.EscapeDataString(value);
+    /// <summary>
+    /// One escaped path segment. "." and ".." are refused: they escape to themselves and .NET's Uri
+    /// then removes them as dot segments, silently retargeting the request (a purge of queue "."
+    /// became DELETE /api/queues/%2F/contents, i.e. a delete of queue "contents").
+    /// </summary>
+    private static string Seg(string value)
+    {
+        var escaped = Uri.EscapeDataString(value);
+        if (escaped is "." or "..")
+        {
+            throw DotSegmentError(value);
+        }
+
+        return escaped;
+    }
+
+    internal static ArgumentException DotSegmentError(string value) =>
+        new($"A name of \"{value}\" can't be addressed through the RabbitMQ management API (the URL would resolve to a different resource). Use rabbitmqctl or the broker UI instead.");
 
     // The default exchange is "" in listings but must be addressed as "amq.default" in paths.
     private static string ExchangeSeg(string exchange) => exchange.Length == 0 ? "amq.default" : Seg(exchange);
@@ -540,8 +577,8 @@ internal sealed class ManagementApiClient
     {
         null => null,
         { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } => null,
-        { ValueKind: JsonValueKind.String } text => text.GetString(),
-        { } other => other.GetRawText(),
+        { ValueKind: JsonValueKind.String } text => UriRedaction.RedactOrNull(text.GetString()),
+        { } other => UriRedaction.Redact(other.GetRawText()),
     };
 
     // src-uri/dest-uri may be one URI or a list of fail-over URIs.

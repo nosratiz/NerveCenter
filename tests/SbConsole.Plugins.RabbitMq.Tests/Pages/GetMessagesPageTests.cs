@@ -145,6 +145,56 @@ public class GetMessagesPageTests : RabbitPageTestBase
         Text(cut, ".get-byline").Should().Be(ConsumeByline);
     }
 
+    private const string QuorumNote = "On a quorum queue every peek counts toward the delivery limit";
+
+    private void UseQueue(QueueSummary queue) =>
+        Operations.GetQueueAsync(DevSecret, Vhost, Queue, Arg.Any<CancellationToken>()).Returns(new QueueDetails(queue, [], []));
+
+    [Fact]
+    public async Task A_quorum_queue_peek_byline_warns_about_the_delivery_limit()
+    {
+        UseQueue(SeededTopology.Queue(Queue) with { Type = "quorum", Ready = 214 });
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().Be(
+            PeekByline + " " + QuorumNote + "; messages past it are dead-lettered or dropped.");
+
+        await SelectAsync(cut, "get-mode", GetMode.Consume);
+        Text(cut, ".get-byline").Should().Be(ConsumeByline);
+    }
+
+    [Theory]
+    [InlineData(5L, null, "(limit 5)")]
+    [InlineData(null, 3L, "(limit 3)")]
+    [InlineData(10L, 4L, "(limit 4)")]
+    public async Task The_quorum_note_names_the_limit_from_arguments_or_policy(long? argument, long? policy, string expected)
+    {
+        var arguments = new Dictionary<string, object?>();
+        var definition = new Dictionary<string, object?>();
+        if (argument is { } a)
+        {
+            arguments["x-delivery-limit"] = a;
+        }
+
+        if (policy is { } p)
+        {
+            definition["delivery-limit"] = p;
+        }
+
+        UseQueue(SeededTopology.Queue(Queue) with { Type = "quorum", Arguments = arguments, EffectivePolicyDefinition = definition });
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().Contain($"{QuorumNote} {expected}; messages past it are dead-lettered or dropped.");
+    }
+
+    [Fact]
+    public async Task A_classic_queue_peek_byline_has_no_quorum_note()
+    {
+        var cut = await RenderPageAsync();
+
+        Text(cut, ".get-byline").Should().NotContain("quorum");
+    }
+
     [Fact]
     public async Task Consume_is_confirmed_first_and_cancel_gets_nothing()
     {
@@ -435,5 +485,90 @@ public class GetMessagesPageTests : RabbitPageTestBase
         var cut = await RenderPageAsync(Prod.Id);
 
         cut.FindAll(".prod-chip").Should().ContainSingle();
+    }
+
+    private IDialogService UseDialogs(bool? leave)
+    {
+        var dialogs = Substitute.For<IDialogService>();
+        dialogs.ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default).ReturnsForAnyArgs(leave);
+        Services.AddSingleton(dialogs);
+        return dialogs;
+    }
+
+    private async Task NavigateAwayAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.InvokeAsync(() => Navigation.NavigateTo("/p/rabbitmq/queues"));
+        await SettleAsync(cut);
+    }
+
+    [Fact]
+    public async Task Leaving_with_consumed_messages_asks_and_stays_unless_confirmed()
+    {
+        var dialogs = UseDialogs(leave: false);
+        var cut = await ConsumeAsync();
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.Received(1).ShowMessageBoxAsync(Arg.Any<string?>(), "4 consumed messages exist only on this page. Leave anyway?",
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<DialogOptions?>());
+        Navigation.Uri.Should().Contain("/get?", "navigation was prevented");
+        Rows(cut).Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task Leaving_with_consumed_messages_proceeds_when_confirmed()
+    {
+        UseDialogs(leave: true);
+        var cut = await ConsumeAsync();
+
+        await NavigateAwayAsync(cut);
+
+        Navigation.Uri.Should().EndWith("/p/rabbitmq/queues");
+    }
+
+    [Fact]
+    public async Task Leaving_after_a_peek_does_not_ask()
+    {
+        var dialogs = UseDialogs(leave: false);
+        var cut = await RenderPageAsync();
+        await GetAsync(cut);
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.DidNotReceiveWithAnyArgs().ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default);
+        Navigation.Uri.Should().EndWith("/p/rabbitmq/queues");
+    }
+
+    [Fact]
+    public async Task Leaving_while_a_get_is_loading_asks_first()
+    {
+        var dialogs = UseDialogs(leave: false);
+        Operations.GetMessagesAsync(DevSecret, Vhost, Queue, Arg.Any<int>(), Arg.Any<GetMode>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<IReadOnlyList<RabbitMessage>>().Task);
+        var cut = await RenderPageAsync();
+        _ = cut.Find("button.get-submit").ClickAsync(new());
+        await SettleAsync(cut);
+
+        await NavigateAwayAsync(cut);
+
+        await dialogs.ReceivedWithAnyArgs(1).ShowMessageBoxAsync(default(string), default(string)!, default!, default, default, default);
+        Navigation.Uri.Should().Contain("/get?");
+    }
+
+    [Fact]
+    public async Task Disposing_the_page_cancels_an_in_flight_get()
+    {
+        var pending = new TaskCompletionSource<IReadOnlyList<RabbitMessage>>();
+        CancellationToken token = default;
+        Operations.GetMessagesAsync(DevSecret, Vhost, Queue, Arg.Any<int>(), Arg.Any<GetMode>(), Arg.Do<CancellationToken>(t => token = t))
+            .Returns(pending.Task);
+        var cut = await RenderPageAsync();
+        _ = cut.Find("button.get-submit").ClickAsync(new());
+        await SettleAsync(cut);
+        token.IsCancellationRequested.Should().BeFalse();
+
+        await DisposeComponentsAsync();
+
+        token.IsCancellationRequested.Should().BeTrue("a torn-down page must requeue rather than ack into nothing");
     }
 }

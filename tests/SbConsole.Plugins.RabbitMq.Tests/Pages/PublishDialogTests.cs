@@ -123,6 +123,32 @@ public class PublishDialogTests : RabbitPageTestBase
     }
 
     [Fact]
+    public async Task A_typed_headers_binding_argument_is_called_out_as_unmatchable()
+    {
+        Operations.ListBindingsAsync(DevSecret, SeededTopology.Vhost, Arg.Any<CancellationToken>()).Returns(
+        [
+            .. SeededTopology.Bindings(),
+            SeededTopology.Binding("invoice.headers", "invoices.priority", "", args: new Dictionary<string, object?> { ["priority"] = 5L }),
+        ]);
+        var cut = await RenderAsync("invoice.headers");
+
+        await TypeAsync(cut, ".headers-input textarea", "priority: 5");
+
+        cut.FindAll(".route-row").Should().BeEmpty("a number binding value can't match a string header");
+        cut.Find(".typed-header-note").TextContent.Should().Contain("priority").And.Contain("string");
+    }
+
+    [Fact]
+    public async Task No_typed_note_when_every_headers_argument_is_a_string()
+    {
+        var cut = await RenderAsync("invoice.headers");
+
+        await TypeAsync(cut, ".headers-input textarea", "region: eu");
+
+        cut.FindAll(".typed-header-note").Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Bad_header_lines_show_a_validation_message_and_disable_publish()
     {
         var cut = await RenderAsync("notify.fanout");

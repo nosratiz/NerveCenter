@@ -37,6 +37,8 @@ public interface IRabbitOperations
     Task PurgeQueueAsync(string secret, string vhost, string queue, CancellationToken ct = default);
     Task AddBindingAsync(string secret, string vhost, string exchange, string queue, string routingKey, IReadOnlyDictionary<string, object?> arguments, CancellationToken ct = default);
     Task RemoveBindingAsync(string secret, string vhost, string exchange, string queue, string propertiesKey, CancellationToken ct = default);
+    Task AddExchangeBindingAsync(string secret, string vhost, string source, string destination, string routingKey, IReadOnlyDictionary<string, object?> arguments, CancellationToken ct = default);
+    Task RemoveExchangeBindingAsync(string secret, string vhost, string source, string destination, string propertiesKey, CancellationToken ct = default);
     Task CreateShovelAsync(string secret, string vhost, CreateShovelRequest request, CancellationToken ct = default);
     Task DeleteShovelAsync(string secret, string vhost, string name, CancellationToken ct = default);
     Task RestartShovelAsync(string secret, string vhost, string name, CancellationToken ct = default);

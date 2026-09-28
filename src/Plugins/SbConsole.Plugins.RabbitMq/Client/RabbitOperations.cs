@@ -23,7 +23,7 @@ public sealed class RabbitOperations : IRabbitOperations
     }
 
     public RabbitOperations(ILogger<RabbitOperations> logger)
-        : this(new ManagementApiClient(), new AmqpClient(), TimeProvider.System, logger)
+        : this(new ManagementApiClient(), new AmqpClient(logger), TimeProvider.System, logger)
     {
     }
 
@@ -91,6 +91,15 @@ public sealed class RabbitOperations : IRabbitOperations
     public async Task RemoveBindingAsync(
         string secret, string vhost, string exchange, string queue, string propertiesKey, CancellationToken ct = default) =>
         await _management.RemoveBindingAsync(Settings(secret), vhost, exchange, queue, propertiesKey, ct);
+
+    public async Task AddExchangeBindingAsync(
+        string secret, string vhost, string source, string destination, string routingKey,
+        IReadOnlyDictionary<string, object?> arguments, CancellationToken ct = default) =>
+        await _management.AddExchangeBindingAsync(Settings(secret), vhost, source, destination, routingKey, arguments, ct);
+
+    public async Task RemoveExchangeBindingAsync(
+        string secret, string vhost, string source, string destination, string propertiesKey, CancellationToken ct = default) =>
+        await _management.RemoveExchangeBindingAsync(Settings(secret), vhost, source, destination, propertiesKey, ct);
 
     public async Task CreateShovelAsync(string secret, string vhost, CreateShovelRequest request, CancellationToken ct = default) =>
         await _management.CreateShovelAsync(Settings(secret), vhost, request, ct);

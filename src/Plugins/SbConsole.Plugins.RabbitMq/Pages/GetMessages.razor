@@ -16,12 +16,13 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject TimeProvider Clock
+@implements IDisposable
 
 <PageTitle>Get · @QueueName</PageTitle>
 
-@* Consumed messages live only in this component's memory; at least make the browser ask before
-   a reload or close throws them away. *@
-<NavigationLock ConfirmExternalNavigation="@(HeldCount > 0)" />
+@* Consumed messages live only in this component's memory: the browser asks before a reload or
+   close throws them away, and in-app navigation asks through a message box. *@
+<NavigationLock ConfirmExternalNavigation="@(HeldCount > 0)" OnBeforeInternalNavigation="OnBeforeInternalNavigationAsync" />
 
 @* Same compact breadcrumb header as queue detail: connection and vhost come from the query, IsProd
    from a server-side IConnectionProvider lookup (spec §7). *@
@@ -196,6 +197,7 @@ else
     private bool _connectionResolved;
     private string? _pageKey;
     private long? _ready;
+    private QueueSummary? _queue;
     private IReadOnlyList<ExchangeSummary> _exchanges = [];
 
     private GetMode _mode = GetMode.Peek;
@@ -225,8 +227,42 @@ else
     private Entry? FocusedEntry => _entries.FirstOrDefault(e => e.Id == _focusedId);
 
     private string Byline => _mode == GetMode.Peek
-        ? "Peek requeues every message. Nothing is removed, but each message comes back marked redelivered."
+        ? "Peek requeues every message. Nothing is removed, but each message comes back marked redelivered." + QuorumPeekNote
         : "Consume acknowledges and removes every message it gets. Selected messages can be requeued or republished from this page until you leave it.";
+
+    // A quorum queue counts a nack-requeue as a delivery attempt, so peeking isn't free there.
+    private string QuorumPeekNote
+    {
+        get
+        {
+            if (_queue is not { Type: "quorum" } queue)
+            {
+                return "";
+            }
+
+            var limit = DeliveryLimit(queue);
+            return " On a quorum queue every peek counts toward the delivery limit"
+                + (limit is { } n ? $" (limit {n.ToString(CultureInfo.InvariantCulture)})" : "")
+                + "; messages past it are dead-lettered or dropped.";
+        }
+    }
+
+    /// <summary>x-delivery-limit argument and/or delivery-limit policy key; with both, the lower applies.</summary>
+    private static long? DeliveryLimit(QueueSummary queue)
+    {
+        var fromArgument = AsLong(queue.Arguments.GetValueOrDefault("x-delivery-limit"));
+        var fromPolicy = AsLong(queue.EffectivePolicyDefinition.GetValueOrDefault("delivery-limit"));
+        return fromArgument is { } a && fromPolicy is { } p ? Math.Min(a, p) : fromArgument ?? fromPolicy;
+    }
+
+    private static long? AsLong(object? value) => value switch
+    {
+        long l => l,
+        int i => i,
+        double d when d == Math.Floor(d) => (long)d,
+        string text when long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+        _ => null,
+    };
 
     private DateTimeOffset Local(DateTimeOffset value) => TimeZoneInfo.ConvertTime(value, Clock.LocalTimeZone);
 
@@ -251,6 +287,7 @@ else
         _connection = null;
         _connectionResolved = false;
         _ready = null;
+        _queue = null;
         _exchanges = [];
         _entries = [];
         _selected.Clear();
@@ -287,10 +324,11 @@ else
             return;
         }
 
-        if (result.IsSuccess)
+        if (result is { IsSuccess: true, Value: { } snapshot })
         {
-            _ready = result.Value!.Detail.Summary.Ready;
-            _exchanges = result.Value.Exchanges;
+            _queue = snapshot.Detail.Summary;
+            _ready = snapshot.Detail.Summary.Ready;
+            _exchanges = snapshot.Exchanges;
         }
         else
         {
@@ -380,6 +418,35 @@ else
     }
 
     private void CancelGet() => _cts?.Cancel();
+
+    private async Task OnBeforeInternalNavigationAsync(LocationChangingContext context)
+    {
+        var held = HeldCount;
+        if (held == 0 && !_loading)
+        {
+            return;
+        }
+
+        var message = held > 0
+            ? $"{held} consumed {(held == 1 ? "message exists" : "messages exist")} only on this page. Leave anyway?"
+            : "A get is still in progress. Leaving cancels it and the held messages are requeued. Leave anyway?";
+        var leave = await DialogService.ShowMessageBoxAsync("Leave this page?", message, yesText: "Leave", cancelText: "Stay");
+        if (leave != true)
+        {
+            context.PreventNavigation();
+        }
+    }
+
+    /// <summary>
+    /// Leaving the page (or the circuit dropping) cancels an in-flight get: the channel then
+    /// closes with everything unacked, so the broker requeues it instead of a Consume acking
+    /// messages into a page that no longer exists.
+    /// </summary>
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts = null;
+    }
 
     // FriendlyRabbitError's 405 text; matched loosely so a broker phrasing it as an exclusive-consumer
     // refusal lands here too.

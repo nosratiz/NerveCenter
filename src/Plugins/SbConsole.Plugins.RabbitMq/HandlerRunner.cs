@@ -54,15 +54,35 @@ internal static class HandlerRunner
         try
         {
             await run(secret);
-            await audit.RecordAsync(action, target, risk, succeeded: true, detail: detail, ct: ct);
-            return PluginResult.Ok();
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "{Action} on {Target} failed.", action, target);
             var friendly = FriendlyRabbitError.From(ex);
-            await audit.RecordAsync(action, target, risk, succeeded: false, detail: friendly, ct: ct);
+            await AuditQuietlyAsync(audit, logger, action, target, risk, succeeded: false, friendly);
             return PluginResult.Fail(friendly);
+        }
+
+        // Outside the try: the broker already did it, so a failed audit write must not turn a
+        // successful purge/delete into a reported failure (or add a second, "failed" row).
+        await AuditQuietlyAsync(audit, logger, action, target, risk, succeeded: true, detail);
+        return PluginResult.Ok();
+    }
+
+    /// <summary>
+    /// Writes one audit row with CancellationToken.None (the broker call has already happened, so
+    /// a cancelled page must not skip the record) and only logs if the write itself fails.
+    /// </summary>
+    public static async Task AuditQuietlyAsync(
+        IAuditScope audit, ILogger logger, string action, string target, ActionRisk risk, bool succeeded, string? detail)
+    {
+        try
+        {
+            await audit.RecordAsync(action, target, risk, succeeded, detail, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Writing the {Action} audit row for {Target} (succeeded: {Succeeded}) failed.", action, target, succeeded);
         }
     }
 

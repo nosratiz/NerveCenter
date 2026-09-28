@@ -283,6 +283,8 @@ else
     private DeadLetterTopology? _topology;
     private DateTimeOffset _loadedAt;
     private bool _loading;
+    // Bumped per LoadAsync: only the newest load may apply its result or clear _loading.
+    private int _generation;
     private bool _busy;
     private bool _notFound;
     // First-load failure (nothing to show) vs refresh failure (last good data stays, dimmed).
@@ -314,6 +316,9 @@ else
         }
 
         _pageKey = key;
+        // Drops any load still running for the previous queue.
+        _generation++;
+        _loading = false;
         _connection = null;
         _connectionResolved = false;
         _snapshot = null;
@@ -349,19 +354,18 @@ else
             return;
         }
 
-        var key = _pageKey;
+        var generation = ++_generation;
         _loading = true;
         try
         {
             var result = await DetailHandler.HandleAsync(connection.Id, VhostValue, QueueName);
-            if (key != _pageKey)
+            if (generation != _generation)
             {
                 return;
             }
 
-            if (result.IsSuccess)
+            if (result is { IsSuccess: true, Value: { } snapshot })
             {
-                var snapshot = result.Value!;
                 _snapshot = snapshot;
                 // The detail read is the freshest view of this queue; use it for its own route out.
                 var queues = snapshot.Queues.Where(q => q.Name != snapshot.Detail.Summary.Name).Append(snapshot.Detail.Summary).ToList();
@@ -371,8 +375,9 @@ else
                 _loadError = null;
                 _refreshError = null;
             }
-            else if (IsNotFound(result.Error!))
+            else if (result.IsSuccess)
             {
+                // Success with no snapshot: the queue itself is gone (a 404 on the queue read).
                 _snapshot = null;
                 _topology = null;
                 _notFound = true;
@@ -390,15 +395,13 @@ else
         }
         finally
         {
-            if (key == _pageKey)
+            if (generation == _generation)
             {
                 _loading = false;
             }
         }
     }
 
-    // FriendlyRabbitError renders a management 404 as "Not found (GET … → 404)".
-    private static bool IsNotFound(string error) => error.StartsWith("Not found (", StringComparison.Ordinal);
 
     // The implicit default-exchange binding can't be removed, so it isn't listed (spec §7, 1e).
     private static List<BindingInfo> RoutesIn(QueueDetailSnapshot snapshot) =>

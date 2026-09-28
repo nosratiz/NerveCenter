@@ -20,18 +20,22 @@ public sealed class ConsumeMessagesCommandHandler(IRabbitOperations operations, 
             return PluginResult<IReadOnlyList<RabbitMessage>>.Fail(HandlerRunner.ConnectionNotFound);
         }
 
+        IReadOnlyList<RabbitMessage> messages;
         try
         {
-            var messages = await operations.GetMessagesAsync(secret, cmd.Vhost, cmd.Queue, cmd.Count, GetMode.Consume, ct);
-            await audit.RecordAsync(Action, target, ActionRisk.Destructive, succeeded: true, detail: $"{messages.Count} consumed", ct: ct);
-            return PluginResult<IReadOnlyList<RabbitMessage>>.Ok(messages);
+            messages = await operations.GetMessagesAsync(secret, cmd.Vhost, cmd.Queue, cmd.Count, GetMode.Consume, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Consuming from {Target} failed.", target);
             var friendly = FriendlyRabbitError.From(ex);
-            await audit.RecordAsync(Action, target, ActionRisk.Destructive, succeeded: false, detail: friendly, ct: ct);
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Destructive, succeeded: false, friendly);
             return PluginResult<IReadOnlyList<RabbitMessage>>.Fail(friendly);
         }
+
+        // The messages are acked -- they now exist only in this result. Nothing after this point
+        // (audit failure, cancellation) may stop them reaching the caller.
+        await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Destructive, succeeded: true, $"{messages.Count} consumed");
+        return PluginResult<IReadOnlyList<RabbitMessage>>.Ok(messages);
     }
 }
