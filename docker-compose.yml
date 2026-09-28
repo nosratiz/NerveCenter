@@ -2,6 +2,9 @@
 #
 #   docker compose up -d                       # Kafka broker + seeded topics + Kafka UI
 #   docker compose --profile servicebus up -d  # ...plus the Azure Service Bus emulator
+#   docker compose --profile rabbitmq up -d    # ...plus RabbitMQ, seeded vhost /orders
+#   docker compose --profile aws up -d         # ...plus LocalStack (SQS/SNS)
+#   docker compose --profile redis up -d       # ...plus Redis, seeded with sample keys
 #   docker compose --profile app up -d --build # ...plus SbConsole itself, built from source
 #
 # The app itself normally runs on the host via `dotnet run` (see .claude/launch.json); this
@@ -158,6 +161,42 @@ services:
       RABBIT_API: http://rabbitmq:15672/api
     volumes:
       - ./docker/rabbitmq/init-messages.sh:/init-messages.sh:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------
+  # Redis 7 (profile: redis), seeded with a handful of sample keys across the data types the
+  # Redis plugin's mockup shows (a couple of session hashes, a retry list, a leaderboard sorted
+  # set, a feature-flag set) so the Overview and Keys pages have something to show.
+  # ---------------------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: nervecenter-redis
+    profiles: ["redis"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-sbconsole}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-sbconsole}", "--no-auth-warning", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot: seeds the sample keys. Idempotent (HSET/SADD/ZADD overwrite-in-place; RPUSH is the
+  # one exception, so this deliberately checks LLEN first rather than growing the list on every
+  # `docker compose up`).
+  redis-init:
+    image: redis:7-alpine
+    container_name: nervecenter-redis-init
+    profiles: ["redis"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init-keys.sh"]
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-sbconsole}"
+    volumes:
+      - ./docker/redis/init-keys.sh:/init-keys.sh:ro
     restart: "no"
 
   # ---------------------------------------------------------------------------------------

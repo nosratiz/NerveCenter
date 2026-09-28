@@ -145,6 +145,36 @@ To see Test connection's split result, stop just the management listener's reach
 point Management URL at `http://localhost:15999`: AMQP passes, the management check fails, and
 the connection still saves.
 
+## Redis (opt-in)
+
+```bash
+docker compose --profile redis up -d
+```
+
+| Service      | Host address       |
+|--------------|---------------------|
+| `redis`      | `localhost:6379`   |
+| `redis-init` | (one-shot)          |
+
+Redis 7, password-protected (`--requirepass`), standalone. `redis-init` seeds a handful of
+sample keys across the types the Redis plugin's mockup shows: two `session:u:*` hashes (one
+with no TTL on purpose, so the Overview page's "no TTL" story has something to point at), a
+`jobs:email:retry` list, a `lb:weekly` sorted-set leaderboard, and a `flags:beta` set. Re-running
+`docker compose up -d` re-seeds idempotently (see [`redis/init-keys.sh`](redis/init-keys.sh)).
+
+### Connect the app to it (Redis)
+
+In SbConsole, **Connections → Add**, kind *Redis*: Topology Standalone, Host `localhost`, Port
+`6379`, Password `sbconsole`, TLS off. The equivalent raw secret is:
+
+```
+standalone|0|localhost:6379,password=sbconsole
+```
+
+From the containerised app (if running SbConsole in a container), use `redis:6379` instead of
+`localhost:6379` — reached by its service name on the compose network, the same way the Kafka
+plugin reaches `kafka:29092`.
+
 ## LocalStack — AWS SQS/SNS emulator (opt-in)
 
 ```bash
@@ -313,13 +343,14 @@ the host publishes the right ports, the container does not.
 
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
-`SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the
+`SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`,
+`REDIS_PORT`, `REDIS_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
 broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile rabbitmq --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile app down -v
 ```
 
 `-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's
