@@ -1,10 +1,11 @@
 @* src/Plugins/SbConsole.Plugins.Redis/Pages/PubSub.razor *@
 @page "/p/redis/pubsub"
 @using System.Globalization
+@using System.Text.Encodings.Web
+@using System.Text.Json
 @using SbConsole.Plugins.Redis.Acl
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.PubSub
-@inject IConnectionProvider Connections
 @inject PubSubQueryHandler QueryHandler
 @inject AclQueryHandler AclQueryHandler
 @inject SubscribeToChannelCommandHandler SubscribeHandler
@@ -13,151 +14,223 @@
 @implements IAsyncDisposable
 
 <PageTitle>Redis Pub/Sub</PageTitle>
-<h1>Pub/Sub</h1>
 
-@* No database picker -- Pub/Sub is server-wide in Redis, not per-database (design spec §14), same
-   reason Overview.razor (also server-wide) only offers a connection picker. *@
-<MudSelect T="Guid" Label="Connection" Value="_connectionId" ValueChanged="OnConnectionChangedAsync" Class="pubsub-connection">
-    @foreach (var c in _connections)
+@* The mockup (docs/superpowers/specs/redis-mockup/) has no Pub/Sub screen; this borrows the Keys and
+   Streams vocabulary: header chips, a two-pane console (channels | live tail), mono rds-tables. *@
+<div class="rds-page pubsub-page">
+    @* No database chip -- Pub/Sub is server-wide in Redis, not per-database (design spec §14),
+       the same reason Overview (also server-wide) hides it. *@
+    <RedisPageHeader Title="Pub/Sub">
+        <Chips>
+            <RedisConnectionDatabasePicker ShowDatabase="false" SelectionChanged="OnSelectionChangedAsync" Loading="_channelsLoading" />
+        </Chips>
+        <Meta>
+            @if (_selection is not null && _channelsError is null && !_channelsLoading)
+            {
+                @($"{_channels.Count} {(_channels.Count == 1 ? "channel" : "channels")} with subscribers")
+            }
+        </Meta>
+    </RedisPageHeader>
+
+    @if (_selection is not null)
     {
-        <MudSelectItem Value="c.Id">@c.Name</MudSelectItem>
-    }
-</MudSelect>
-
-@if (_connections.Count == 0)
-{
-    <MudAlert Severity="Severity.Info" Class="pubsub-no-connections">No connections yet. Add a Redis connection to get started.</MudAlert>
-}
-else
-{
-    @if (_channelsError is not null)
-    {
-        <MudAlert Severity="Severity.Error" Class="pubsub-channels-error my-2">@_channelsError</MudAlert>
-    }
-
-    <MudGrid Class="mt-2">
-        <MudItem xs="12" md="5">
-            <MudPaper Class="pubsub-channels pa-3" Outlined="true">
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Active channels</MudText>
-                <div class="d-flex align-center gap-2 mb-2">
-                    <MudTextField id="pubsub-channel-pattern" data-testid="pubsub-channel-pattern" Class="pubsub-channel-pattern" T="string" Value="_channelPattern"
-                                  ValueChanged="v => _channelPattern = v ?? string.Empty" Label="Pattern (glob, optional)" Immediate="true" />
-                    <MudButton Class="pubsub-channels-refresh" Variant="Variant.Outlined" Disabled="_channelsLoading" OnClick="RefreshChannelsAsync">Refresh</MudButton>
+        <div class="rds-split pubsub-split">
+            @* ---- left: channels that currently have subscribers (PUBSUB CHANNELS) ---- *@
+            <section class="rds-pane pubsub-channels">
+                <div class="rds-pane-section pubsub-toolbar">
+                    <label class="pubsub-field pubsub-field-grow pubsub-channel-pattern">
+                        <input id="pubsub-channel-pattern" data-testid="pubsub-channel-pattern" class="pubsub-input" type="text"
+                               placeholder="Filter channels (glob)…" spellcheck="false" autocomplete="off"
+                               value="@_channelPattern" @oninput="e => _channelPattern = e.Value?.ToString() ?? string.Empty"
+                               @onkeydown="OnChannelPatternKeyDownAsync" />
+                    </label>
+                    <button type="button" id="pubsub-channels-refresh" class="rds-btn pubsub-channels-refresh" disabled="@_channelsLoading" @onclick="RefreshChannelsAsync">Refresh</button>
                 </div>
 
-                @if (_channelsLoading)
+                @if (_channelsError is not null)
                 {
-                    <MudProgressCircular Class="pubsub-channels-loading" Size="Size.Small" Indeterminate="true" />
+                    <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined" Class="pubsub-channels-error pubsub-alert">@_channelsError</MudAlert>
                 }
-                else if (_channels.Count == 0)
-                {
-                    <MudText Typo="Typo.body2" Class="pubsub-channels-empty mud-text-secondary">No active channels.</MudText>
-                }
-                else
-                {
-                    <MudSimpleTable Class="pubsub-channels-table" Dense="true" Elevation="0">
-                        <thead><tr><th>Channel</th><th>Subscribers</th></tr></thead>
-                        <tbody>
-                            @foreach (var channel in _channels)
-                            {
-                                <tr class="pubsub-channel-row" style="cursor:pointer" @onclick="@(() => SelectChannel(channel.Channel))">
-                                    <td class="pubsub-channel-row-name" style="font-family:monospace">@channel.Channel</td>
-                                    <td class="pubsub-channel-row-subscribers">@channel.SubscriberCount</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                }
-            </MudPaper>
-        </MudItem>
 
-        <MudItem xs="12" md="7">
-            <MudPaper Class="pubsub-tail pa-3" Outlined="true">
-                <MudText Typo="Typo.subtitle2">Live tail</MudText>
-                <div class="d-flex align-center flex-wrap gap-2 my-2">
-                    <MudTextField id="pubsub-tail-target" data-testid="pubsub-tail-target" Class="pubsub-tail-target" T="string" Value="_tailTarget"
-                                  ValueChanged="v => _tailTarget = v ?? string.Empty" Label="Channel or pattern" Immediate="true" Disabled="_tailing" />
-                    <MudCheckBox id="pubsub-tail-ispattern" data-testid="pubsub-tail-ispattern" Class="pubsub-tail-ispattern" T="bool" Value="_tailIsPattern"
-                                 ValueChanged="v => _tailIsPattern = v" Label="Pattern (PSUBSCRIBE)" Disabled="_tailing" />
-                    @if (!_tailing)
+                <div class="pubsub-scroll">
+                    @if (_channels.Count > 0)
                     {
-                        <MudButton Class="pubsub-tail-start" Variant="Variant.Filled" Color="Color.Primary"
-                                   Disabled="@string.IsNullOrWhiteSpace(_tailTarget)" OnClick="StartTailAsync">Subscribe</MudButton>
+                        <table class="rds-table pubsub-channels-table">
+                            <thead><tr><th>Channel</th><th class="rds-num">Subscribers</th></tr></thead>
+                            <tbody>
+                                @foreach (var channel in _channels)
+                                {
+                                    var name = channel.Channel;
+                                    <tr class="@($"pubsub-channel-row rds-clickable{(name == _selectedChannel ? " rds-selected" : "")}")" @onclick="@(() => SelectChannel(name))">
+                                        <td class="pubsub-channel-row-name">@name</td>
+                                        <td class="pubsub-channel-row-subscribers rds-num">@channel.SubscriberCount</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else if (_channelsLoading)
+                    {
+                        <div class="rds-skeleton pubsub-channels-loading"></div>
+                        <div class="rds-skeleton pubsub-skeleton-short"></div>
+                    }
+                    else if (_channelsError is null)
+                    {
+                        <div class="rds-empty pubsub-channels-empty">
+                            <div class="pubsub-empty-title">
+                                @(string.IsNullOrWhiteSpace(_channelPattern) ? "No channels with subscribers." : $"No channels with subscribers match {_channelPattern}.")
+                            </div>
+                            <p>
+                                <span class="rds-mono">PUBSUB CHANNELS</span> only lists channels with at least one subscriber.
+                                Publishing alone doesn't register a channel, so an empty list is normal even while traffic is flowing.
+                            </p>
+                            @if (_tailing && _subscribedIsPattern)
+                            {
+                                <p>Pattern subscriptions like <span class="rds-mono">@_subscribedTarget</span> don't count either — they never appear here.</p>
+                            }
+                            else if (!_tailing)
+                            {
+                                <p>To watch traffic anyway, subscribe to a pattern on the right, e.g. <button type="button" class="rds-link rds-mono pubsub-empty-suggest" @onclick="@(() => SuggestPattern(SuggestedPattern))">@SuggestedPattern</button></p>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="rds-pane-footer">
+                    <span class="rds-footnote">Server-wide — Pub/Sub has no database axis.</span>
+                </div>
+            </section>
+
+            @* ---- right: live tail + publish ---- *@
+            <section class="rds-pane pubsub-tail">
+                <div class="rds-pane-section">
+                    <div class="rds-section-label">Live tail</div>
+                    <div class="pubsub-toolbar">
+                        <div class="rds-segmented pubsub-tail-mode" title="SUBSCRIBE listens to one exact channel; PSUBSCRIBE listens to a glob pattern">
+                            <button type="button" class="@($"pubsub-tail-mode-channel{(_tailIsPattern ? "" : " rds-active")}")" disabled="@_tailing" @onclick="() => _tailIsPattern = false">SUBSCRIBE</button>
+                            <button type="button" class="@($"pubsub-tail-mode-pattern{(_tailIsPattern ? " rds-active" : "")}")" disabled="@_tailing" @onclick="() => _tailIsPattern = true">PSUBSCRIBE</button>
+                        </div>
+                        <label class="pubsub-field pubsub-field-grow pubsub-tail-target">
+                            <input id="pubsub-tail-target" data-testid="pubsub-tail-target" class="pubsub-input" type="text"
+                                   placeholder="Channel or glob pattern, e.g. notifications:*" spellcheck="false" autocomplete="off"
+                                   value="@_tailTarget" disabled="@_tailing" @oninput="OnTailTargetInput" @onkeydown="OnTailTargetKeyDownAsync" />
+                        </label>
+                        @if (!_tailing)
+                        {
+                            <button type="button" id="pubsub-tail-start" class="rds-btn-primary pubsub-tail-start"
+                                    disabled="@string.IsNullOrWhiteSpace(_tailTarget)" @onclick="StartTailAsync">Subscribe</button>
+                        }
+                        else
+                        {
+                            <button type="button" id="pubsub-tail-stop" class="rds-btn-primary pubsub-stop pubsub-tail-stop" @onclick="StopAndRefreshAsync">Stop</button>
+                        }
+                    </div>
+
+                    <div class="pubsub-tail-status">
+                        @if (_tailing)
+                        {
+                            <span class="rds-dot"></span>
+                            <span>tailing <span class="rds-mono rds-accent">@_subscribedTarget</span>@(_subscribedIsPattern ? " (pattern)" : "") · @_received @(_received == 1 ? "message" : "messages")</span>
+                        }
+                        else
+                        {
+                            <span class="rds-dot pubsub-dot-idle"></span>
+                            <span>idle — not subscribed@(_received > 0 ? $" · {_received} {(_received == 1 ? "message" : "messages")} received" : "")</span>
+                        }
+                    </div>
+
+                    @if (_tailError is not null)
+                    {
+                        <MudAlert Class="pubsub-tail-error pubsub-alert-flush" Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">@_tailError</MudAlert>
+                    }
+                </div>
+
+                <div class="pubsub-messages-head">
+                    <span class="rds-section-label pubsub-inline-label">Messages</span>
+                    <span class="rds-footnote pubsub-tail-cap">newest first · keeps last @MaxTailMessages</span>
+                    <span class="rds-spacer"></span>
+                    <button type="button" id="pubsub-tail-clear" class="rds-link pubsub-tail-clear" disabled="@(_messages.Count == 0)" @onclick="ClearMessages">Clear</button>
+                </div>
+
+                <div class="pubsub-scroll pubsub-messages">
+                    @if (_messages.Count > 0)
+                    {
+                        <table class="rds-table pubsub-tail-table">
+                            <thead><tr><th class="pubsub-col-time">Time</th><th class="pubsub-col-channel">Channel</th><th>Payload</th></tr></thead>
+                            <tbody>
+                                @foreach (var entry in _messages)
+                                {
+                                    var seq = entry.Seq;
+                                    var expanded = seq == _expandedSeq;
+                                    <tr @key="seq" class="@($"pubsub-message-row rds-clickable{(expanded ? " rds-selected" : "")}")" @onclick="@(() => ToggleExpanded(seq))">
+                                        <td class="pubsub-message-row-time rds-muted">@entry.Message.ReceivedAt.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</td>
+                                        <td class="pubsub-message-row-channel rds-accent">@entry.Message.Channel</td>
+                                        <td class="pubsub-message-row-payload">@entry.Inline</td>
+                                    </tr>
+                                    @if (expanded)
+                                    {
+                                        <tr @key="(seq, 1)" class="pubsub-message-detail">
+                                            <td colspan="3"><pre class="rds-code pubsub-message-full">@entry.Full</pre></td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else if (_tailing)
+                    {
+                        <div class="rds-empty pubsub-tail-empty">Waiting for messages on <span class="rds-mono">@_subscribedTarget</span>…</div>
                     }
                     else
                     {
-                        <MudButton Class="pubsub-tail-stop" Variant="Variant.Outlined" Color="Color.Error" OnClick="StopTailAsync">Unsubscribe</MudButton>
+                        <div class="rds-empty pubsub-tail-idle">Subscribe to a channel or pattern to stream its messages here. Click a message to see its full payload.</div>
                     }
                 </div>
 
-                @if (_tailError is not null)
-                {
-                    <MudAlert Class="pubsub-tail-error mb-2" Severity="Severity.Error">@_tailError</MudAlert>
-                }
-
-                @if (_tailing)
-                {
-                    <MudText Typo="Typo.caption" Class="pubsub-tail-status mud-text-secondary">
-                        Subscribed to <span style="font-family:monospace">@_subscribedTarget</span>@(_subscribedIsPattern ? " (pattern)" : "") — @_messages.Count message(s)
-                    </MudText>
-
-                    @if (_messages.Count == 0)
+                <div class="rds-pane-footer pubsub-publish">
+                    <div class="pubsub-toolbar">
+                        <span class="rds-section-label pubsub-inline-label">Publish</span>
+                        <label class="pubsub-field pubsub-publish-channel">
+                            <input id="pubsub-publish-channel" data-testid="pubsub-publish-channel" class="pubsub-input" type="text"
+                                   placeholder="Channel" spellcheck="false" autocomplete="off"
+                                   value="@_publishChannel" @oninput="e => _publishChannel = e.Value?.ToString() ?? string.Empty" />
+                        </label>
+                        <label class="pubsub-field pubsub-field-grow pubsub-publish-payload">
+                            <input id="pubsub-publish-payload" data-testid="pubsub-publish-payload" class="pubsub-input" type="text"
+                                   placeholder="Payload" spellcheck="false" autocomplete="off"
+                                   value="@_publishPayload" @oninput="e => _publishPayload = e.Value?.ToString() ?? string.Empty" />
+                        </label>
+                        <span title="@(_canPublish ? null : "Command refused by ACL (PUBLISH)")">
+                            <button type="button" id="pubsub-publish-submit" class="rds-btn-primary pubsub-publish-submit"
+                                    disabled="@(!_canPublish || string.IsNullOrWhiteSpace(_publishChannel))" @onclick="PublishAsync">Publish</button>
+                        </span>
+                    </div>
+                    @if (!_canPublish)
                     {
-                        <MudText Typo="Typo.body2" Class="pubsub-tail-empty mud-text-secondary mt-2">Waiting for messages…</MudText>
+                        <div class="rds-footnote pubsub-publish-acl-denied">Command refused by ACL (PUBLISH) — this connection's user isn't permitted to publish.</div>
                     }
-                }
-
-                @if (_messages.Count > 0)
-                {
-                    <MudSimpleTable Class="pubsub-tail-table mt-2" Dense="true" Elevation="0">
-                        <thead><tr><th>Time</th><th>Channel</th><th>Payload</th></tr></thead>
-                        <tbody>
-                            @foreach (var message in _messages)
-                            {
-                                <tr class="pubsub-message-row">
-                                    <td class="pubsub-message-row-time">@message.ReceivedAt.ToLocalTime().ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)</td>
-                                    <td class="pubsub-message-row-channel" style="font-family:monospace">@message.Channel</td>
-                                    <td class="pubsub-message-row-payload" style="font-family:monospace">@message.Payload</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                }
-
-                <MudDivider Class="my-4" />
-
-                <MudText Typo="Typo.subtitle2">Publish</MudText>
-                <div class="d-flex align-center flex-wrap gap-2 my-2">
-                    <MudTextField id="pubsub-publish-channel" data-testid="pubsub-publish-channel" Class="pubsub-publish-channel" T="string" Value="_publishChannel"
-                                  ValueChanged="v => _publishChannel = v ?? string.Empty" Label="Channel" Immediate="true" />
-                    <MudTextField id="pubsub-publish-payload" data-testid="pubsub-publish-payload" Class="pubsub-publish-payload" T="string" Value="_publishPayload"
-                                  ValueChanged="v => _publishPayload = v ?? string.Empty" Label="Payload" Immediate="true" />
-                    <MudTooltip Text="Command refused by ACL (PUBLISH)" Disabled="_canPublish">
-                        <MudButton Class="pubsub-publish-submit" Variant="Variant.Filled" Color="Color.Primary"
-                                   Disabled="@(!_canPublish || string.IsNullOrWhiteSpace(_publishChannel))" OnClick="PublishAsync">Publish</MudButton>
-                    </MudTooltip>
                 </div>
-                @if (!_canPublish)
-                {
-                    <MudText Typo="Typo.caption" Class="pubsub-publish-acl-denied mud-text-secondary">Command refused by ACL (PUBLISH) — this connection's user isn't permitted to publish.</MudText>
-                }
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
-}
+            </section>
+        </div>
+    }
+</div>
 
 @code {
     private const string PublishCommand = "PUBLISH";
-    private const int MaxTailMessages = 200;
+    private const string SuggestedPattern = "notifications:*";
+    private const int InlinePayloadLimit = 160;
 
-    private IReadOnlyList<ConnectionInfo> _connections = [];
-    private Guid _connectionId;
-    private string _connectionName = "";
+    /// <summary>How many tail messages the page retains (newest first) before dropping the oldest.</summary>
+    public const int MaxTailMessages = 200;
+
+    private RedisSelection? _selection;
 
     private string _channelPattern = "";
     private List<PubSubChannelSummary> _channels = [];
+    private string? _selectedChannel;
     private bool _channelsLoading;
     private string? _channelsError;
+    private int _channelsLoadVersion;
 
     private bool _canPublish = true;
 
@@ -167,43 +240,31 @@ else
     private string? _tailError;
     private string _subscribedTarget = "";
     private bool _subscribedIsPattern;
-    private readonly List<PubSubMessage> _messages = [];
+    private readonly List<TailEntry> _messages = [];
+    private long _received;
+    private long _nextSeq;
+    private long? _expandedSeq;
     private IAsyncDisposable? _subscription;
 
     private string _publishChannel = "";
     private string _publishPayload = "";
 
-    protected override async Task OnInitializedAsync()
-    {
-        _connections = await Connections.ListAsync("redis");
-        if (_connections.Count > 0)
-        {
-            await SelectConnectionAsync(_connections[0]);
-        }
-    }
+    private sealed record TailEntry(long Seq, PubSubMessage Message, string Inline, string Full);
 
-    private async Task OnConnectionChangedAsync(Guid connectionId)
-    {
-        var connection = _connections.FirstOrDefault(c => c.Id == connectionId);
-        if (connection is null)
-        {
-            return;
-        }
+    private Guid ConnectionId => _selection!.Connection.Id;
+    private string ConnectionName => _selection!.Connection.Name;
 
-        await SelectConnectionAsync(connection);
-    }
-
-    private async Task SelectConnectionAsync(ConnectionInfo connection)
+    private async Task OnSelectionChangedAsync(RedisSelection selection)
     {
         // Switching connections must not leave the previous connection's subscription running --
         // that would both leak the old multiplexer and silently mix messages from two servers into
         // one tail.
         await StopTailAsync();
 
-        _connectionId = connection.Id;
-        _connectionName = connection.Name;
+        _selection = selection;
         _channels = [];
         _channelsError = null;
+        _selectedChannel = null;
 
         await RefreshChannelsAsync();
         await RefreshAclStateAsync();
@@ -211,14 +272,26 @@ else
 
     private async Task RefreshChannelsAsync()
     {
+        if (_selection is null)
+        {
+            return;
+        }
+
+        // A slow load for a previous connection/filter must never overwrite a newer one.
+        var version = ++_channelsLoadVersion;
         _channelsLoading = true;
         _channelsError = null;
         try
         {
-            var result = await QueryHandler.GetChannelsAsync(_connectionId, string.IsNullOrWhiteSpace(_channelPattern) ? null : _channelPattern);
+            var result = await QueryHandler.GetChannelsAsync(ConnectionId, string.IsNullOrWhiteSpace(_channelPattern) ? null : _channelPattern);
+            if (version != _channelsLoadVersion)
+            {
+                return;
+            }
+
             if (result.IsSuccess)
             {
-                _channels = result.Value!.ToList();
+                _channels = result.Value!.OrderBy(c => c.Channel, StringComparer.Ordinal).ToList();
             }
             else
             {
@@ -228,13 +301,24 @@ else
         }
         finally
         {
-            _channelsLoading = false;
+            if (version == _channelsLoadVersion)
+            {
+                _channelsLoading = false;
+            }
+        }
+    }
+
+    private async Task OnChannelPatternKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await RefreshChannelsAsync();
         }
     }
 
     private async Task RefreshAclStateAsync()
     {
-        var result = await AclQueryHandler.HasCommandPermissionAsync(_connectionId, PublishCommand);
+        var result = await AclQueryHandler.HasCommandPermissionAsync(ConnectionId, PublishCommand);
         // Fails open on a query-level failure too (e.g. connection lookup), mirroring
         // RedisOperations.HasCommandPermissionAsync's own fail-open default -- this check only
         // ever disables a button, never blocks the real, server-enforced action.
@@ -243,30 +327,53 @@ else
 
     private void SelectChannel(string channel)
     {
+        _selectedChannel = channel;
+        _publishChannel = channel;
         if (_tailing)
         {
-            return;
+            return; // the live tail's target is locked until Stop
         }
 
         _tailTarget = channel;
         _tailIsPattern = false;
-        _publishChannel = channel;
+    }
+
+    private void SuggestPattern(string pattern)
+    {
+        _tailTarget = pattern;
+        _tailIsPattern = true;
+    }
+
+    // Typing picks SUBSCRIBE vs PSUBSCRIBE from whether the text holds a glob metacharacter; the
+    // segmented toggle can still override it for a channel whose literal name contains one.
+    private void OnTailTargetInput(ChangeEventArgs e)
+    {
+        _tailTarget = e.Value?.ToString() ?? string.Empty;
+        _tailIsPattern = _tailTarget.AsSpan().IndexOfAny('*', '?', '[') >= 0;
+    }
+
+    private async Task OnTailTargetKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await StartTailAsync();
+        }
     }
 
     private async Task StartTailAsync()
     {
-        if (string.IsNullOrWhiteSpace(_tailTarget) || _tailing)
+        if (_selection is null || string.IsNullOrWhiteSpace(_tailTarget) || _tailing)
         {
             return;
         }
 
         await StopTailAsync(); // defensive -- never stack two live subscriptions under one page instance.
         _tailError = null;
-        _messages.Clear();
+        ClearMessages();
 
         var target = _tailTarget;
         var isPattern = _tailIsPattern;
-        var result = await SubscribeHandler.HandleAsync(_connectionId, _connectionName, target, isPattern, OnMessageAsync);
+        var result = await SubscribeHandler.HandleAsync(ConnectionId, ConnectionName, target, isPattern, OnMessageAsync);
         if (!result.IsSuccess)
         {
             _tailError = result.Error;
@@ -277,6 +384,15 @@ else
         _subscribedTarget = target;
         _subscribedIsPattern = isPattern;
         _tailing = true;
+
+        // A plain SUBSCRIBE makes this tail a subscriber, so its channel now shows in PUBSUB CHANNELS.
+        await RefreshChannelsAsync();
+    }
+
+    private async Task StopAndRefreshAsync()
+    {
+        await StopTailAsync();
+        await RefreshChannelsAsync();
     }
 
     private async Task StopTailAsync()
@@ -290,14 +406,25 @@ else
         }
     }
 
+    private void ClearMessages()
+    {
+        _messages.Clear();
+        _received = 0;
+        _expandedSeq = null;
+    }
+
+    private void ToggleExpanded(long seq) => _expandedSeq = _expandedSeq == seq ? null : seq;
+
     // Invoked by RedisOperations.SubscribeAsync on a background thread per message -- InvokeAsync
     // marshals back onto the component's renderer before touching any @code state or calling
     // StateHasChanged, the standard Blazor Server pattern for a background-thread callback.
     private async Task OnMessageAsync(PubSubMessage message)
     {
+        var (inline, full) = FormatPayload(message.Payload);
         await InvokeAsync(() =>
         {
-            _messages.Insert(0, message);
+            _messages.Insert(0, new TailEntry(_nextSeq++, message, inline, full));
+            _received++;
             if (_messages.Count > MaxTailMessages)
             {
                 _messages.RemoveRange(MaxTailMessages, _messages.Count - MaxTailMessages);
@@ -306,14 +433,57 @@ else
         });
     }
 
+    private static readonly JsonWriterOptions CompactJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly JsonWriterOptions IndentedJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, Indented = true };
+
+    /// <summary>JSON objects/arrays render compact on one line (and indented when expanded); anything else verbatim. The inline form is truncated.</summary>
+    private static (string Inline, string Full) FormatPayload(string payload)
+    {
+        var inline = payload;
+        var full = payload;
+        var trimmed = payload.AsSpan().TrimStart();
+        if (trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '['))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(payload);
+                inline = Write(doc, CompactJson);
+                full = Write(doc, IndentedJson);
+            }
+            catch (JsonException)
+            {
+                // Not JSON after all -- show it verbatim.
+            }
+        }
+
+        inline = inline.ReplaceLineEndings(" ");
+        if (inline.Length > InlinePayloadLimit)
+        {
+            inline = string.Concat(inline.AsSpan(0, InlinePayloadLimit), "…");
+        }
+
+        return (inline, full);
+    }
+
+    private static string Write(JsonDocument doc, JsonWriterOptions options)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, options))
+        {
+            doc.WriteTo(writer);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     private async Task PublishAsync()
     {
-        if (string.IsNullOrWhiteSpace(_publishChannel))
+        if (_selection is null || string.IsNullOrWhiteSpace(_publishChannel))
         {
             return;
         }
 
-        var result = await PublishHandler.HandleAsync(new PublishMessageCommand(_connectionId, _connectionName, _publishChannel, _publishPayload));
+        var result = await PublishHandler.HandleAsync(new PublishMessageCommand(ConnectionId, ConnectionName, _publishChannel, _publishPayload));
         if (result.IsSuccess)
         {
             Snackbar.Add($"Published to {_publishChannel} ({result.Value} receiver(s))", Severity.Success);
@@ -325,9 +495,9 @@ else
     }
 
     // The subscription is a live, connected resource (RedisPubSubSubscription) -- this is the
-    // safety net for the "Unsubscribe" button never being clicked (navigating away, closing the
-    // tab, a circuit dropping). Without it, every tail a user started would leak a
-    // ConnectionMultiplexer for the lifetime of the server process.
+    // safety net for the "Stop" button never being clicked (navigating away, closing the tab, a
+    // circuit dropping). Without it, every tail a user started would leak a ConnectionMultiplexer
+    // for the lifetime of the server process.
     public async ValueTask DisposeAsync()
     {
         await StopTailAsync();
