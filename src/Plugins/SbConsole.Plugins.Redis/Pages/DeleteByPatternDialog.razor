@@ -1,4 +1,3 @@
-@using System.Globalization
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Keys
 @inject KeysQueryHandler QueryHandler
@@ -7,42 +6,48 @@
 
 <MudDialog>
     <DialogContent>
-        <MudText Typo="Typo.body2" Class="mb-2">
-            Pattern <span class="delete-by-pattern-pattern" style="font-family:monospace">@Pattern</span>
-        </MudText>
+        <div class="rds-page dbp">
+            <div class="dbp-target">
+                <span class="rds-muted">Pattern</span>
+                <span class="rds-mono delete-by-pattern-pattern">@Pattern</span>
+            </div>
 
-        @if (_dryRunning)
-        {
-            <MudProgressCircular Class="delete-by-pattern-dryrun-busy" Size="Size.Small" Indeterminate="true" />
-            <MudText Typo="Typo.caption" Class="ml-2">Running dry run…</MudText>
-        }
-        else if (_dryRunError is not null)
-        {
-            <MudAlert Class="delete-by-pattern-dryrun-error" Severity="Severity.Error" Dense="true">@_dryRunError</MudAlert>
-        }
-        else if (_dryRun is not null)
-        {
-            <MudText Class="delete-by-pattern-dryrun-result" Typo="Typo.body2">
-                Would delete <b>@_dryRun.WouldDeleteKeyCount.ToString("N0", CultureInfo.InvariantCulture)</b> key(s),
-                approximately @_dryRun.WouldDeleteBytes.ToString("N0", CultureInfo.InvariantCulture) bytes.
-            </MudText>
-            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-1">Method: UNLINK, batches of 500.</MudText>
-        }
+            @if (_dryRunning)
+            {
+                <div class="dbp-status">
+                    <MudProgressCircular Class="delete-by-pattern-dryrun-busy" Size="Size.Small" Indeterminate="true" />
+                    <span class="rds-muted">Running dry run (SCAN, no deletes)…</span>
+                </div>
+            }
+            else if (_dryRunError is not null)
+            {
+                <MudAlert Class="delete-by-pattern-dryrun-error" Severity="Severity.Error" Dense="true">@_dryRunError</MudAlert>
+            }
+            else if (_dryRun is not null)
+            {
+                <div class="dbp-result delete-by-pattern-dryrun-result">
+                    Would delete <b class="rds-mono rds-danger">@RedisFormat.Count(_dryRun.WouldDeleteKeyCount)</b> key(s),
+                    approximately <span class="rds-mono">@RedisFormat.Bytes(_dryRun.WouldDeleteBytes)</span>.
+                </div>
+                <div class="rds-footnote">Method: <span class="rds-mono">UNLINK</span>, batches of 500.</div>
+            }
 
-        @if (_error is not null)
-        {
-            <MudAlert Class="delete-by-pattern-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
-        }
+            @if (_error is not null)
+            {
+                <MudAlert Class="delete-by-pattern-error dbp-error" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+
+            <div class="dbp-actions">
+                @if (_busy)
+                {
+                    <MudProgressCircular Class="delete-by-pattern-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                }
+                <button type="button" class="rds-btn delete-by-pattern-cancel" @onclick="Cancel">Cancel</button>
+                <button type="button" class="rds-btn dbp-danger delete-by-pattern-continue"
+                        disabled="@(_dryRunning || _dryRun is null || _busy)" @onclick="DeleteAsync">Continue…</button>
+            </div>
+        </div>
     </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
-        @if (_busy)
-        {
-            <MudProgressCircular Class="delete-by-pattern-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
-        }
-        <MudButton Class="delete-by-pattern-continue" Color="Color.Error" Variant="Variant.Filled"
-                   Disabled="@(_dryRunning || _dryRun is null || _busy)" OnClick="DeleteAsync">Continue…</MudButton>
-    </DialogActions>
 </MudDialog>
 
 @code {

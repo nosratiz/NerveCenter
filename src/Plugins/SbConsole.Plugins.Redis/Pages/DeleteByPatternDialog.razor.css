@@ -1,0 +1,10 @@
+/* Rendered by MudBlazor's dialog provider, outside the page's .rds-page: re-declare it for the --rds-* variables, minus the panel chrome. */
+.dbp.rds-page { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.dbp-target { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; font-size: 13px; }
+.delete-by-pattern-pattern { font-size: 14px; overflow-wrap: anywhere; }
+.dbp-status { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.dbp-result { font-size: 14px; margin-bottom: 4px; }
+.dbp ::deep .dbp-error { margin-top: 12px; }
+.dbp-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 18px 0 4px; }
+.dbp-danger { color: var(--rds-danger); border-color: color-mix(in srgb, var(--rds-danger) 60%, transparent); }
+.dbp-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--rds-danger) 12%, transparent); }

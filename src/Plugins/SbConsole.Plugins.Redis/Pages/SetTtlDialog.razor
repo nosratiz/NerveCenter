@@ -4,35 +4,43 @@
 
 <MudDialog>
     <DialogContent>
-        <MudRadioGroup T="string" Value="_mode" ValueChanged="OnModeChanged">
-            <MudRadio Class="setttl-mode-expirein" Value="@("expirein")" Color="Color.Primary">Expire in (seconds)</MudRadio>
-            @if (_mode == "expirein")
-            {
-                <MudNumericField id="setttl-expirein-seconds" data-testid="setttl-expirein-seconds" T="long" Value="_expireInSeconds" ValueChanged="v => _expireInSeconds = v"
-                                  Min="1" Immediate="true" HideSpinButtons="true" Class="ml-8" />
-            }
-            <MudRadio Class="setttl-mode-expireat" Value="@("expireat")" Color="Color.Primary">Expire at (UTC)</MudRadio>
-            @if (_mode == "expireat")
-            {
-                <MudTextField id="setttl-expireat-value" data-testid="setttl-expireat-value" T="DateTime?" Value="_expireAt" ValueChanged="v => _expireAt = v"
-                              InputType="InputType.DateTimeLocal" Immediate="true" Class="ml-8" />
-            }
-            <MudRadio Class="setttl-mode-persist" Value="@("persist")" Color="Color.Primary">Persist (remove TTL)</MudRadio>
-        </MudRadioGroup>
+        <div class="rds-page stl">
+            <div class="stl-target">
+                <span class="rds-muted">Key</span>
+                <span class="rds-mono setttl-key">@Key</span>
+            </div>
 
-        @if (_error is not null)
-        {
-            <MudAlert Class="setttl-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
-        }
+            <MudRadioGroup T="string" Value="_mode" ValueChanged="OnModeChanged">
+                <MudRadio Class="setttl-mode-expirein" Value="@("expirein")" Color="Color.Primary" Dense="true">Expire in (seconds) <span class="rds-mono rds-muted stl-cmd">EXPIRE</span></MudRadio>
+                @if (_mode == "expirein")
+                {
+                    <MudNumericField id="setttl-expirein-seconds" data-testid="setttl-expirein-seconds" T="long" Value="_expireInSeconds" ValueChanged="v => _expireInSeconds = v"
+                                     Min="1" Immediate="true" HideSpinButtons="true" Class="stl-input" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                }
+                <MudRadio Class="setttl-mode-expireat" Value="@("expireat")" Color="Color.Primary" Dense="true">Expire at (UTC) <span class="rds-mono rds-muted stl-cmd">EXPIREAT</span></MudRadio>
+                @if (_mode == "expireat")
+                {
+                    <MudTextField id="setttl-expireat-value" data-testid="setttl-expireat-value" T="DateTime?" Value="_expireAt" ValueChanged="v => _expireAt = v"
+                                  InputType="InputType.DateTimeLocal" Immediate="true" Class="stl-input" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                }
+                <MudRadio Class="setttl-mode-persist" Value="@("persist")" Color="Color.Primary" Dense="true">Persist (remove TTL) <span class="rds-mono rds-muted stl-cmd">PERSIST</span></MudRadio>
+            </MudRadioGroup>
+
+            @if (_error is not null)
+            {
+                <MudAlert Class="setttl-error stl-error" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+
+            <div class="stl-actions">
+                @if (_busy)
+                {
+                    <MudProgressCircular Class="setttl-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+                }
+                <button type="button" class="rds-btn setttl-cancel" @onclick="Cancel">Cancel</button>
+                <button type="button" class="rds-btn-primary setttl-submit" disabled="@(!CanSubmit || _busy)" @onclick="SaveAsync">Apply</button>
+            </div>
+        </div>
     </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
-        @if (_busy)
-        {
-            <MudProgressCircular Class="setttl-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
-        }
-        <MudButton Class="setttl-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Apply</MudButton>
-    </DialogActions>
 </MudDialog>
 
 @code {

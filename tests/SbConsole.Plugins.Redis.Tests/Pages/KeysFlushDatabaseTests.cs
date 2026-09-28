@@ -9,9 +9,8 @@ using KeysPage = SbConsole.Plugins.Redis.Pages.Keys;
 namespace SbConsole.Plugins.Redis.Tests.Pages;
 
 /// <summary>
-/// FLUSHDB was deferred out of the Keys plan into phase 3 (design spec §12/§14) -- these tests
-/// cover only that new toolbar action and the Keys page's empty-state messaging, not the whole
-/// Keys.razor surface (already shipped, untested at the page level; out of this task's scope).
+/// FLUSHDB (design spec §12/§14) lives in the header's "⋯" overflow menu (mockup 1b keeps it out
+/// of the main toolbar) -- these tests cover that action and the Keys page's empty state.
 /// </summary>
 public class KeysFlushDatabaseTests : RedisPageTestBase
 {
@@ -33,14 +32,21 @@ public class KeysFlushDatabaseTests : RedisPageTestBase
         return cut;
     }
 
+    private static void OpenOverflowMenu(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut) =>
+        cut.Find(".keys-overflow-menu button").Click();
+
+    private static bool IsDisabled(AngleSharp.Dom.IElement item) =>
+        item.HasAttribute("disabled") || item.ClassList.Contains("mud-menu-item-disabled") || item.GetAttribute("aria-disabled") == "true";
+
     [Fact]
     public async Task Flush_database_button_is_disabled_and_explains_why_when_the_acl_check_denies_it()
     {
         Operations.HasCommandPermissionAsync(Secret, "FLUSHDB", Arg.Any<CancellationToken>()).Returns(false);
 
         var cut = await RenderPageAsync();
+        OpenOverflowMenu(cut);
 
-        cut.Find("button.keys-flush-database").HasAttribute("disabled").Should().BeTrue();
+        IsDisabled(cut.Find(".keys-flush-database")).Should().BeTrue();
         cut.Find(".keys-flush-database-acl-denied").TextContent.Should().Contain("Command refused by ACL");
     }
 
@@ -50,8 +56,9 @@ public class KeysFlushDatabaseTests : RedisPageTestBase
         Operations.HasCommandPermissionAsync(Secret, "FLUSHDB", Arg.Any<CancellationToken>()).Returns(true);
 
         var cut = await RenderPageAsync();
+        OpenOverflowMenu(cut);
 
-        cut.Find("button.keys-flush-database").HasAttribute("disabled").Should().BeFalse();
+        IsDisabled(cut.Find(".keys-flush-database")).Should().BeFalse();
     }
 
     [Fact]
@@ -59,7 +66,8 @@ public class KeysFlushDatabaseTests : RedisPageTestBase
     {
         var cut = await RenderPageAsync();
 
-        await cut.Find("button.keys-flush-database").ClickAsync(new());
+        OpenOverflowMenu(cut);
+        await cut.Find(".keys-flush-database").ClickAsync(new());
         await SettleAsync(cut);
 
         // IsProd comes from the server-resolved connection (RedisPageTestBase seeds a prod
@@ -75,7 +83,8 @@ public class KeysFlushDatabaseTests : RedisPageTestBase
         Confirmation.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(false);
         var cut = await RenderPageAsync();
 
-        await cut.Find("button.keys-flush-database").ClickAsync(new());
+        OpenOverflowMenu(cut);
+        await cut.Find(".keys-flush-database").ClickAsync(new());
         await SettleAsync(cut);
 
         await Operations.DidNotReceiveWithAnyArgs().FlushDatabaseAsync(default!, default, default);
@@ -86,7 +95,8 @@ public class KeysFlushDatabaseTests : RedisPageTestBase
     {
         var cut = await RenderPageAsync();
 
-        await cut.Find("button.keys-flush-database").ClickAsync(new());
+        OpenOverflowMenu(cut);
+        await cut.Find(".keys-flush-database").ClickAsync(new());
         await SettleAsync(cut);
 
         cut.Find(".keys-tree-empty").Should().NotBeNull(); // the (mocked, still-empty) rescan leaves the tree empty.

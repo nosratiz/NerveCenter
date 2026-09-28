@@ -1,0 +1,12 @@
+/* Rendered by MudBlazor's dialog provider, outside the page's .rds-page: re-declare it for the --rds-* variables, minus the panel chrome. */
+.stl.rds-page { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.stl-target { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; font-size: 13px; }
+.setttl-key { font-size: 14px; overflow-wrap: anywhere; }
+.stl-cmd { font-size: 11px; margin-left: 6px; }
+.stl ::deep .mud-radio-group { display: flex; flex-direction: column; align-items: flex-start; }
+.stl ::deep .mud-radio .mud-typography { font-size: 14px; }
+.stl ::deep .stl-input { margin: 0 0 8px 40px; max-width: 280px; }
+.stl ::deep .stl-input input { font-family: var(--rds-mono); font-size: 13px; }
+.stl ::deep .mud-input-control { margin-top: 0; }
+.stl ::deep .stl-error { margin-top: 12px; }
+.stl-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 18px 0 4px; }

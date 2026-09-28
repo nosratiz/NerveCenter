@@ -1,0 +1,14 @@
+/* The dialog renders in MudBlazor's dialog provider, outside the page's .rds-page, so the body
+   re-declares .rds-page to get the --rds-* variables -- minus its panel chrome. */
+.ak.rds-page { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.ak-label { display: block; font-size: 12px; color: var(--rds-muted); margin: 14px 0 6px; }
+.ak-label:first-child { margin-top: 0; }
+.ak ::deep .ak-mono input, .ak ::deep .ak-mono textarea { font-family: var(--rds-mono); font-size: 13px; }
+.ak ::deep .mud-input-control { margin-top: 0; }
+.ak-pair { display: flex; gap: 10px; }
+.ak ::deep .ak-field { flex: 0 0 38%; }
+.ak ::deep .ak-grow { flex: 1 1 auto; }
+.ak ::deep .ak-score { flex: 0 0 120px; }
+.ak ::deep .ak-ttl { max-width: 200px; }
+.ak ::deep .ak-error { margin-top: 14px; }
+.ak-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 20px 0 4px; }
