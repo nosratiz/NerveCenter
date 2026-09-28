@@ -558,4 +558,128 @@ public sealed class RedisOperations : IRedisOperations
         var ids = entryIds.Select(id => (RedisValue)id).ToArray();
         return await db.StreamDeleteAsync(key, ids).WaitAsync(ct);
     }
+
+    // ---- Pub/Sub (phase 3) ----
+
+    public async Task<IReadOnlyList<PubSubChannelSummary>> GetPubSubChannelsAsync(string secret, string? pattern, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase();
+
+        var channelsReply = pattern is { Length: > 0 }
+            ? await db.ExecuteAsync("PUBSUB", "CHANNELS", pattern).WaitAsync(ct)
+            : await db.ExecuteAsync("PUBSUB", "CHANNELS").WaitAsync(ct);
+        var channels = ((RedisResult[]?)channelsReply ?? []).Select(r => (string)r!).ToList();
+        if (channels.Count == 0)
+        {
+            return [];
+        }
+
+        // PUBSUB NUMSUB ch1 ch2 ... replies with a flat [channel, count, channel, count, ...] array.
+        var numSubArgs = new object[channels.Count + 1];
+        numSubArgs[0] = "NUMSUB";
+        for (var i = 0; i < channels.Count; i++)
+        {
+            numSubArgs[i + 1] = channels[i];
+        }
+
+        var numSubReply = await db.ExecuteAsync("PUBSUB", numSubArgs).WaitAsync(ct);
+        var flat = (RedisResult[])numSubReply!;
+
+        var result = new List<PubSubChannelSummary>(channels.Count);
+        for (var i = 0; i + 1 < flat.Length; i += 2)
+        {
+            result.Add(new PubSubChannelSummary((string)flat[i]!, (long)flat[i + 1]));
+        }
+
+        return result;
+    }
+
+    public async Task<IAsyncDisposable> SubscribeAsync(string secret, string channelOrPattern, bool isPattern, Func<PubSubMessage, Task> onMessage, CancellationToken ct = default)
+    {
+        // Deliberately NOT `await using` -- a live tail needs the multiplexer to stay connected for
+        // as long as the caller is watching. Ownership passes to the returned RedisPubSubSubscription,
+        // which is the only thing that disposes it (design spec §14).
+        var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var subscriber = muxer.GetSubscriber();
+        var channel = isPattern ? RedisChannel.Pattern(channelOrPattern) : RedisChannel.Literal(channelOrPattern);
+
+        // async void is correct here: ISubscriber.SubscribeAsync's handler parameter is a plain
+        // Action<RedisChannel, RedisValue>, invoked by StackExchange.Redis on its own completion
+        // thread per message, with no Task for us to observe. The try/catch is load-bearing: the
+        // caller (a Blazor component) may already be disposed by the time a message arrives, and an
+        // unhandled exception here must not crash that background thread.
+        async void Handler(RedisChannel ch, RedisValue value)
+        {
+            try
+            {
+                await onMessage(new PubSubMessage(ch.ToString(), value.ToString(), DateTimeOffset.UtcNow));
+            }
+            catch
+            {
+                // Best-effort delivery -- see design spec §14's subscription-lifecycle note.
+            }
+        }
+
+        await subscriber.SubscribeAsync(channel, Handler).WaitAsync(ct);
+        return new RedisPubSubSubscription(muxer, subscriber, channel, Handler);
+    }
+
+    public async Task<long> PublishAsync(string secret, string channel, string payload, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var subscriber = muxer.GetSubscriber();
+        return await subscriber.PublishAsync(RedisChannel.Literal(channel), payload).WaitAsync(ct);
+    }
+
+    // ---- FLUSHDB (deferred from phase 1) ----
+
+    public async Task FlushDatabaseAsync(string secret, int database, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var server = muxer.GetServer(muxer.GetEndPoints()[0]);
+        await server.FlushDatabaseAsync(database).WaitAsync(ct);
+    }
+
+    // ---- ACL-aware disabled-button state ----
+
+    // Only the two phase-3 call sites (design spec §12/§14) -- not the full Redis ACL category
+    // table. See RedisAclPermissionEvaluator's doc comment for why this is scoped this narrowly.
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AclCategoriesByCommand =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["FLUSHDB"] = ["keyspace", "write", "slow", "dangerous"],
+            ["PUBLISH"] = ["pubsub", "fast"],
+        };
+
+    public async Task<bool> HasCommandPermissionAsync(string secret, string command, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+            var db = muxer.GetDatabase();
+
+            var whoAmI = await db.ExecuteAsync("ACL", "WHOAMI").WaitAsync(ct);
+            var username = (string?)whoAmI;
+            if (string.IsNullOrEmpty(username))
+            {
+                return true;
+            }
+
+            var userInfo = await db.ExecuteAsync("ACL", "GETUSER", username).WaitAsync(ct);
+            var commandsField = RedisAclPermissionEvaluator.ExtractCommandsField(userInfo);
+            var categories = AclCategoriesByCommand.TryGetValue(command, out var known) ? known : [];
+            return RedisAclPermissionEvaluator.IsAllowed(commandsField, command, categories);
+        }
+        catch (Exception)
+        {
+            // ACL WHOAMI/GETUSER can themselves be refused by a restrictive ACL, or fail for any
+            // other reason (network blip, a server too old to support ACL) -- this hook only drives
+            // an advisory disabled-button state (design spec §14), never the real authorization
+            // boundary, so any failure here fails open rather than surfacing an error nobody asked
+            // to see. A command that's actually denied still fails loudly and correctly via NOPERM
+            // (FriendlyRedisError) if the user attempts it anyway.
+            return true;
+        }
+    }
 }

@@ -78,6 +78,11 @@ public sealed class RedisPlugin : IPlugin
         services.AddScoped<Streams.AcknowledgeStreamEntriesCommandHandler>();
         services.AddScoped<Streams.ClaimStreamEntriesCommandHandler>();
         services.AddScoped<Streams.DeleteStreamEntriesCommandHandler>();
+        services.AddScoped<Keys.FlushDatabaseCommandHandler>();
+        services.AddScoped<Acl.AclQueryHandler>();
+        services.AddScoped<PubSub.PubSubQueryHandler>();
+        services.AddScoped<PubSub.SubscribeToChannelCommandHandler>();
+        services.AddScoped<PubSub.PublishMessageCommandHandler>();
         // A new handler must be added here or its page fails to render at runtime.
     }
 

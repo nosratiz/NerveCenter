@@ -76,4 +76,35 @@ public interface IRedisOperations
 
     /// <summary>XDEL. Returns the number of entries actually deleted.</summary>
     Task<long> DeleteStreamEntriesAsync(string secret, int database, string key, IReadOnlyList<string> entryIds, CancellationToken ct = default);
+
+    // ---- Pub/Sub (phase 3 -- design spec addendum §14). Server-wide, not per-database. ----
+
+    /// <summary>PUBSUB CHANNELS [pattern] + PUBSUB NUMSUB, joined into one summary per active channel.</summary>
+    Task<IReadOnlyList<PubSubChannelSummary>> GetPubSubChannelsAsync(string secret, string? pattern, CancellationToken ct = default);
+
+    /// <summary>
+    /// SUBSCRIBE (isPattern: false) or PSUBSCRIBE (isPattern: true), delivering every message to
+    /// onMessage until the returned subscription is disposed. Unlike every other operation, the
+    /// returned IAsyncDisposable owns a live ConnectionMultiplexer that stays connected until then --
+    /// callers must dispose it exactly once they stop watching (see RedisPubSubSubscription).
+    /// </summary>
+    Task<IAsyncDisposable> SubscribeAsync(string secret, string channelOrPattern, bool isPattern, Func<PubSubMessage, Task> onMessage, CancellationToken ct = default);
+
+    /// <summary>PUBLISH. Returns the number of clients that received the message.</summary>
+    Task<long> PublishAsync(string secret, string channel, string payload, CancellationToken ct = default);
+
+    // ---- FLUSHDB (deferred from phase 1 -- design spec §12/§14) ----
+
+    /// <summary>FLUSHDB against the given database index. Destructive -- wipes every key in that database.</summary>
+    Task FlushDatabaseAsync(string secret, int database, CancellationToken ct = default);
+
+    // ---- ACL-aware disabled-button state (design spec §12/§14) ----
+
+    /// <summary>
+    /// Best-effort check of whether the connection's current ACL user is allowed to run the given
+    /// command (ACL WHOAMI, then ACL GETUSER) -- advisory only, used to proactively disable a
+    /// button; see RedisAclPermissionEvaluator for what "best-effort" means here and why a failure
+    /// to determine the answer returns true (fails open) rather than false.
+    /// </summary>
+    Task<bool> HasCommandPermissionAsync(string secret, string command, CancellationToken ct = default);
 }

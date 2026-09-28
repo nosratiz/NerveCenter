@@ -4,9 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MudBlazor.Services;
 using NSubstitute;
+using SbConsole.Plugins.Redis.Acl;
 using SbConsole.Plugins.Redis.Client;
 using SbConsole.Plugins.Redis.Keys;
 using SbConsole.Plugins.Redis.Overview;
+using SbConsole.Plugins.Redis.PubSub;
 using SbConsole.Plugins.Redis.Streams;
 using SbConsole.Sdk;
 
@@ -71,6 +73,17 @@ public abstract class RedisPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new AcknowledgeStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<AcknowledgeStreamEntriesCommandHandler>.Instance));
         Services.AddSingleton(new ClaimStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<ClaimStreamEntriesCommandHandler>.Instance));
         Services.AddSingleton(new DeleteStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<DeleteStreamEntriesCommandHandler>.Instance));
+
+        Services.AddSingleton(new FlushDatabaseCommandHandler(Operations, Connections, Audit, NullLogger<FlushDatabaseCommandHandler>.Instance));
+        Services.AddSingleton(new AclQueryHandler(Operations, Connections, NullLogger<AclQueryHandler>.Instance));
+        Services.AddSingleton(new PubSubQueryHandler(Operations, Connections, NullLogger<PubSubQueryHandler>.Instance));
+        Services.AddSingleton(new SubscribeToChannelCommandHandler(Operations, Connections, Audit, NullLogger<SubscribeToChannelCommandHandler>.Instance));
+        Services.AddSingleton(new PublishMessageCommandHandler(Operations, Connections, Audit, NullLogger<PublishMessageCommandHandler>.Instance));
+
+        // ACL checks fail open by default in tests too (matches RedisOperations' own fail-open
+        // default) -- individual tests override this via Operations.HasCommandPermissionAsync(...)
+        // when they need to exercise the disabled-button state.
+        Operations.HasCommandPermissionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
     }
 
     /// <summary>MudMenu/MudSelect items render into a MudPopoverProvider (hosted by the real layout), so menu/select tests render one alongside the component under test.</summary>
