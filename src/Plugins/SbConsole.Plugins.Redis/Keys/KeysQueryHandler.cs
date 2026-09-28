@@ -21,6 +21,10 @@ public sealed class KeysQueryHandler(
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.key.gettype",
             secret => operations.GetKeyTypeAsync(secret, database, key, ct), ct);
 
+    public Task<PluginResult<KeyMetadata>> GetKeyMetadataAsync(Guid connectionId, int database, string key, CancellationToken ct = default) =>
+        HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.key.metadata",
+            secret => operations.GetKeyMetadataAsync(secret, database, key, ct), ct);
+
     public Task<PluginResult<StringValue>> GetStringAsync(Guid connectionId, int database, string key, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.string.get",
             secret => operations.GetStringAsync(secret, database, key, ct), ct);

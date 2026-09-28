@@ -1,0 +1,300 @@
+/* Redis plugin console styles (mockup docs/superpowers/specs/redis-mockup/).
+   Colors derive only from MudBlazor's --mud-palette-* tokens (CLAUDE.md theming rule), so the
+   light theme stays correct. Every class is prefixed rds- to stay out of other plugins' way. */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+.rds-page {
+    --rds-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --rds-line: var(--mud-palette-lines-default);
+    --rds-faint: color-mix(in srgb, var(--mud-palette-text-primary) 7%, transparent);
+    --rds-panel: color-mix(in srgb, var(--mud-palette-background) 55%, var(--mud-palette-surface));
+    --rds-muted: var(--mud-palette-text-secondary);
+    --rds-accent: var(--mud-palette-primary);
+    --rds-warn: var(--mud-palette-warning);
+    --rds-danger: var(--mud-palette-error);
+    --rds-ok: var(--mud-palette-success);
+    background: var(--rds-panel);
+    border: 1px solid var(--rds-line);
+    border-radius: 10px;
+    overflow: hidden;
+    color: var(--mud-palette-text-primary);
+    font-size: 14px;
+}
+
+.rds-mono { font-family: var(--rds-mono); }
+.rds-muted { color: var(--rds-muted); }
+.rds-warn { color: var(--rds-warn); }
+.rds-danger { color: var(--rds-danger); }
+.rds-accent { color: var(--rds-accent); }
+.rds-spacer { flex: 1 1 auto; }
+.rds-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- header bar: title · connection chip [prod] · db chip · meta ······ actions ---- */
+.rds-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    min-height: 56px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--rds-line);
+}
+.rds-title { font-size: 18px; font-weight: 500; margin-right: 4px; }
+.rds-meta { font-family: var(--rds-mono); font-size: 13px; color: var(--rds-muted); }
+.rds-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--rds-line);
+    border-radius: 6px;
+    background: var(--mud-palette-background);
+    font-family: var(--rds-mono);
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+}
+.rds-chip:hover { border-color: color-mix(in srgb, var(--rds-accent) 60%, transparent); }
+.rds-chip-label { font-size: 12px; color: var(--rds-muted); }
+.rds-chip-caret { font-size: 10px; color: var(--rds-muted); }
+.rds-prod {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 4px;
+    font-family: "Inter", system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--rds-warn);
+    background: color-mix(in srgb, var(--rds-warn) 16%, transparent);
+}
+
+/* ---- buttons & links ---- */
+.rds-btn, .rds-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid var(--rds-line);
+    background: transparent;
+    color: var(--mud-palette-text-primary);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.rds-btn:hover { background: var(--rds-faint); }
+.rds-btn-primary { border-color: var(--rds-accent); color: var(--rds-accent); }
+.rds-btn-primary:hover { background: color-mix(in srgb, var(--rds-accent) 12%, transparent); }
+.rds-btn:disabled, .rds-btn-primary:disabled, .rds-link:disabled, .rds-link-danger:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+.rds-link, .rds-link-danger {
+    border: 0;
+    background: none;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--rds-accent);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.rds-link-danger { color: var(--rds-danger); }
+.rds-link:hover, .rds-link-danger:hover { text-decoration: underline; }
+.rds-actions { display: flex; align-items: center; gap: 14px; }
+
+/* ---- stat tiles ---- */
+.rds-tiles { display: grid; gap: 12px; padding: 16px 20px 0; }
+.rds-tile {
+    background: var(--mud-palette-surface);
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 0;
+}
+.rds-tile-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rds-overline {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--rds-muted);
+}
+.rds-overline.rds-warn { color: var(--rds-warn); }
+.rds-tile-aside { font-family: var(--rds-mono); font-size: 12px; color: var(--rds-muted); }
+.rds-tile-value { font-size: 26px; font-weight: 500; line-height: 1.25; margin-top: 2px; }
+.rds-tile-value small { font-size: 13px; font-weight: 500; margin-left: 4px; }
+.rds-tile-caption { font-size: 12px; color: var(--rds-muted); margin-top: 4px; }
+.rds-sparkline { display: block; width: 100%; height: 28px; margin-top: 6px; overflow: visible; }
+.rds-sparkline polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+/* ---- cards (panel sections) ---- */
+.rds-card { background: var(--mud-palette-surface); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.rds-card-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.rds-card-title { font-size: 15px; font-weight: 500; }
+.rds-card-sub { font-family: var(--rds-mono); font-size: 11px; color: var(--rds-muted); letter-spacing: .02em; }
+.rds-section-label { font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--rds-muted); margin: 0 0 8px; }
+.rds-footnote { font-size: 12px; color: var(--rds-muted); line-height: 1.5; }
+
+/* ---- two-pane layout (Keys / Streams) ---- */
+.rds-split { display: grid; grid-template-columns: minmax(300px, 40%) 1fr; min-height: 560px; }
+.rds-split > .rds-pane { min-width: 0; display: flex; flex-direction: column; }
+.rds-split > .rds-pane + .rds-pane { border-left: 1px solid var(--rds-line); }
+.rds-pane-section { padding: 14px 20px; }
+.rds-pane-section + .rds-pane-section { border-top: 1px solid var(--rds-line); }
+.rds-pane-footer {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-top: 1px solid var(--rds-line);
+}
+
+/* ---- tables ---- */
+.rds-table { width: 100%; border-collapse: collapse; }
+.rds-table th {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--rds-muted);
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--rds-line);
+    white-space: nowrap;
+}
+.rds-table td {
+    font-family: var(--rds-mono);
+    font-size: 13px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--rds-faint);
+    vertical-align: top;
+}
+.rds-table th.rds-num, .rds-table td.rds-num { text-align: right; }
+.rds-table tr.rds-clickable { cursor: pointer; }
+.rds-table tr.rds-clickable:hover td { background: var(--rds-faint); }
+.rds-table tr.rds-selected td { background: color-mix(in srgb, var(--rds-accent) 12%, transparent); }
+.rds-table tr.rds-selected td:first-child { box-shadow: inset 3px 0 0 var(--rds-accent); }
+.rds-table tr.rds-row-danger td { background: color-mix(in srgb, var(--rds-danger) 10%, transparent); }
+
+/* ---- key rows / prefix tree ---- */
+.rds-tree { padding: 6px 0; overflow-y: auto; }
+.rds-tree-node, .rds-key-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 20px;
+    font-family: var(--rds-mono);
+    font-size: 13px;
+    cursor: pointer;
+}
+.rds-tree-node { color: var(--rds-muted); }
+.rds-tree-node:hover, .rds-key-row:hover { background: var(--rds-faint); }
+.rds-key-row.rds-selected {
+    background: color-mix(in srgb, var(--rds-accent) 12%, transparent);
+    box-shadow: inset 3px 0 0 var(--rds-accent);
+}
+.rds-key-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rds-key-ttl { width: 64px; text-align: right; color: var(--rds-muted); }
+.rds-key-ttl.rds-warn { color: var(--rds-warn); }
+.rds-key-size { width: 56px; text-align: right; color: var(--rds-muted); }
+.rds-twisty { width: 10px; font-size: 9px; }
+
+/* ---- type badges ---- */
+.rds-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-family: var(--rds-mono);
+    font-size: 11px;
+    border: 1px solid transparent;
+    flex: none;
+}
+.rds-badge-hash { background: color-mix(in srgb, var(--rds-accent) 30%, transparent); color: var(--mud-palette-text-primary); }
+.rds-badge-string { background: color-mix(in srgb, var(--mud-palette-text-primary) 16%, transparent); color: var(--mud-palette-text-primary); }
+.rds-badge-list, .rds-badge-set, .rds-badge-zset { border-color: color-mix(in srgb, var(--rds-accent) 70%, transparent); color: var(--rds-accent); }
+.rds-badge-stream { background: color-mix(in srgb, var(--rds-warn) 20%, transparent); color: var(--rds-warn); }
+.rds-badge-unknown { border-color: var(--rds-line); color: var(--rds-muted); }
+
+/* ---- misc primitives ---- */
+.rds-bar { position: relative; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--mud-palette-text-primary) 10%, transparent); }
+.rds-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--rds-accent); }
+.rds-bar.rds-bar-warn > span { background: var(--rds-warn); }
+.rds-bar > i { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--rds-danger); }
+.rds-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--rds-warn) 55%, transparent);
+    background: color-mix(in srgb, var(--rds-warn) 8%, transparent);
+    font-size: 13px;
+}
+.rds-banner-ring { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--rds-warn); flex: none; }
+.rds-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--rds-ok); flex: none; }
+.rds-dot.rds-dot-danger { background: var(--rds-danger); }
+.rds-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 5px;
+    font-family: var(--rds-mono);
+    font-size: 12px;
+    background: color-mix(in srgb, var(--mud-palette-text-primary) 8%, transparent);
+    border: 1px solid var(--rds-line);
+}
+.rds-pill.rds-pill-accent { color: var(--rds-accent); border-color: color-mix(in srgb, var(--rds-accent) 60%, transparent); background: transparent; }
+.rds-code {
+    font-family: var(--rds-mono);
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: var(--mud-palette-background);
+    border: 1px solid var(--rds-line);
+}
+.rds-segmented { display: inline-flex; border: 1px solid var(--rds-line); border-radius: 6px; overflow: hidden; }
+.rds-segmented > button {
+    border: 0;
+    background: transparent;
+    color: var(--mud-palette-text-primary);
+    font: inherit;
+    font-size: 12px;
+    height: 26px;
+    padding: 0 10px;
+    cursor: pointer;
+}
+.rds-segmented > button + button { border-left: 1px solid var(--rds-line); }
+.rds-segmented > button.rds-active { color: var(--rds-accent); box-shadow: inset 0 0 0 1px var(--rds-accent); border-radius: 5px; }
+.rds-ttl-chip {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--rds-warn);
+    background: color-mix(in srgb, var(--rds-warn) 14%, transparent);
+}
+.rds-empty { padding: 28px 20px; color: var(--rds-muted); font-size: 13px; }
+.rds-skeleton { height: 8px; border-radius: 4px; background: var(--rds-faint); margin: 10px 20px; }
+
+@media (max-width: 960px) {
+    .rds-split { grid-template-columns: 1fr; }
+    .rds-split > .rds-pane + .rds-pane { border-left: 0; border-top: 1px solid var(--rds-line); }
+    .rds-tiles { grid-template-columns: 1fr 1fr !important; }
+}

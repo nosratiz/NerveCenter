@@ -135,6 +135,29 @@ public sealed class RedisOperations : IRedisOperations
         return RedisKeyTypeNames.FromRedisType(type);
     }
 
+    public async Task<KeyMetadata> GetKeyMetadataAsync(string secret, int database, string key, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var encodingTask = db.KeyEncodingAsync(key);
+        var idleTask = TryIdleTimeAsync(db, key);
+        await Task.WhenAll(encodingTask, idleTask).WaitAsync(ct);
+        return new KeyMetadata(encodingTask.Result, idleTask.Result);
+    }
+
+    // OBJECT IDLETIME is refused under an LFU maxmemory-policy; that is a display nicety, not an error.
+    private static async Task<TimeSpan?> TryIdleTimeAsync(IDatabase db, string key)
+    {
+        try
+        {
+            return await db.KeyIdleTimeAsync(key);
+        }
+        catch (RedisServerException)
+        {
+            return null;
+        }
+    }
+
     public async Task<bool> DeleteKeyAsync(string secret, int database, string key, CancellationToken ct = default)
     {
         await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
@@ -518,6 +541,14 @@ public sealed class RedisOperations : IRedisOperations
         return filtered.Select(RedisStreamEntryMapper.ToStreamEntry).ToList();
     }
 
+    public async Task<StreamEntry?> GetStreamEntryAsync(string secret, int database, string key, string entryId, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var entries = await db.StreamRangeAsync(key, minId: entryId, maxId: entryId, count: 1).WaitAsync(ct);
+        return entries.Length == 0 ? null : RedisStreamEntryMapper.ToStreamEntry(entries[0]);
+    }
+
     public async Task<string> AddStreamEntryAsync(string secret, int database, string key, IReadOnlyList<StreamFieldValue> fields, long? maxLen, CancellationToken ct = default)
     {
         await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
@@ -557,6 +588,13 @@ public sealed class RedisOperations : IRedisOperations
         var db = muxer.GetDatabase(database);
         var ids = entryIds.Select(id => (RedisValue)id).ToArray();
         return await db.StreamDeleteAsync(key, ids).WaitAsync(ct);
+    }
+
+    public async Task<long> DeleteStreamConsumerAsync(string secret, int database, string key, string group, string consumer, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        return await db.StreamDeleteConsumerAsync(key, group, consumer).WaitAsync(ct);
     }
 
     // ---- Pub/Sub (phase 3) ----

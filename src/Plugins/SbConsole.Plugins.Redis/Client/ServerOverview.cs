@@ -14,6 +14,7 @@ public sealed record ServerOverview(
     long ExpiredKeysTotal,
     long ConnectedClients,
     long BlockedClients,
-    IReadOnlyList<KeyspaceDatabaseInfo> Databases);
+    IReadOnlyList<KeyspaceDatabaseInfo> Databases,
+    string Role = "");
 
 public sealed record KeyspaceDatabaseInfo(int Index, long KeyCount, long KeysWithExpiry);

@@ -1,0 +1,37 @@
+@* One stat tile (mockup 1a's MEMORY/HIT RATIO/OPS/EVICTED row, 1d's LENGTH/LAST ID/GROUPS/PENDING row). *@
+<div class="rds-tile @Class">
+    <div class="rds-tile-head">
+        <span class="rds-overline @LabelClass">@Label</span>
+        @if (Aside is not null)
+        {
+            <span class="rds-tile-aside">@Aside</span>
+        }
+    </div>
+    <div class="rds-tile-value @ValueClass">@Value</div>
+    @ChildContent
+    @if (Caption is not null)
+    {
+        <div class="rds-tile-caption">@Caption</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+
+    [Parameter] public string? LabelClass { get; set; }
+
+    [Parameter] public RenderFragment? Value { get; set; }
+
+    [Parameter] public string? ValueClass { get; set; }
+
+    /// <summary>Small right-aligned text beside the label, e.g. "maxmemory 8 GB".</summary>
+    [Parameter] public string? Aside { get; set; }
+
+    /// <summary>Sparkline or bar, rendered between value and caption.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter] public RenderFragment? Caption { get; set; }
+
+    /// <summary>Stable test selector, e.g. "redis-overview-memory".</summary>
+    [Parameter] public string? Class { get; set; }
+}

@@ -1,0 +1,22 @@
+@using SbConsole.Plugins.Redis.Client
+<span class="rds-badge rds-badge-@CssName redis-type-badge" title="@Type">@Label</span>
+
+@code {
+    [Parameter, EditorRequired] public RedisKeyType Type { get; set; }
+
+    /// <summary>"str" instead of "string" -- the key list's compact form (mockup 1b); editors use the long form (1c).</summary>
+    [Parameter] public bool Short { get; set; }
+
+    private string CssName => Type switch
+    {
+        RedisKeyType.String => "string",
+        RedisKeyType.Hash => "hash",
+        RedisKeyType.List => "list",
+        RedisKeyType.Set => "set",
+        RedisKeyType.SortedSet => "zset",
+        RedisKeyType.Stream => "stream",
+        _ => "unknown",
+    };
+
+    private string Label => Type == RedisKeyType.String && Short ? "str" : CssName == "unknown" ? "?" : CssName;
+}

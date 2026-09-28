@@ -12,7 +12,7 @@ public class StreamsCommandHandlerTests : HandlerTestBase
     private const string Conn = "redis-uk-prod";
     private const string Key = "orders:events";
 
-    public static TheoryData<string> SimpleCommands => new() { "stream.trim", "stream.ack", "stream.delete" };
+    public static TheoryData<string> SimpleCommands => new() { "stream.trim", "stream.ack", "stream.delete", "stream.consumer.delete" };
 
     private (Func<Task<PluginResult>> Run, string Action, string Target, ActionRisk Risk) Case(string name) => name switch
     {
@@ -25,6 +25,9 @@ public class StreamsCommandHandlerTests : HandlerTestBase
         "stream.delete" => (() => new DeleteStreamEntriesCommandHandler(Operations, Connections, Audit, Log<DeleteStreamEntriesCommandHandler>())
                 .HandleAsync(new(ConnectionId, Conn, Database, Key, ["1696000000000-0"])),
             "redis.stream.delete", $"{Conn}/db{Database}/{Key}", ActionRisk.Destructive),
+        "stream.consumer.delete" => (() => new DeleteStreamConsumerCommandHandler(Operations, Connections, Audit, Log<DeleteStreamConsumerCommandHandler>())
+                .HandleAsync(new(ConnectionId, Conn, Database, Key, "billing", "billing-2a41")),
+            "redis.stream.consumer.delete", $"{Conn}/db{Database}/{Key}", ActionRisk.Destructive),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -74,6 +77,17 @@ public class StreamsCommandHandlerTests : HandlerTestBase
         Operations.TrimStreamAsync(default!, default, default!, default, default).ThrowsAsyncForAnyArgs(ex);
         Operations.AcknowledgeStreamEntriesAsync(default!, default, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
         Operations.DeleteStreamEntriesAsync(default!, default, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
+        Operations.DeleteStreamConsumerAsync(default!, default, default!, default!, default!, default).ThrowsAsyncForAnyArgs(ex);
+    }
+
+    [Fact]
+    public async Task Delete_consumer_details_the_group_and_consumer()
+    {
+        await new DeleteStreamConsumerCommandHandler(Operations, Connections, Audit, Log<DeleteStreamConsumerCommandHandler>())
+            .HandleAsync(new(ConnectionId, Conn, Database, Key, "billing", "billing-2a41"));
+
+        await Audit.Received(1).RecordAsync("redis.stream.consumer.delete", $"{Conn}/db{Database}/{Key}", ActionRisk.Destructive, true,
+            "group billing: consumer billing-2a41", Arg.Any<CancellationToken>());
     }
 
     [Fact]

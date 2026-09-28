@@ -102,4 +102,26 @@ public class StreamsQueryHandlerTests : HandlerTestBase
 
         result.Value.Should().BeSameAs(entries);
     }
+
+    [Fact]
+    public async Task GetEntry_returns_the_single_entry_from_operations()
+    {
+        var entry = new StreamEntry("1696000000123-0", [new StreamFieldValue("event", "order.paid")]);
+        Operations.GetStreamEntryAsync(Secret, Database, Key, "1696000000123-0", Arg.Any<CancellationToken>()).Returns(entry);
+
+        var result = await Handler.GetEntryAsync(ConnectionId, Database, Key, "1696000000123-0");
+
+        result.Value.Should().Be(entry);
+    }
+
+    [Fact]
+    public async Task GetEntry_returns_null_when_the_entry_is_gone()
+    {
+        Operations.GetStreamEntryAsync(Secret, Database, Key, "1696000000123-0", Arg.Any<CancellationToken>()).Returns((StreamEntry?)null);
+
+        var result = await Handler.GetEntryAsync(ConnectionId, Database, Key, "1696000000123-0");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeNull();
+    }
 }

@@ -1,0 +1,28 @@
+@* The console header bar every Redis page opens with (mockup 1a-1d): title, connection/db chips,
+   a mono meta line, then right-aligned actions. Also pulls in the plugin stylesheet, so any page
+   that renders a header gets the rds-* classes without per-plugin host wiring. *@
+<HeadContent>
+    <link rel="stylesheet" href="_content/SbConsole.Plugins.Redis/redis.css" />
+</HeadContent>
+
+<div class="rds-header">
+    <span class="rds-title">@Title</span>
+    @Chips
+    @if (Meta is not null)
+    {
+        <span class="rds-meta redis-header-meta">@Meta</span>
+    }
+    <span class="rds-spacer"></span>
+    @Actions
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>Connection/database chips -- usually a RedisConnectionDatabasePicker.</summary>
+    [Parameter] public RenderFragment? Chips { get; set; }
+
+    [Parameter] public RenderFragment? Meta { get; set; }
+
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

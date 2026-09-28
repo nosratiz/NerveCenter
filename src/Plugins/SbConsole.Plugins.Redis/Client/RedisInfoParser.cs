@@ -31,7 +31,8 @@ public static class RedisInfoParser
             ExpiredKeysTotal: GetLong(stats, "expired_keys"),
             ConnectedClients: GetLong(clients, "connected_clients"),
             BlockedClients: GetLong(clients, "blocked_clients"),
-            Databases: ParseKeyspace(sections));
+            Databases: ParseKeyspace(sections),
+            Role: GetString(replication, "role"));
     }
 
     private static IReadOnlyList<KeyspaceDatabaseInfo> ParseKeyspace(

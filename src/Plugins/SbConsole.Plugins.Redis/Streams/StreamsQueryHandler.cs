@@ -31,4 +31,8 @@ public sealed class StreamsQueryHandler(
     public Task<PluginResult<IReadOnlyList<StreamEntry>>> GetEntriesAsync(Guid connectionId, int database, string key, string? beforeId, int count, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.stream.entries",
             secret => operations.GetStreamEntriesAsync(secret, database, key, beforeId, count, ct), ct);
+
+    public Task<PluginResult<StreamEntry?>> GetEntryAsync(Guid connectionId, int database, string key, string entryId, CancellationToken ct = default) =>
+        HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.stream.entry",
+            secret => operations.GetStreamEntryAsync(secret, database, key, entryId, ct), ct);
 }

@@ -73,6 +73,7 @@ public abstract class RedisPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new AcknowledgeStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<AcknowledgeStreamEntriesCommandHandler>.Instance));
         Services.AddSingleton(new ClaimStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<ClaimStreamEntriesCommandHandler>.Instance));
         Services.AddSingleton(new DeleteStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<DeleteStreamEntriesCommandHandler>.Instance));
+        Services.AddSingleton(new DeleteStreamConsumerCommandHandler(Operations, Connections, Audit, NullLogger<DeleteStreamConsumerCommandHandler>.Instance));
 
         Services.AddSingleton(new FlushDatabaseCommandHandler(Operations, Connections, Audit, NullLogger<FlushDatabaseCommandHandler>.Instance));
         Services.AddSingleton(new AclQueryHandler(Operations, Connections, NullLogger<AclQueryHandler>.Instance));

@@ -21,6 +21,8 @@ public interface IRedisOperations
     // Keys — see docs/superpowers/specs/2026-09-28-redis-plugin-design.md §4-§5.
     Task<KeyScanPage> ScanKeysAsync(string secret, ScanKeysRequest request, CancellationToken ct = default);
     Task<RedisKeyType> GetKeyTypeAsync(string secret, int database, string key, CancellationToken ct = default);
+
+    Task<KeyMetadata> GetKeyMetadataAsync(string secret, int database, string key, CancellationToken ct = default);
     Task<bool> DeleteKeyAsync(string secret, int database, string key, CancellationToken ct = default);
     Task<bool> RenameKeyAsync(string secret, int database, string key, string newKey, CancellationToken ct = default);
     Task SetTtlAsync(string secret, SetTtlRequest request, CancellationToken ct = default);
@@ -62,6 +64,9 @@ public interface IRedisOperations
     /// <summary>Most-recent-first (XREVRANGE). beforeId, when given, is an exclusive upper bound so the caller can page further back into history.</summary>
     Task<IReadOnlyList<StreamEntry>> GetStreamEntriesAsync(string secret, int database, string key, string? beforeId, int count, CancellationToken ct = default);
 
+    /// <summary>One entry by exact id (XRANGE id id), or null if it has been deleted/trimmed.</summary>
+    Task<StreamEntry?> GetStreamEntryAsync(string secret, int database, string key, string entryId, CancellationToken ct = default);
+
     /// <summary>XADD. Returns the server-generated entry id.</summary>
     Task<string> AddStreamEntryAsync(string secret, int database, string key, IReadOnlyList<StreamFieldValue> fields, long? maxLen, CancellationToken ct = default);
 
@@ -76,6 +81,9 @@ public interface IRedisOperations
 
     /// <summary>XDEL. Returns the number of entries actually deleted.</summary>
     Task<long> DeleteStreamEntriesAsync(string secret, int database, string key, IReadOnlyList<string> entryIds, CancellationToken ct = default);
+
+    /// <summary>XGROUP DELCONSUMER -- returns how many pending entries the consumer still owned (they are dropped from the PEL).</summary>
+    Task<long> DeleteStreamConsumerAsync(string secret, int database, string key, string group, string consumer, CancellationToken ct = default);
 
     // ---- Pub/Sub (phase 3 -- design spec addendum §14). Server-wide, not per-database. ----
 

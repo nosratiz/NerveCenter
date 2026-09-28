@@ -107,4 +107,19 @@ public class RedisInfoParserTests
 
         RedisInfoParser.Parse(sections).Databases.Should().BeEmpty();
     }
+
+    [Fact]
+    public void Parses_the_replication_role()
+    {
+        RedisInfoParser.Parse(SampleSections()).Role.Should().Be("master");
+    }
+
+    [Fact]
+    public void Missing_replication_role_defaults_to_empty()
+    {
+        var sections = new Dictionary<string, IReadOnlyDictionary<string, string>>(SampleSections());
+        sections.Remove("Replication");
+
+        RedisInfoParser.Parse(sections).Role.Should().BeEmpty();
+    }
 }

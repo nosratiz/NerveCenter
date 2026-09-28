@@ -48,10 +48,10 @@ public sealed class RedisPlugin : IPlugin
 
     // Pages: Overview, Keys, Streams, Pub/Sub. ActionCount counts the Keys browser's 14 audited
     // command handlers (13 mutating/destructive + the Safe field-reveal action) plus the Streams
-    // group's 5 (add/trim/ack/claim/delete) plus phase 3's 3 (FLUSHDB, Pub/Sub subscribe-start,
-    // Pub/Sub publish) -- 22 total. AclQueryHandler/PubSubQueryHandler's channel listing are
+    // group's 6 (add/trim/ack/claim/delete/delete-consumer) plus phase 3's 3 (FLUSHDB, Pub/Sub subscribe-start,
+    // Pub/Sub publish) -- 23 total. AclQueryHandler/PubSubQueryHandler's channel listing are
     // read-only queries and don't count.
-    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 22);
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 23);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -80,6 +80,7 @@ public sealed class RedisPlugin : IPlugin
         services.AddScoped<Streams.AcknowledgeStreamEntriesCommandHandler>();
         services.AddScoped<Streams.ClaimStreamEntriesCommandHandler>();
         services.AddScoped<Streams.DeleteStreamEntriesCommandHandler>();
+        services.AddScoped<Streams.DeleteStreamConsumerCommandHandler>();
         services.AddScoped<Keys.FlushDatabaseCommandHandler>();
         services.AddScoped<Acl.AclQueryHandler>();
         services.AddScoped<PubSub.PubSubQueryHandler>();

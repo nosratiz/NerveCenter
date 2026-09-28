@@ -123,4 +123,25 @@ public class QueryHandlerTests : HandlerTestBase
 
         result.Value.Should().Be(dryRun);
     }
+
+    [Fact]
+    public async Task GetKeyMetadata_returns_encoding_and_idle_time_from_operations()
+    {
+        var metadata = new KeyMetadata("hashtable", TimeSpan.FromSeconds(3));
+        Operations.GetKeyMetadataAsync(Secret, Database, "session:u:77120", Arg.Any<CancellationToken>()).Returns(metadata);
+
+        var result = await Handler.GetKeyMetadataAsync(ConnectionId, Database, "session:u:77120");
+
+        result.Value.Should().Be(metadata);
+    }
+
+    [Fact]
+    public async Task GetKeyMetadata_failure_is_friendly()
+    {
+        Operations.GetKeyMetadataAsync(Secret, Database, "k", Arg.Any<CancellationToken>()).ThrowsAsync(Timeout);
+
+        var result = await Handler.GetKeyMetadataAsync(ConnectionId, Database, "k");
+
+        result.Error.Should().Be(TimeoutText);
+    }
 }

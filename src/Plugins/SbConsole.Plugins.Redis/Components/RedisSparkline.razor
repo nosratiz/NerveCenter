@@ -1,0 +1,32 @@
+@using System.Globalization
+@* Minimal inline-SVG trend line. Stroke is currentColor, so the parent's rds-accent/rds-warn/
+   rds-danger class sets the tone. Renders nothing until there are two points to join. *@
+@if (Values.Count >= 2)
+{
+    <svg class="rds-sparkline @Class" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+        <polyline points="@Points" />
+    </svg>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<double> Values { get; set; } = [];
+
+    [Parameter] public string? Class { get; set; }
+
+    private string Points
+    {
+        get
+        {
+            var min = Values.Min();
+            var max = Values.Max();
+            var range = max - min;
+            var step = 100.0 / (Values.Count - 1);
+            return string.Join(' ', Values.Select((v, i) =>
+            {
+                // Flat series sit mid-height rather than pinned to an edge.
+                var y = range == 0 ? 15 : 28 - (v - min) / range * 26;
+                return string.Create(CultureInfo.InvariantCulture, $"{i * step:0.##},{y:0.##}");
+            }));
+        }
+    }
+}
