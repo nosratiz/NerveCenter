@@ -12,4 +12,7 @@ public interface IRedisOperations
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
 
     Task<ServerOverview> GetOverviewAsync(string secret, CancellationToken ct = default);
+
+    Task<IReadOnlyList<MemoryByPrefixEntry>> GetMemoryByPrefixAsync(
+        string secret, int database, char delimiter, int sampleSize, CancellationToken ct = default);
 }

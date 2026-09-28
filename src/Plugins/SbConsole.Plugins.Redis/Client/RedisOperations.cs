@@ -38,6 +38,31 @@ public sealed class RedisOperations : IRedisOperations
         return RedisInfoParser.Parse(sections);
     }
 
+    public async Task<IReadOnlyList<MemoryByPrefixEntry>> GetMemoryByPrefixAsync(
+        string secret, int database, char delimiter, int sampleSize, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var server = muxer.GetServer(muxer.GetEndPoints()[0]);
+        var db = muxer.GetDatabase(database);
+
+        var samples = new List<SampledKey>();
+        await foreach (var key in server.KeysAsync(database: database, pattern: "*", pageSize: 1000))
+        {
+            if (samples.Count >= sampleSize)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var sizeResult = await db.ExecuteAsync("MEMORY", "USAGE", (string)key!);
+            var size = sizeResult.IsNull ? 0L : (long)sizeResult;
+            var ttl = await db.KeyTimeToLiveAsync(key);
+            samples.Add(new SampledKey(key!, size, ttl.HasValue));
+        }
+
+        return RedisMemoryByPrefixSampler.Summarize(samples, delimiter, topN: 4);
+    }
+
     internal static async Task<Dictionary<string, IReadOnlyDictionary<string, string>>> GetInfoSectionsAsync(
         IServer server, CancellationToken ct)
     {
