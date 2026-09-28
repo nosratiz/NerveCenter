@@ -15,7 +15,7 @@ public class OverviewPageTests : RedisPageTestBase
 {
     private static ServerOverview SampleOverview() => new(
         RedisVersion: "7.2.4", Mode: "standalone", ConnectedReplicas: 2,
-        UsedMemoryBytes: 6_900_000_000, MaxMemoryBytes: 8_000_000_000,
+        UsedMemoryBytes: 7_387_423_669, MaxMemoryBytes: 8L * 1024 * 1024 * 1024,
         MaxMemoryPolicy: "allkeys-lru", MemoryFragmentationRatio: 1.12,
         HitRatioPercent: 94.2, OpsPerSecond: 41800, EvictedKeysTotal: 1240000, ExpiredKeysTotal: 98213,
         ConnectedClients: 412, BlockedClients: 3,

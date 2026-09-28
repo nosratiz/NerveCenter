@@ -129,16 +129,16 @@ else if (_overview is not null)
         _slowLog = slowLogResult.IsSuccess ? slowLogResult.Value! : [];
     }
 
-    // Decimal (1000-based) scaling, matching Redis's own INFO memory metrics convention -- not
-    // the binary (1024-based) KiB/MiB/GiB some other plugins use for broker-native byte counters.
+    // Binary (1024-based) scaling, matching Redis's own INFO/redis-cli memory metrics convention
+    // and this codebase's precedent in RabbitMq's RabbitFormat.cs.
     private static string FormatBytes(long bytes)
     {
         double value = bytes;
         string[] units = ["B", "KB", "MB", "GB", "TB"];
         var unit = 0;
-        while (value >= 1000 && unit < units.Length - 1)
+        while (value >= 1024 && unit < units.Length - 1)
         {
-            value /= 1000;
+            value /= 1024;
             unit++;
         }
         return $"{value.ToString("N1", CultureInfo.InvariantCulture)} {units[unit]}";
