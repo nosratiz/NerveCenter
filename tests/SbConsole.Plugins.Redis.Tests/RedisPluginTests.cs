@@ -15,17 +15,17 @@ public class RedisPluginTests
     }
 
     [Fact]
-    public void Nav_items_start_with_overview_only()
+    public void Nav_items_are_overview_then_keys()
     {
         var plugin = new RedisPlugin();
 
-        plugin.NavItems.Select(n => n.Href).Should().Equal("/p/redis/overview");
+        plugin.NavItems.Select(n => n.Href).Should().Equal("/p/redis/overview", "/p/redis/keys");
     }
 
     [Fact]
-    public void Contribution_reports_no_actions_yet()
+    public void Contribution_reports_the_keys_browsers_audited_actions()
     {
-        new RedisPlugin().Contribution.ActionCount.Should().Be(0);
+        new RedisPlugin().Contribution.ActionCount.Should().BeGreaterThan(0);
     }
 
     [Fact]

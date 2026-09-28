@@ -15,6 +15,7 @@ public sealed class RedisPlugin : IPlugin
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [
         new PluginNavItem("Overview", "/p/redis/overview"),
+        new PluginNavItem("Keys", "/p/redis/keys"),
     ];
 
     public Type? ConnectionFormComponentType => typeof(RedisConnectionFields);
@@ -40,10 +41,10 @@ public sealed class RedisPlugin : IPlugin
         }
     }
 
-    // Pages so far: Overview. No command handlers yet — this is a read-only slice; Keys/Streams/
-    // Pub-Sub and their mutating actions ship in later plans (docs/superpowers/specs/
-    // 2026-09-28-redis-plugin-design.md §1).
-    public PluginContribution Contribution => new(PageCount: 1, ActionCount: 0);
+    // Pages: Overview, Keys. Streams/Pub-Sub and their mutating actions ship in later plans
+    // (docs/superpowers/specs/2026-09-28-redis-plugin-design.md §1). ActionCount counts the Keys
+    // browser's audited command handlers (13 mutating/destructive + the Safe field-reveal action).
+    public PluginContribution Contribution => new(PageCount: 2, ActionCount: 14);
 
     public void ConfigureServices(IServiceCollection services)
     {
@@ -51,6 +52,21 @@ public sealed class RedisPlugin : IPlugin
         services.AddScoped<Overview.GetOverviewQueryHandler>();
         services.AddScoped<Overview.GetMemoryByPrefixQueryHandler>();
         services.AddScoped<Overview.GetSlowLogQueryHandler>();
+        services.AddScoped<Keys.KeysQueryHandler>();
+        services.AddScoped<Keys.DeleteKeyCommandHandler>();
+        services.AddScoped<Keys.RenameKeyCommandHandler>();
+        services.AddScoped<Keys.SetTtlCommandHandler>();
+        services.AddScoped<Keys.DeleteByPatternCommandHandler>();
+        services.AddScoped<Keys.SetStringCommandHandler>();
+        services.AddScoped<Keys.SetHashFieldCommandHandler>();
+        services.AddScoped<Keys.DeleteHashFieldCommandHandler>();
+        services.AddScoped<Keys.PushListCommandHandler>();
+        services.AddScoped<Keys.TrimListCommandHandler>();
+        services.AddScoped<Keys.AddSortedSetMemberCommandHandler>();
+        services.AddScoped<Keys.IncrementSortedSetScoreCommandHandler>();
+        services.AddScoped<Keys.AddSetMemberCommandHandler>();
+        services.AddScoped<Keys.RemoveSetMemberCommandHandler>();
+        services.AddScoped<Keys.RevealHashFieldCommandHandler>();
         // A new handler must be added here or its page fails to render at runtime.
     }
 
