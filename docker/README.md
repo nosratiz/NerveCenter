@@ -157,22 +157,31 @@ docker compose --profile redis up -d
 | `redis-init`        | (one-shot)                       |
 | `redis-pubsub-demo` | (background publisher, no port)  |
 
-Redis 7, password-protected (`--requirepass`), standalone. `redis-init` seeds a handful of
-sample keys across the types the Redis plugin's mockup shows: two `session:u:*` hashes (one
-with no TTL on purpose, so the Overview page's "no TTL" story has something to point at), a
-`jobs:email:retry` list, a `lb:weekly` sorted-set leaderboard, and a `flags:beta` set, plus two
-streams for the Streams page — `events:orders` (with an `order-processors` consumer group and a
-couple of unacked pending entries, so the pending-entries table has something to claim/ack/delete
-out of the box) and `logs:app` (no consumer group, so the "no groups yet" state has a real example
-too). Re-running `docker compose up -d` re-seeds idempotently (see
-[`redis/init-keys.sh`](redis/init-keys.sh)).
+Redis 7, password-protected (`--requirepass`), standalone, `maxmemory 16mb` / `allkeys-lru` (so
+the Overview page's memory tile has a real ceiling). `redis-init` seeds data shaped like the
+plugin's mockup ([`docs/superpowers/specs/redis-mockup/`](../docs/superpowers/specs/redis-mockup/)):
 
-Redis Pub/Sub has no history — a channel only shows anything while something is actively
-publishing to it — so `redis-pubsub-demo` runs continuously in the background, publishing a
-heartbeat to `notifications:live` (and, every third beat, `orders:events`) every 5s. That's what
-makes the Pub/Sub page's live tail show activity without a second terminal open running
-`redis-cli publish` yourself. It's harmless to leave running; stop it with
-`docker compose stop redis-pubsub-demo` if the noise in `docker compose logs` is unwanted.
+- **Keys** — ~140 `session:u:*` hashes (~38% with no TTL; `session:u:77120` carries the mockup's
+  fields, including a masked `csrf` and a large `recentViews`), `session:u:77190:csrf` (string),
+  `session:u:77203:roles` (set), 40 `cart:u:*` hashes and 60 `rate:*` counters (all with TTLs),
+  `config:pricing` (JSON string), `jobs:email:retry` (400-entry list), `lb:weekly` (sorted set),
+  `flags:beta` (64-member set).
+- **Streams** — `orders:stream` (240 entries) with three consumer groups: `fulfilment` (caught
+  up), `billing` (lag ~140; `billing-2a41` is stalled holding 40 pending entries, two of them
+  delivered 6×) and `analytics` (slightly behind). `events:orders` has one small group;
+  `logs:app` has none, for the "no groups yet" state.
+- **Overview** — the slow log is pre-filled with the mockup's commands, including a `KEYS`
+  issued from outside SbConsole.
+
+`redis-pubsub-demo` runs continuously, every 5s: it publishes a heartbeat to `notifications:live`
+(and every third beat to `orders:events`) — Pub/Sub has no history, so this is what gives the
+Pub/Sub page's live tail something to show — and appends an `orders:stream` entry that the
+healthy consumers (`fulfil-1`, `billing-7c9f`) read and ack, keeping "last ID" and idle times
+live. Stop it with `docker compose stop redis-pubsub-demo` if the noise is unwanted.
+
+Re-running `docker compose up -d` re-seeds idempotently (see
+[`redis/init-keys.sh`](redis/init-keys.sh)); to start from scratch, recreate the containers:
+`docker compose --profile redis up -d --force-recreate --no-deps redis redis-init redis-pubsub-demo`.
 
 ### Connect the app to it (Redis)
 

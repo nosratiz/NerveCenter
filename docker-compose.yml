@@ -174,7 +174,8 @@ services:
     profiles: ["redis"]
     ports:
       - "${REDIS_PORT:-6379}:6379"
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-sbconsole}"]
+    # maxmemory gives the Overview page's memory tile a real ceiling (and eviction threshold) to show.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-sbconsole}", "--maxmemory", "16mb", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-sbconsole}", "--no-auth-warning", "ping"]
       interval: 5s
@@ -199,17 +200,18 @@ services:
       - ./docker/redis/init-keys.sh:/init-keys.sh:ro
     restart: "no"
 
-  # Long-running (not one-shot): Redis Pub/Sub has no history, so a channel only shows activity
-  # while something is actively publishing to it. This container publishes a heartbeat to
-  # notifications:live (and, every third beat, orders:events) every 5s, purely so the Pub/Sub
-  # page's live tail has something to show without a second terminal running `redis-cli publish`.
+  # Long-running (not one-shot) live traffic, every 5s: a Pub/Sub heartbeat to notifications:live
+  # (Pub/Sub has no history, so a channel only shows activity while something publishes to it),
+  # plus a new orders:stream entry that the healthy consumers read and ack.
   redis-pubsub-demo:
     image: redis:7-alpine
     container_name: nervecenter-redis-pubsub-demo
     profiles: ["redis"]
     depends_on:
-      redis:
-        condition: service_healthy
+      # After the seed, not alongside it: this XADDs to orders:stream, which the seed only
+      # creates (with its consumer groups) when the stream doesn't exist yet.
+      redis-init:
+        condition: service_completed_successfully
     entrypoint: ["/bin/sh", "/publish-demo.sh"]
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-sbconsole}"
