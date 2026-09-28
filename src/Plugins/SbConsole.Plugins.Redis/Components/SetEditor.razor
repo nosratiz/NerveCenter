@@ -1,0 +1,125 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject AddSetMemberCommandHandler AddHandler
+@inject RemoveSetMemberCommandHandler RemoveHandler
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressCircular Class="set-editor-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="set-editor-error">@_error</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.caption" Class="set-editor-cardinality mud-text-secondary">@_page?.Cardinality member(s)</MudText>
+    <MudSimpleTable Class="set-editor-members" Dense="true" Elevation="0">
+        <tbody>
+            @foreach (var member in _page?.Members ?? [])
+            {
+                <tr class="set-member-row">
+                    <td class="set-member-value" style="font-family:monospace">@member</td>
+                    <td><MudButton Class="set-member-remove" Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => RemoveAsync(member))">Remove</MudButton></td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+    @if (_page is { Complete: false })
+    {
+        <MudButton Class="set-editor-load-more mt-2" Size="Size.Small" Variant="Variant.Text" OnClick="LoadMoreAsync">Load more</MudButton>
+    }
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Add member</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudTextField id="set-editor-new-member" data-testid="set-editor-new-member" T="string" Value="_newMember" ValueChanged="v => _newMember = v ?? string.Empty" Label="Member" Immediate="true" />
+        <MudButton Class="set-editor-add-member" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_newMember)" OnClick="AddAsync">Add</MudButton>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private const int PageSize = 200;
+
+    private SetPage? _page;
+    private bool _loading;
+    private string? _error;
+    private string _newMember = "";
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        var result = await QueryHandler.ScanSetMembersAsync(ConnectionId, Database, Key, 0, PageSize);
+        if (result.IsSuccess)
+        {
+            _page = result.Value;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (_page is null)
+        {
+            return;
+        }
+
+        var result = await QueryHandler.ScanSetMembersAsync(ConnectionId, Database, Key, _page.Cursor, PageSize);
+        if (result.IsSuccess)
+        {
+            var merged = _page.Members.Concat(result.Value!.Members).ToList();
+            _page = result.Value! with { Members = merged };
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task AddAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newMember))
+        {
+            return;
+        }
+
+        var result = await AddHandler.HandleAsync(new AddSetMemberCommand(ConnectionId, ConnectionName, Database, Key, _newMember));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Added {_newMember}", Severity.Success);
+            _newMember = "";
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task RemoveAsync(string member)
+    {
+        var result = await RemoveHandler.HandleAsync(new RemoveSetMemberCommand(ConnectionId, ConnectionName, Database, Key, member));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Removed {member}", Severity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+}

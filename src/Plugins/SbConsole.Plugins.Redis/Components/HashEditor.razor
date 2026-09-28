@@ -1,0 +1,150 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject SetHashFieldCommandHandler SetFieldHandler
+@inject DeleteHashFieldCommandHandler DeleteFieldHandler
+@inject RevealHashFieldCommandHandler RevealHandler
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressCircular Class="hash-editor-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="hash-editor-error">@_error</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.caption" Class="hash-editor-field-count mud-text-secondary">@_page?.TotalFieldCount field(s)</MudText>
+    <MudSimpleTable Class="hash-editor-fields" Dense="true" Elevation="0">
+        <thead><tr><th>Field</th><th>Value</th><th>Size</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var field in _page?.Fields ?? [])
+            {
+                var masked = RedisSecretFieldMasking.IsSensitive(field.Field) && !_revealed.Contains(field.Field);
+                <tr class="hash-field-row">
+                    <td class="hash-field-name" style="font-family:monospace">@field.Field</td>
+                    <td class="hash-field-value" style="font-family:monospace">@(masked ? "••••••••" : field.Value)</td>
+                    <td class="hash-field-size">@field.SizeBytes B</td>
+                    <td>
+                        <div class="d-flex gap-1">
+                            @if (masked)
+                            {
+                                <MudButton Class="hash-field-reveal" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => RevealAsync(field.Field))">Reveal</MudButton>
+                            }
+                            <MudButton Class="hash-field-delete" Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => DeleteFieldAsync(field.Field))">Delete</MudButton>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+    @if (_page is { Complete: false })
+    {
+        <MudButton Class="hash-editor-load-more mt-2" Size="Size.Small" Variant="Variant.Text" OnClick="LoadMoreAsync">Load more</MudButton>
+    }
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Add / update field</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudTextField id="hash-editor-new-field" data-testid="hash-editor-new-field" T="string" Value="_newField" ValueChanged="v => _newField = v ?? string.Empty" Label="Field" Immediate="true" />
+        <MudTextField id="hash-editor-new-value" data-testid="hash-editor-new-value" T="string" Value="_newValue" ValueChanged="v => _newValue = v ?? string.Empty" Label="Value" Immediate="true" />
+        <MudButton Class="hash-editor-add-field" Color="Color.Primary" Variant="Variant.Filled"
+                   Disabled="@string.IsNullOrWhiteSpace(_newField)" OnClick="AddFieldAsync">Set field</MudButton>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private const int PageSize = 200;
+
+    private HashFieldPage? _page;
+    private readonly HashSet<string> _revealed = [];
+    private bool _loading;
+    private string? _error;
+    private string _newField = "";
+    private string _newValue = "";
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _revealed.Clear();
+        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, null, 0, PageSize);
+        if (result.IsSuccess)
+        {
+            _page = result.Value;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (_page is null)
+        {
+            return;
+        }
+
+        var result = await QueryHandler.ScanHashFieldsAsync(ConnectionId, Database, Key, null, _page.Cursor, PageSize);
+        if (result.IsSuccess)
+        {
+            var merged = _page.Fields.Concat(result.Value!.Fields).ToList();
+            _page = result.Value! with { Fields = merged };
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task RevealAsync(string field)
+    {
+        _revealed.Add(field);
+        await RevealHandler.RecordAsync(new RevealHashFieldCommand(ConnectionId, ConnectionName, Database, Key, field));
+    }
+
+    private async Task DeleteFieldAsync(string field)
+    {
+        var result = await DeleteFieldHandler.HandleAsync(new DeleteHashFieldCommand(ConnectionId, ConnectionName, Database, Key, field));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Deleted field {field}", Severity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task AddFieldAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newField))
+        {
+            return;
+        }
+
+        var result = await SetFieldHandler.HandleAsync(new SetHashFieldCommand(ConnectionId, ConnectionName, Database, Key, _newField, _newValue));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Set field {_newField}", Severity.Success);
+            _newField = "";
+            _newValue = "";
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+}

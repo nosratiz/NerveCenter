@@ -1,0 +1,121 @@
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject AddSortedSetMemberCommandHandler AddHandler
+@inject IncrementSortedSetScoreCommandHandler IncrHandler
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressCircular Class="sortedset-editor-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="sortedset-editor-error">@_error</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.caption" Class="sortedset-editor-cardinality mud-text-secondary">@_slice?.Cardinality member(s)</MudText>
+    <MudSimpleTable Class="sortedset-editor-members" Dense="true" Elevation="0">
+        <thead><tr><th>Member</th><th>Score</th></tr></thead>
+        <tbody>
+            @foreach (var entry in _slice?.Entries ?? [])
+            {
+                <tr class="sortedset-entry-row">
+                    <td class="sortedset-entry-member" style="font-family:monospace">@entry.Member</td>
+                    <td class="sortedset-entry-score">@entry.Score.ToString(CultureInfo.InvariantCulture)</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Add / set member score</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudTextField id="sortedset-editor-new-member" data-testid="sortedset-editor-new-member" T="string" Value="_newMember" ValueChanged="v => _newMember = v ?? string.Empty" Label="Member" Immediate="true" />
+        <MudNumericField id="sortedset-editor-new-score" data-testid="sortedset-editor-new-score" T="double" Value="_newScore" ValueChanged="v => _newScore = v" Label="Score" Immediate="true" HideSpinButtons="true" />
+        <MudButton Class="sortedset-editor-add-member" Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_newMember)" OnClick="AddAsync">Set</MudButton>
+    </div>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Increment score</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudTextField id="sortedset-editor-incr-member" data-testid="sortedset-editor-incr-member" T="string" Value="_incrMember" ValueChanged="v => _incrMember = v ?? string.Empty" Label="Member" Immediate="true" />
+        <MudNumericField id="sortedset-editor-incr-by" data-testid="sortedset-editor-incr-by" T="double" Value="_incrBy" ValueChanged="v => _incrBy = v" Label="By" Immediate="true" HideSpinButtons="true" />
+        <MudButton Class="sortedset-editor-increment" Variant="Variant.Outlined" Disabled="@string.IsNullOrWhiteSpace(_incrMember)" OnClick="IncrementAsync">Increment</MudButton>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private const long RangeStop = 49;
+
+    private SortedSetSlice? _slice;
+    private bool _loading;
+    private string? _error;
+    private string _newMember = "";
+    private double _newScore;
+    private string _incrMember = "";
+    private double _incrBy = 1;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        var result = await QueryHandler.GetSortedSetRangeAsync(ConnectionId, Database, Key, 0, RangeStop, descending: true);
+        if (result.IsSuccess)
+        {
+            _slice = result.Value;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task AddAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newMember))
+        {
+            return;
+        }
+
+        var result = await AddHandler.HandleAsync(new AddSortedSetMemberCommand(ConnectionId, ConnectionName, Database, Key, _newMember, _newScore));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Set {_newMember}", Severity.Success);
+            _newMember = "";
+            _newScore = 0;
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task IncrementAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_incrMember))
+        {
+            return;
+        }
+
+        var result = await IncrHandler.HandleAsync(new IncrementSortedSetScoreCommand(ConnectionId, ConnectionName, Database, Key, _incrMember, _incrBy));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add(string.Create(CultureInfo.InvariantCulture, $"{_incrMember} -> {result.Value}"), Severity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+}

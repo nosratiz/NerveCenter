@@ -1,0 +1,82 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject SetStringCommandHandler SetStringHandler
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressCircular Class="string-editor-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="string-editor-error">@_error</MudAlert>
+}
+else if (_value is not null)
+{
+    <div class="d-flex align-center gap-3 mb-2">
+        <MudText Class="string-editor-size" Typo="Typo.caption">@_value.SizeBytes bytes</MudText>
+        @if (_value.LooksLikeJson)
+        {
+            <MudChip T="string" Class="string-editor-json-badge" Size="Size.Small" Variant="Variant.Outlined">JSON</MudChip>
+        }
+    </div>
+    <MudTextField id="string-editor-value" data-testid="string-editor-value" T="string" Value="_draft" ValueChanged="v => _draft = v ?? string.Empty"
+                  Lines="8" Variant="Variant.Outlined" Immediate="true" />
+    <MudButton Class="string-editor-save mt-2" Color="Color.Primary" Variant="Variant.Filled"
+               Disabled="@(_saving || _draft == _value.RawValue)" OnClick="SaveAsync">Save</MudButton>
+}
+
+@code {
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private StringValue? _value;
+    private string _draft = "";
+    private bool _loading;
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        var result = await QueryHandler.GetStringAsync(ConnectionId, Database, Key);
+        if (result.IsSuccess)
+        {
+            _value = result.Value;
+            _draft = _value!.RawValue;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var result = await SetStringHandler.HandleAsync(new SetStringCommand(ConnectionId, ConnectionName, Database, Key, _draft, _value?.Ttl));
+            if (result.IsSuccess)
+            {
+                Snackbar.Add($"Saved {Key}", Severity.Success);
+                await LoadAsync();
+            }
+            else
+            {
+                Snackbar.Add(result.Error!, Severity.Error);
+            }
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

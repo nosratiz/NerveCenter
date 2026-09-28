@@ -1,0 +1,140 @@
+@using Microsoft.AspNetCore.WebUtilities
+@inject IConnectionProvider Connections
+@inject NavigationManager Navigation
+
+@* The Keys browser's header picker (design spec §7a): a connection menu plus a database-index
+   menu (0-15 -- Redis's fixed logical-database count, no server round trip needed, unlike
+   RabbitMQ's vhost list). The choice lives in ?connectionId=&database= so links stay shareable,
+   matching ConnectionVhostPicker's pattern minus the vhost axis. *@
+@if (!_loaded)
+{
+    <MudProgressCircular Class="picker-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connections.Count == 0)
+{
+    <MudAlert Class="no-connections" Severity="Severity.Info">No connections yet. Add a Redis connection to get started.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center flex-wrap gap-4 my-4">
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Connection</MudText>
+            <MudMenu Class="connection-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Class="selected-connection" Typo="Typo.subtitle1" Style="font-family:monospace">@_connection?.Name</MudText>
+                        @if (_connection?.IsProd == true)
+                        {
+                            <MudChip T="string" Class="prod-chip" Color="Color.Warning" Size="Size.Small">prod</MudChip>
+                        }
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var connection in _connections)
+                    {
+                        <MudMenuItem Class="connection-option" OnClick="@(() => SelectConnection(connection))">@connection.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        <div class="d-flex align-center gap-2">
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Database</MudText>
+            <MudMenu Class="database-menu">
+                <ActivatorContent>
+                    <div class="d-flex align-center gap-2" style="cursor:pointer">
+                        <MudText Class="selected-database" Typo="Typo.subtitle1" Style="font-family:monospace">db@(_database)</MudText>
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </div>
+                </ActivatorContent>
+                <ChildContent>
+                    @for (var i = 0; i < DatabaseCount; i++)
+                    {
+                        var index = i;
+                        <MudMenuItem Class="@($"database-option database-option-{index}")" OnClick="@(() => SelectDatabase(index))">db@(index)</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        </div>
+
+        @if (Loading)
+        {
+            <MudProgressCircular Class="page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+    </div>
+}
+
+@code {
+    public const string Kind = "redis";
+    private const int DatabaseCount = 16;
+
+    /// <summary>Raised once after the initial selection resolves, then on every change. Never raised when there are no connections.</summary>
+    [Parameter] public EventCallback<RedisSelection> SelectionChanged { get; set; }
+
+    /// <summary>Set by the page while it loads, to show a small progress circle beside the menus.</summary>
+    [Parameter] public bool Loading { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private ConnectionInfo? _connection;
+    private int _database;
+    private bool _loaded;
+
+    internal RedisSelection? Selection => _connection is null ? null : new RedisSelection(_connection, _database);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync(Kind);
+        if (_connections.Count == 0)
+        {
+            _loaded = true;
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        ConnectionInfo? fromQuery = null;
+        if (query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id))
+        {
+            fromQuery = _connections.FirstOrDefault(c => c.Id == id);
+        }
+
+        var database = 0;
+        if (query.TryGetValue("database", out var dbValue) && int.TryParse(dbValue.ToString(), out var parsed) && parsed is >= 0 and < DatabaseCount)
+        {
+            database = parsed;
+        }
+
+        _connection = fromQuery ?? _connections[0];
+        _database = database;
+        _loaded = true;
+        await PublishAsync();
+    }
+
+    private async Task SelectConnection(ConnectionInfo connection)
+    {
+        _connection = connection;
+        await PublishAsync();
+    }
+
+    private async Task SelectDatabase(int database)
+    {
+        _database = database;
+        await PublishAsync();
+    }
+
+    private async Task PublishAsync()
+    {
+        var selection = Selection!;
+        var uri = Navigation.GetUriWithQueryParameters(new Dictionary<string, object?>
+        {
+            ["connectionId"] = selection.Connection.Id.ToString(),
+            ["database"] = selection.Database.ToString(),
+        });
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await SelectionChanged.InvokeAsync(selection);
+    }
+}

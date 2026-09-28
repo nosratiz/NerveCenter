@@ -1,0 +1,95 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject SetTtlCommandHandler SetTtlHandler
+
+<MudDialog>
+    <DialogContent>
+        <MudRadioGroup T="string" Value="_mode" ValueChanged="OnModeChanged">
+            <MudRadio Class="setttl-mode-expirein" Value="@("expirein")" Color="Color.Primary">Expire in (seconds)</MudRadio>
+            @if (_mode == "expirein")
+            {
+                <MudNumericField id="setttl-expirein-seconds" data-testid="setttl-expirein-seconds" T="long" Value="_expireInSeconds" ValueChanged="v => _expireInSeconds = v"
+                                  Min="1" Immediate="true" HideSpinButtons="true" Class="ml-8" />
+            }
+            <MudRadio Class="setttl-mode-expireat" Value="@("expireat")" Color="Color.Primary">Expire at (UTC)</MudRadio>
+            @if (_mode == "expireat")
+            {
+                <MudTextField id="setttl-expireat-value" data-testid="setttl-expireat-value" T="DateTime?" Value="_expireAt" ValueChanged="v => _expireAt = v"
+                              InputType="InputType.DateTimeLocal" Immediate="true" Class="ml-8" />
+            }
+            <MudRadio Class="setttl-mode-persist" Value="@("persist")" Color="Color.Primary">Persist (remove TTL)</MudRadio>
+        </MudRadioGroup>
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="setttl-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="setttl-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="setttl-submit" Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanSubmit || _busy)" OnClick="SaveAsync">Apply</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+
+    private string _mode = "expirein";
+    private long _expireInSeconds = 3600;
+    private DateTime? _expireAt;
+    private string? _error;
+    private bool _busy;
+
+    private bool CanSubmit => _mode switch
+    {
+        "expirein" => _expireInSeconds > 0,
+        "expireat" => _expireAt is not null,
+        "persist" => true,
+        _ => false,
+    };
+
+    private void OnModeChanged(string mode) => _mode = mode;
+
+    private async Task SaveAsync()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var request = _mode switch
+            {
+                "expirein" => new SetTtlRequest(Database, Key, TimeSpan.FromSeconds(_expireInSeconds), null, false),
+                "expireat" => new SetTtlRequest(Database, Key, null, new DateTimeOffset(_expireAt!.Value, TimeSpan.Zero), false),
+                _ => new SetTtlRequest(Database, Key, null, null, true),
+            };
+            var result = await SetTtlHandler.HandleAsync(new SetTtlCommand(ConnectionId, ConnectionName, request));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

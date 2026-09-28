@@ -1,0 +1,128 @@
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject PushListCommandHandler PushHandler
+@inject TrimListCommandHandler TrimHandler
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressCircular Class="list-editor-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="list-editor-error">@_error</MudAlert>
+}
+else if (_slice is not null)
+{
+    <MudText Typo="Typo.caption" Class="list-editor-length mud-text-secondary">length @_slice.Length</MudText>
+    <MudText Typo="Typo.subtitle2" Class="mt-2">Head</MudText>
+    <MudSimpleTable Class="list-editor-head" Dense="true" Elevation="0">
+        <tbody>
+            @foreach (var entry in _slice.Head)
+            {
+                <tr class="list-entry-row"><td class="list-entry-index">@entry.Index</td><td class="list-entry-value" style="font-family:monospace">@entry.Value</td></tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+    <MudText Typo="Typo.subtitle2" Class="mt-2">Tail</MudText>
+    <MudSimpleTable Class="list-editor-tail" Dense="true" Elevation="0">
+        <tbody>
+            @foreach (var entry in _slice.Tail)
+            {
+                <tr class="list-entry-row"><td class="list-entry-index">@entry.Index</td><td class="list-entry-value" style="font-family:monospace">@entry.Value</td></tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Push</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudTextField id="list-editor-push-value" data-testid="list-editor-push-value" T="string" Value="_pushValue" ValueChanged="v => _pushValue = v ?? string.Empty" Label="Value" Immediate="true" />
+        <MudButton Class="list-editor-push-head" Variant="Variant.Outlined" Disabled="@string.IsNullOrEmpty(_pushValue)" OnClick="@(() => PushAsync(atHead: true))">Push head</MudButton>
+        <MudButton Class="list-editor-push-tail" Variant="Variant.Outlined" Disabled="@string.IsNullOrEmpty(_pushValue)" OnClick="@(() => PushAsync(atHead: false))">Push tail</MudButton>
+    </div>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Trim (keep this range only — destructive)</MudText>
+    <div class="d-flex gap-2 align-end mt-1">
+        <MudNumericField id="list-editor-trim-start" data-testid="list-editor-trim-start" T="long" Value="_trimStart" ValueChanged="v => _trimStart = v" Label="Start" Immediate="true" HideSpinButtons="true" />
+        <MudNumericField id="list-editor-trim-stop" data-testid="list-editor-trim-stop" T="long" Value="_trimStop" ValueChanged="v => _trimStop = v" Label="Stop" Immediate="true" HideSpinButtons="true" />
+        <MudButton Class="list-editor-trim" Variant="Variant.Outlined" Color="Color.Error" OnClick="TrimAsync">Trim</MudButton>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+    [Parameter] public bool IsProd { get; set; }
+
+    private const int Window = 20;
+
+    private ListSlice? _slice;
+    private bool _loading;
+    private string? _error;
+    private string _pushValue = "";
+    private long _trimStart;
+    private long _trimStop = -1;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        var result = await QueryHandler.GetListSliceAsync(ConnectionId, Database, Key, Window, Window);
+        if (result.IsSuccess)
+        {
+            _slice = result.Value;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task PushAsync(bool atHead)
+    {
+        if (string.IsNullOrEmpty(_pushValue))
+        {
+            return;
+        }
+
+        var result = await PushHandler.HandleAsync(new PushListCommand(ConnectionId, ConnectionName, Database, Key, _pushValue, atHead));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add("Pushed", Severity.Success);
+            _pushValue = "";
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task TrimAsync()
+    {
+        // Destructive on a prod-tagged connection: IsProd is sourced server-side from the
+        // connection picker's ConnectionInfo, never a client-suppliable flag.
+        if (!await Confirmation.ConfirmAsync("Trim", Key, IsProd))
+        {
+            return;
+        }
+
+        var result = await TrimHandler.HandleAsync(new TrimListCommand(ConnectionId, ConnectionName, Database, Key, _trimStart, _trimStop));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Trimmed {Key}", Severity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+}

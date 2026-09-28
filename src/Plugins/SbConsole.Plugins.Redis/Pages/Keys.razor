@@ -1,0 +1,354 @@
+@* src/Plugins/SbConsole.Plugins.Redis/Pages/Keys.razor *@
+@page "/p/redis/keys"
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject DeleteKeyCommandHandler DeleteKeyHandler
+@inject RenameKeyCommandHandler RenameKeyHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Redis keys</PageTitle>
+<h1>Keys</h1>
+
+<RedisConnectionDatabasePicker SelectionChanged="OnSelectionChangedAsync" Loading="_scanning" />
+
+@if (_selection is not null)
+{
+    <div class="d-flex align-center flex-wrap gap-2 mb-2">
+        <MudTextField id="keys-pattern" data-testid="keys-pattern" Class="keys-pattern" T="string" Value="_pattern"
+                      ValueChanged="v => _pattern = v ?? string.Empty" Label="Pattern (glob)" Immediate="true" Style="max-width:260px" />
+        <MudSelect T="RedisKeyType?" Class="keys-type-filter" Value="_typeFilter" ValueChanged="v => _typeFilter = v" Label="Type" Style="max-width:180px" Clearable="true">
+            @foreach (var type in Enum.GetValues<RedisKeyType>().Where(t => t != RedisKeyType.Unknown))
+            {
+                <MudSelectItem T="RedisKeyType?" Value="type">@type</MudSelectItem>
+            }
+        </MudSelect>
+        <MudButton Class="keys-scan" Variant="Variant.Filled" Color="Color.Primary" Disabled="_scanning" OnClick="RescanAsync">Scan</MudButton>
+        <MudButton Class="keys-delete-by-pattern" Variant="Variant.Outlined" Color="Color.Error"
+                   Disabled="@string.IsNullOrWhiteSpace(_pattern)" OnClick="OpenDeleteByPatternAsync">Delete matching keys…</MudButton>
+    </div>
+
+    <MudText Typo="Typo.caption" Class="keys-scan-progress mud-text-secondary">
+        @_matches.Count match(es) so far
+        @if (_dbSizeAtStart > 0)
+        {
+            <span>· @_scannedSoFar.ToString("N0", CultureInfo.InvariantCulture) / @_dbSizeAtStart.ToString("N0", CultureInfo.InvariantCulture) scanned</span>
+        }
+        @if (!_complete)
+        {
+            <span> · scanning…</span>
+        }
+    </MudText>
+    @if (!_complete)
+    {
+        <MudProgressLinear Class="keys-scan-progress-bar" Color="Color.Primary" Indeterminate="@(_dbSizeAtStart <= 0)"
+                            Value="@(_dbSizeAtStart > 0 ? 100.0 * _scannedSoFar / _dbSizeAtStart : 0)" />
+    }
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Class="keys-error my-2">@_error</MudAlert>
+    }
+
+    <MudGrid Class="mt-2">
+        <MudItem xs="12" md="5">
+            <MudPaper Class="keys-tree pa-3" Outlined="true">
+                @if (_expandedPrefix is not null)
+                {
+                    <MudButton Class="keys-tree-back" Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _expandedPrefix = null)">&larr; Back to tree</MudButton>
+                    <MudSimpleTable Class="keys-flat-list" Dense="true" Elevation="0">
+                        <thead><tr><th>Key</th><th>Type</th><th>TTL</th><th>Size</th></tr></thead>
+                        <tbody>
+                            @foreach (var match in FlatMatchesUnder(_expandedPrefix))
+                            {
+                                <tr class="@("key-row" + (match.Key == _selectedKey ? " key-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectKey(match))">
+                                    <td class="key-row-key" style="font-family:monospace">@match.Key</td>
+                                    <td><MudChip T="string" Class="key-row-type" Size="Size.Small" Variant="Variant.Outlined">@match.Type</MudChip></td>
+                                    <td class="key-row-ttl">@(match.Ttl is { } ttl ? FormatTtl(ttl) : "no ttl")</td>
+                                    <td class="key-row-size">@FormatBytes(match.ApproximateSizeBytes)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+                else
+                {
+                    @RenderTreeNodes(PrefixTree)
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="7">
+            <MudPaper Class="keys-detail pa-3" Outlined="true">
+                @if (_selectedKey is null)
+                {
+                    <MudText Class="keys-detail-empty mud-text-secondary" Typo="Typo.body2">Select a key to view its value.</MudText>
+                }
+                else
+                {
+                    <div class="d-flex align-center flex-wrap gap-2 mb-3">
+                        <MudText Class="keys-detail-key" Typo="Typo.h6" Style="font-family:monospace">@_selectedKey</MudText>
+                        <MudChip T="string" Class="keys-detail-type" Size="Size.Small" Variant="Variant.Outlined">@_selectedKeyType</MudChip>
+                        <MudSpacer />
+                        <MudButton Class="keys-detail-setttl" Size="Size.Small" Variant="Variant.Outlined" OnClick="OpenSetTtlAsync">Set TTL</MudButton>
+                        <MudButton Class="keys-detail-rename-toggle" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => _renaming = !_renaming)">Rename</MudButton>
+                        <MudButton Class="keys-detail-delete" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteKeyAsync">Delete</MudButton>
+                    </div>
+
+                    @if (_renaming)
+                    {
+                        <div class="d-flex align-center gap-2 mb-3">
+                            <MudTextField id="keys-detail-rename-input" data-testid="keys-detail-rename-input" Class="keys-detail-rename-input" T="string"
+                                          Value="_renameTarget" ValueChanged="v => _renameTarget = v ?? string.Empty" Immediate="true" />
+                            <MudButton Class="keys-detail-rename-submit" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                       Disabled="@string.IsNullOrWhiteSpace(_renameTarget)" OnClick="RenameKeyAsync">Save</MudButton>
+                        </div>
+                    }
+
+                    @switch (_selectedKeyType)
+                    {
+                        case RedisKeyType.String:
+                            <StringEditor ConnectionId="_selection.Connection.Id" ConnectionName="_selection.Connection.Name" Database="_selection.Database" Key="_selectedKey" />
+                            break;
+                        case RedisKeyType.Hash:
+                            <HashEditor ConnectionId="_selection.Connection.Id" ConnectionName="_selection.Connection.Name" Database="_selection.Database" Key="_selectedKey" />
+                            break;
+                        case RedisKeyType.List:
+                            <ListEditor ConnectionId="_selection.Connection.Id" ConnectionName="_selection.Connection.Name" Database="_selection.Database" Key="_selectedKey" IsProd="_selection.Connection.IsProd" />
+                            break;
+                        case RedisKeyType.Set:
+                            <SetEditor ConnectionId="_selection.Connection.Id" ConnectionName="_selection.Connection.Name" Database="_selection.Database" Key="_selectedKey" />
+                            break;
+                        case RedisKeyType.SortedSet:
+                            <SortedSetEditor ConnectionId="_selection.Connection.Id" ConnectionName="_selection.Connection.Name" Database="_selection.Database" Key="_selectedKey" />
+                            break;
+                        default:
+                            <MudAlert Class="keys-detail-unsupported-type" Severity="Severity.Info">This type isn't supported by the Keys browser yet.</MudAlert>
+                            break;
+                    }
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private const char Delimiter = ':';
+    private const int ScanCount = 1000;
+    private const int MaxMatches = 5000;
+    private const int MaxSteps = 50;
+
+    private RedisSelection? _selection;
+    private string _pattern = "*";
+    private RedisKeyType? _typeFilter;
+    private List<KeySummary> _matches = [];
+    private long _cursor;
+    private bool _complete = true;
+    private long _scannedSoFar;
+    private long _dbSizeAtStart;
+    private bool _scanning;
+    private string? _error;
+    private string? _expandedPrefix;
+    private string? _selectedKey;
+    private RedisKeyType? _selectedKeyType;
+    private bool _renaming;
+    private string _renameTarget = "";
+
+    private IReadOnlyList<Components.RedisPrefixNode> PrefixTree =>
+        Components.RedisPrefixTreeBuilder.Build(_matches.Select(m => m.Key), Delimiter);
+
+    private IEnumerable<KeySummary> FlatMatchesUnder(string prefix) =>
+        _matches.Where(m => m.Key == prefix || m.Key.StartsWith(prefix + Delimiter, StringComparison.Ordinal))
+            .OrderBy(m => m.Key, StringComparer.Ordinal);
+
+    private async Task OnSelectionChangedAsync(RedisSelection selection)
+    {
+        _selection = selection;
+        _selectedKey = null;
+        _selectedKeyType = null;
+        _expandedPrefix = null;
+        await RescanAsync();
+    }
+
+    private Task RescanAsync() => ScanAllAsync();
+
+    private async Task ScanAllAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        _scanning = true;
+        _error = null;
+        _matches = [];
+        _cursor = 0;
+        _complete = false;
+        _scannedSoFar = 0;
+        _dbSizeAtStart = 0;
+
+        try
+        {
+            var steps = 0;
+            while (!_complete && _matches.Count < MaxMatches && steps < MaxSteps)
+            {
+                var request = new ScanKeysRequest(selection.Database, _pattern, _typeFilter, _cursor, ScanCount);
+                var result = await QueryHandler.ScanAsync(selection.Connection.Id, request);
+                if (!result.IsSuccess)
+                {
+                    _error = result.Error;
+                    break;
+                }
+
+                var page = result.Value!;
+                _matches.AddRange(page.Matches);
+                _cursor = page.Cursor;
+                _complete = page.Complete;
+                _scannedSoFar += page.KeysScannedSoFar;
+                if (steps == 0)
+                {
+                    _dbSizeAtStart = page.DatabaseKeyCountAtScanStart;
+                }
+
+                steps++;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    private void SelectKey(KeySummary match)
+    {
+        _selectedKey = match.Key;
+        _selectedKeyType = match.Type;
+        _renaming = false;
+        _renameTarget = match.Key;
+    }
+
+    private static string FormatTtl(TimeSpan ttl) =>
+        ttl.TotalDays >= 1 ? $"{ttl.TotalDays:N0}d" : ttl.TotalHours >= 1 ? $"{ttl.TotalHours:N0}h" : ttl.TotalMinutes >= 1 ? $"{ttl.TotalMinutes:N0}m" : $"{ttl.TotalSeconds:N0}s";
+
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        string[] units = ["B", "KB", "MB", "GB"];
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return $"{value.ToString("N1", CultureInfo.InvariantCulture)} {units[unit]}";
+    }
+
+    private async Task OpenSetTtlAsync()
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<SetTtlDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.Database, selection.Database },
+            { x => x.Key, _selectedKey! },
+        };
+        var dialog = await DialogService.ShowAsync<SetTtlDialog>("Set TTL", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = dialog is null ? null : await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            Snackbar.Add("TTL updated", Severity.Success);
+            await RescanAsync();
+        }
+    }
+
+    private async Task OpenDeleteByPatternAsync()
+    {
+        var selection = _selection!;
+        var parameters = new DialogParameters<DeleteByPatternDialog>
+        {
+            { x => x.ConnectionId, selection.Connection.Id },
+            { x => x.ConnectionName, selection.Connection.Name },
+            { x => x.Database, selection.Database },
+            { x => x.Pattern, _pattern },
+            { x => x.IsProd, selection.Connection.IsProd },
+        };
+        var dialog = await DialogService.ShowAsync<DeleteByPatternDialog>("Delete matching keys", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = dialog is null ? null : await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            Snackbar.Add("Matching keys deleted", Severity.Success);
+            _selectedKey = null;
+            _selectedKeyType = null;
+            await RescanAsync();
+        }
+    }
+
+    private async Task DeleteKeyAsync()
+    {
+        var selection = _selection!;
+        var key = _selectedKey!;
+        // IsProd comes from the server-resolved connection picker, never the client.
+        if (!await Confirmation.ConfirmAsync("Delete", key, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        var result = await DeleteKeyHandler.HandleAsync(new DeleteKeyCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Deleted {key}", Severity.Success);
+            _selectedKey = null;
+            _selectedKeyType = null;
+            _matches.RemoveAll(m => m.Key == key);
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task RenameKeyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_renameTarget) || _selection is not { } selection || _selectedKey is not { } key)
+        {
+            return;
+        }
+
+        var result = await RenameKeyHandler.HandleAsync(new RenameKeyCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, _renameTarget));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Renamed to {_renameTarget}", Severity.Success);
+            _renaming = false;
+            var renamed = _renameTarget;
+            var index = _matches.FindIndex(m => m.Key == key);
+            if (index >= 0)
+            {
+                _matches[index] = _matches[index] with { Key = renamed };
+            }
+            _selectedKey = renamed;
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private RenderFragment RenderTreeNodes(IReadOnlyList<Components.RedisPrefixNode> nodes) => __builder =>
+    {
+        <MudSimpleTable Class="keys-tree-list" Dense="true" Elevation="0">
+            <tbody>
+                @foreach (var node in nodes)
+                {
+                    <tr class="prefix-node-row" style="cursor:pointer" @onclick="@(() => _expandedPrefix = node.FullPrefix)">
+                        <td class="prefix-node-segment" style="font-family:monospace">@node.Segment@(node.Children.Count > 0 ? Delimiter.ToString() : "")</td>
+                        <td class="prefix-node-count mud-text-secondary" style="text-align:right">@node.KeyCount</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    };
+}

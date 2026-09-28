@@ -1,0 +1,112 @@
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Keys
+@inject KeysQueryHandler QueryHandler
+@inject DeleteByPatternCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            Pattern <span class="delete-by-pattern-pattern" style="font-family:monospace">@Pattern</span>
+        </MudText>
+
+        @if (_dryRunning)
+        {
+            <MudProgressCircular Class="delete-by-pattern-dryrun-busy" Size="Size.Small" Indeterminate="true" />
+            <MudText Typo="Typo.caption" Class="ml-2">Running dry run…</MudText>
+        }
+        else if (_dryRunError is not null)
+        {
+            <MudAlert Class="delete-by-pattern-dryrun-error" Severity="Severity.Error" Dense="true">@_dryRunError</MudAlert>
+        }
+        else if (_dryRun is not null)
+        {
+            <MudText Class="delete-by-pattern-dryrun-result" Typo="Typo.body2">
+                Would delete <b>@_dryRun.WouldDeleteKeyCount.ToString("N0", CultureInfo.InvariantCulture)</b> key(s),
+                approximately @_dryRun.WouldDeleteBytes.ToString("N0", CultureInfo.InvariantCulture) bytes.
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-1">Method: UNLINK, batches of 500.</MudText>
+        }
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="delete-by-pattern-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Class="delete-by-pattern-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="delete-by-pattern-continue" Color="Color.Error" Variant="Variant.Filled"
+                   Disabled="@(_dryRunning || _dryRun is null || _busy)" OnClick="DeleteAsync">Continue…</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Pattern { get; set; } = "";
+    [Parameter] public bool IsProd { get; set; }
+
+    private DryRunDeleteByPatternResult? _dryRun;
+    private bool _dryRunning = true;
+    private string? _dryRunError;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await QueryHandler.DryRunDeleteByPatternAsync(ConnectionId, Database, Pattern);
+        if (result.IsSuccess)
+        {
+            _dryRun = result.Value;
+        }
+        else
+        {
+            _dryRunError = result.Error;
+        }
+        _dryRunning = false;
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_dryRun is null)
+        {
+            return;
+        }
+
+        // The dry-run count -- real server state, not a client guess -- is what the confirmation
+        // dialog shows (design spec §5/§6); IsProd is a parameter the caller already resolved
+        // server-side via IConnectionProvider, never a client-suppliable flag.
+        if (!await Confirmation.ConfirmAsync("Delete", Pattern, IsProd, count: (int)Math.Min(_dryRun.WouldDeleteKeyCount, int.MaxValue)))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await DeleteHandler.HandleAsync(new DeleteByPatternCommand(ConnectionId, ConnectionName, Database, Pattern, _dryRun.WouldDeleteKeyCount));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(result.Value));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
