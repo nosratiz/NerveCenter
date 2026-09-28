@@ -17,9 +17,7 @@ public sealed class RedisPlugin : IPlugin
         new PluginNavItem("Overview", "/p/redis/overview", "speedometer"),
     ];
 
-    // A custom connection form (mockup 1f) ships later in this same plan; until then the host
-    // falls back to its default flat-textbox secret editor (SDK default behaviour).
-    public Type? ConnectionFormComponentType => null;
+    public Type? ConnectionFormComponentType => typeof(RedisConnectionFields);
 
     public IReadOnlyDictionary<string, string> GetConnectionSummary(string secret)
     {

@@ -29,9 +29,9 @@ public class RedisPluginTests
     }
 
     [Fact]
-    public void Connection_form_component_falls_back_to_the_host_default_for_now()
+    public void Connection_form_component_is_the_redis_connection_fields_component()
     {
-        new RedisPlugin().ConnectionFormComponentType.Should().BeNull();
+        new RedisPlugin().ConnectionFormComponentType.Should().Be(typeof(RedisConnectionFields));
     }
 
     [Fact]

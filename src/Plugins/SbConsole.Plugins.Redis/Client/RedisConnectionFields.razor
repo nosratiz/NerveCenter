@@ -1,0 +1,92 @@
+@* src/Plugins/SbConsole.Plugins.Redis/Client/RedisConnectionFields.razor *@
+@using MudBlazor
+
+<MudTextField T="string" id="redis-conn-host" Label="Host:port" Value="_host" ValueChanged="@(v => OnFieldChanged(v, x => _host = x))" Immediate="true" />
+
+<MudSelect T="RedisTopology" id="redis-conn-topology" Label="Topology" Value="_topology" ValueChanged="OnTopologyChanged" Class="mt-3">
+    <MudSelectItem Value="RedisTopology.Standalone">Standalone</MudSelectItem>
+    <MudSelectItem Value="RedisTopology.Sentinel">Sentinel</MudSelectItem>
+    <MudSelectItem Value="RedisTopology.Cluster">Cluster</MudSelectItem>
+</MudSelect>
+
+@if (_topology == RedisTopology.Sentinel)
+{
+    <MudTextField T="string" id="redis-conn-servicename" Label="Service name" Value="_serviceName" ValueChanged="@(v => OnFieldChanged(v, x => _serviceName = x))" Immediate="true" Class="mt-3" />
+}
+
+<MudTextField T="string" id="redis-conn-user" Label="ACL user" Value="_user" ValueChanged="@(v => OnFieldChanged(v, x => _user = x))" Immediate="true" Class="mt-3" />
+<MudTextField T="string" id="redis-conn-password" Label="Password" InputType="InputType.Password" Value="_password" ValueChanged="@(v => OnFieldChanged(v, x => _password = x))" Immediate="true" Class="mt-3" />
+
+<MudCheckBox T="bool" data-testid="redis-conn-tls" Value="_ssl" ValueChanged="OnSslChanged" Label="TLS · verify certificate" Class="mt-3" />
+<MudCheckBox T="bool" data-testid="redis-conn-preferreplica" Value="_preferReplica" ValueChanged="OnPreferReplicaChanged" Label="Read from replica when possible" />
+
+@if (IsProd && !_ssl)
+{
+    <MudAlert Severity="Severity.Warning" Class="mt-2">This is a prod-tagged connection without TLS — credentials travel in plaintext.</MudAlert>
+}
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    [Parameter] public bool IsProd { get; set; }
+
+    private RedisTopology _topology = RedisTopology.Standalone;
+    private string _host = "";
+    private string? _serviceName;
+    private string? _user;
+    private string? _password;
+    private bool _ssl;
+    private bool _preferReplica;
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment (SbConsole.Sdk) and the
+    // sibling plugins' connection-field components for why: the host round-trips whatever this
+    // component last emitted back into InitialSecret on every parent render, and re-parsing on
+    // OnParametersSet would fight the user's in-progress typing.
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(InitialSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = RedisConnectionSettings.Parse(InitialSecret);
+            _topology = settings.Topology;
+            _host = settings.EndpointHostPorts.FirstOrDefault() ?? "";
+            _serviceName = settings.ServiceName;
+            _user = settings.User;
+            _password = settings.Password;
+            _ssl = settings.Ssl;
+            _preferReplica = settings.PreferReplicaForReads;
+        }
+        catch (FormatException)
+        {
+            // Unparsable/empty initial secret — leave the defaults above so the form still renders.
+        }
+        catch (ArgumentException)
+        {
+            // Same "never throw out of a UI hydration path" contract as RedisPlugin.GetConnectionSummary:
+            // a bad topology token or an unrecognized ConfigurationOptions keyword also lands here.
+        }
+    }
+
+    private Task OnTopologyChanged(RedisTopology value) { _topology = value; return RaiseChangedAsync(); }
+    private Task OnSslChanged(bool value) { _ssl = value; return RaiseChangedAsync(); }
+    private Task OnPreferReplicaChanged(bool value) { _preferReplica = value; return RaiseChangedAsync(); }
+
+    private Task OnFieldChanged(string value, Action<string> assign)
+    {
+        assign(value);
+        return RaiseChangedAsync();
+    }
+
+    private Task RaiseChangedAsync()
+    {
+        var settings = new RedisConnectionSettings(
+            _topology,
+            string.IsNullOrWhiteSpace(_host) ? [] : [_host],
+            _user, _password, _ssl, _serviceName, _preferReplica, DefaultDatabase: 0);
+        return SecretChanged.InvokeAsync(settings.ToSecretString());
+    }
+}
