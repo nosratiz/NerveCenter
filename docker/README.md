@@ -164,12 +164,17 @@ with no TTL on purpose, so the Overview page's "no TTL" story has something to p
 
 ### Connect the app to it (Redis)
 
-In SbConsole, **Connections → Add**, kind *Redis*: Topology Standalone, Host `localhost`, Port
-`6379`, Password `sbconsole`, TLS off. The equivalent raw secret is:
+In SbConsole, **Connections → Add**, kind *Redis*: Topology Standalone, Host:port
+`localhost:6379`, Password `sbconsole`, TLS off. The equivalent raw secret is:
 
 ```
 standalone|0|localhost:6379,password=sbconsole
 ```
+
+Note: `User`/`Password` in this secret are percent-encoded (`RedisConnectionSettings`, since
+`ConfigurationOptions` has no escape syntax for a comma inside a value) — if you're hand-editing a
+secret via the API rather than through the connection form, a literal `%` sequence in the password
+(e.g. `%2C`) will be decoded, so escape any `%` in a hand-written password as `%25`.
 
 From the containerised app (if running SbConsole in a container), use `redis:6379` instead of
 `localhost:6379` — reached by its service name on the compose network, the same way the Kafka

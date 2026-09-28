@@ -1065,15 +1065,23 @@ unit-tested directly with no broker. `RedisOperations` itself stays thin: connec
 StackExchange.Redis API, hand the raw result to the matching parser.
 
 **Overview page** (`Pages/Overview.razor`, `Overview/GetOverviewQueryHandler`,
-`GetMemoryByPrefixQueryHandler`, `GetSlowLogQueryHandler`): server health (version, mode, connected
-replicas, used/max memory, eviction policy, hit ratio, ops/sec, keyspace per DB), a memory-by-prefix
-sample, and the slow log. Byte formatting uses binary (1024) scaling throughout, matching Redis's own
-`INFO`/`MEMORY` convention rather than decimal (1000) SI units.
+`GetMemoryByPrefixQueryHandler`, `GetSlowLogQueryHandler`): a connection picker plus a tile row for
+used memory (with % of maxmemory), hit ratio, ops/sec, and total evicted keys, followed by a
+memory-by-prefix sample table and a slow log table. `ServerOverview` itself carries more fields
+than the page renders (version, mode, connected replicas, max-memory policy, keyspace per DB) —
+those are parsed and available but not yet surfaced in this page's UI. A failed memory-by-prefix or
+slow-log sub-call shows an inline warning next to that table (including ACL/NOPERM text) rather than
+silently rendering an empty table. Byte formatting uses binary (1024) scaling throughout, matching
+Redis's own `INFO`/`MEMORY` convention rather than decimal (1000) SI units.
 
-**Host hooks:** `GetDashboardMetricsAsync` reports "Used memory %" and "Hit ratio %" per connection.
+**Host hooks:** `GetDashboardMetricsAsync` reports no metrics (`[]`) — the host's dashboard sums
+same-label metrics across every connection of a plugin, which doesn't work for a percentage (two
+Redis connections at 60% and 90% memory would render as "150"); the real memory-pressure signal is
+already surfaced correctly, per-connection, via `GetDashboardProblemsAsync` below, since problems
+are listed individually rather than summed.
 `GetDashboardProblemsAsync` raises one "Warning" when used memory crosses 90% of `maxmemory` (no
 problem when `maxmemory` is unbounded — a `0`/`null` cap means eviction can't trigger, so there's
-nothing to warn about), linking to `/p/redis/overview`. Both call `RedisOperations` directly rather
+nothing to warn about), linking to `/p/redis/overview`. It calls `RedisOperations` directly rather
 than through DI, matching the SDK-hook convention elsewhere in this codebase (the host resolves no
 scoped services when calling these). The public method constructs the real `RedisOperations`;
 `GetDashboardProblemsAsyncForTesting` is an internal seam taking `IRedisOperations` so tests substitute

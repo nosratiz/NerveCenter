@@ -32,15 +32,27 @@ RabbitMQ shipped (`rabbitmq-plugin.md` then `rabbitmq-phase2.md`) — each
 phase is independently working, testable software:
 
 - **Phase 1** (`docs/superpowers/plans/2026-09-28-redis-plugin.md`): plugin
-  scaffold, connection handling (Standalone + Sentinel topologies), Overview
-  page, Keys browser with all five non-stream type editors, TTL/rename/
-  delete/delete-by-pattern, local dev stack.
+  scaffold, connection handling (Standalone + Sentinel topologies), and a
+  read-only Overview page (memory, hit ratio, evictions, memory-by-prefix,
+  slow log), plus the local dev stack. **Correction (post-implementation):**
+  the Keys browser (all five non-stream type editors, TTL/rename/delete/
+  delete-by-pattern) described in this section's original draft did **not**
+  ship in phase 1 — it turned out to be substantial enough on its own to
+  warrant its own plan, consistent with §12's phase-1 scope note and this
+  section's own three-phase list below. The Keys browser is now planned as
+  its own follow-on plan (before Streams/Pub-Sub), not folded into phase 1.
+  See §7 for what phase 1's UI actually is, and "Known Phase 1 limitations"
+  at the end of this document.
 - **Phase 2** (`…-redis-plugin-phase2.md`, written after phase 1 lands):
   Streams — overview, consumer groups, pending-entries list (claim/ack/
   XDEL), XADD, trim, dashboard integration.
 - **Phase 3** (`…-redis-plugin-phase3.md`): Pub/Sub (channel list + live
   tail + publish), Cluster topology (per-shard SCAN, hides the db picker),
   FLUSHDB confirmation, remaining empty/error states (mockup 1g).
+
+(The Keys browser, mentioned above as deferred out of phase 1, ships as its
+own plan ahead of Streams — its scope is described in §7 pending that plan's
+own spec addendum.)
 
 Cluster is deferred past phase 1 specifically because its shard-enumeration
 API needs verifying against the installed `StackExchange.Redis` version
@@ -71,25 +83,35 @@ reusing the library for every other field (endpoints, TLS, ServiceName,
 DefaultDatabase), with a minimal, targeted encoding layer on top for the
 one gap it has, the same shape as RabbitMQ's own percent-encoding precedent
 (`docs/design.md` §6.8) for a value its format can't otherwise carry safely.
-The secret is a single string, an envelope of two parts:
+The secret is a single string, an envelope of three parts (**corrected from
+this section's original two-part draft** — implementation added a
+`preferReplica` segment, since "read from replica when possible" is a
+connection-level toggle that also can't be expressed unambiguously inside
+`ConfigurationOptions` alone):
 
 ```
-"{topology}|{configurationOptionsString}"
+"{topology}|{preferReplica}|{configurationOptionsString}"
 ```
 
-e.g. `"standalone|redis-01.uk.internal:6380,password=hunter2,ssl=True,user=sbconsole"`
-or `"sentinel|sentinel-1:26379,sentinel-2:26379,serviceName=uk-prod,password=hunter2"`.
+e.g. `"standalone|1|redis-01.uk.internal:6380,password=hunter2,ssl=True,user=sbconsole"`
+or `"sentinel|0|sentinel-1:26379,sentinel-2:26379,serviceName=uk-prod,password=hunter2"`.
 
 `topology` is one of `standalone` | `sentinel` | `cluster` (cluster wired in
 phase 3, but the enum and parser handle all three from phase 1 so phase 3
-doesn't have to touch the secret format). The prefix is necessary because
-`ConfigurationOptions` alone can't unambiguously distinguish "one endpoint,
-standalone" from "one seed endpoint, cluster" or reliably signal Sentinel
-vs. a replica list — and the connection form (mockup 1f) needs to know which
-fields to show *before* ever connecting. `RedisConnectionSettings` (§3) owns
-parsing/building this envelope; it is pure logic, fully unit-testable
-without a server, following `RabbitConfigParser`'s precedent
+doesn't have to touch the secret format). `preferReplica` is `0` or `1`.
+The prefix is necessary because `ConfigurationOptions` alone can't
+unambiguously distinguish "one endpoint, standalone" from "one seed
+endpoint, cluster", reliably signal Sentinel vs. a replica list, or carry a
+read-preference toggle — and the connection form (mockup 1f) needs to know
+which fields to show *before* ever connecting. `RedisConnectionSettings`
+(§3) owns parsing/building this envelope; it is pure logic, fully
+unit-testable without a server, following `RabbitConfigParser`'s precedent
 (`docs/design.md` §6.8) of a plugin-owned parser under `Client/`.
+`User`/`Password` inside the `configurationOptionsString` portion are
+percent-encoded (see the decision above this one) — a real example secret
+looks like `"standalone|0|localhost:6379,password=hunter2"` for a
+comma-free password, or with a comma in the password,
+`"standalone|0|localhost:6379,password=hunter2%2Cwith-a-comma"`.
 
 **"Vhost"-equivalent: database index.** Redis standalone/Sentinel expose 16
 logical databases (`SELECT 0-15`); Cluster has exactly one (db0, hidden —
@@ -140,17 +162,22 @@ public sealed record RedisConnectionSettings(
     public string ToSecretString();
 }
 
-// ServerOverview.cs — phase 1
+// ServerOverview.cs — phase 1 (shape below is what actually shipped —
+// corrected from this section's original draft, which listed
+// `EvictedPerMinute` in place of `ExpiredKeysTotal`)
 public sealed record ServerOverview(
     string RedisVersion, string Mode, int ConnectedReplicas,
     long UsedMemoryBytes, long? MaxMemoryBytes, string MaxMemoryPolicy, double MemoryFragmentationRatio,
-    double HitRatioPercent, long OpsPerSecond, long EvictedKeysTotal, long EvictedPerMinute,
+    double HitRatioPercent, long OpsPerSecond, long EvictedKeysTotal, long ExpiredKeysTotal,
     long ConnectedClients, long BlockedClients,
     IReadOnlyList<KeyspaceDatabaseInfo> Databases);
 
 public sealed record KeyspaceDatabaseInfo(int Index, long KeyCount, long KeysWithExpiry);
 
-public sealed record MemoryByPrefixEntry(string Prefix, long EstimatedBytes, int SampledKeyCount, int KeysWithoutTtlCount, string Kind); // Kind: "keys" | "stream"
+// MemoryByPrefixEntry.cs — phase 1 (shape below is what actually shipped —
+// corrected from this section's original draft, which had `EstimatedBytes`
+// and a `Kind` discriminator in place of `SampledBytes`)
+public sealed record MemoryByPrefixEntry(string Prefix, long SampledBytes, int SampledKeyCount, int KeysWithoutTtlCount);
 
 public sealed record SlowLogEntry(DateTimeOffset At, TimeSpan Duration, string Command, string? ClientAddress);
 
@@ -182,6 +209,19 @@ public sealed record ScanKeysRequest(int Database, string? Pattern, RedisKeyType
 public sealed record SetTtlRequest(int Database, string Key, TimeSpan? ExpireIn, DateTimeOffset? ExpireAt, bool Persist);
 public sealed record DryRunDeleteByPatternResult(long WouldDeleteKeyCount, long WouldDeleteBytes, bool Complete);
 ```
+
+**Corrections to the DTOs above (post-implementation):** `ServerOverview`
+drops `EvictedPerMinute` — Redis's `INFO` only exposes a cumulative
+`evicted_keys` counter, not a rate, and computing a real per-minute rate
+needs the SDK's `MetricHistoryStore` sampling two points over time, a
+bigger, separable piece of work not needed for the Overview page to be
+useful; `EvictedKeysTotal` (cumulative) ships instead, and a rate can be
+layered on later without changing this shape. `MemoryByPrefixEntry` drops
+the `Kind`/`EstimatedBytes` naming in favor of `SampledBytes` — it reports
+the actual sampled bytes for whatever keys were sampled (matching the
+mockup's own "sampled · MEMORY USAGE" caption), not an extrapolated total,
+and phase 1 doesn't fetch each key's type for this table (an extra round
+trip with no functional use yet).
 
 Stream/consumer-group/PEL DTOs (`StreamOverview`, `StreamConsumerGroupSummary`,
 `StreamConsumer`, `StreamPendingEntry`, `StreamEntry`) and Pub/Sub DTOs
@@ -305,61 +345,56 @@ confirmation dialog always comes from the server-resolved `ConnectionInfo`
 (`IConnectionProvider`), never a client-supplied flag; audit rows are
 written for attempted destructive commands even on failure.
 
-## 7. UI (phase 1)
+## 7. UI (phase 1 — corrected to match what actually shipped)
 
-Nav items (`RedisPlugin.NavItems`), matching mockup 1a/1b's sidebar:
+**This section is corrected post-implementation.** The original draft below
+described four nav items (Overview/Keys/Streams/Pub-Sub) with placeholder
+pages for the unbuilt ones, an auto-refresh mechanism, and a
+`StaleDataBanner`. None of that shipped in phase 1. What phase 1 actually
+has:
 
-```csharp
-new PluginNavItem("Overview", "/p/redis/overview", "speedometer"),
-new PluginNavItem("Keys", "/p/redis/keys", "key"),
-new PluginNavItem("Streams", "/p/redis/streams", "list-bullets"),   // phase 2 page; nav item ships in phase 1 so the shell doesn't change shape later
-new PluginNavItem("Pub/Sub", "/p/redis/pubsub", "broadcast"),        // phase 3 page
-```
+- `RedisPlugin.NavItems` is a **single** item:
+  `new PluginNavItem("Overview", "/p/redis/overview")` (no icon argument —
+  matching the other four plugins' convention of passing none, rather than
+  a string MudBlazor's `Icon` property, which expects SVG path markup, can't
+  render). Keys/Streams/Pub-Sub nav items are **not** present yet — they are
+  added by whichever later plan builds that page, rather than being
+  stubbed out ahead of time with placeholder bodies. This is a deliberate
+  change from the original draft's "ship all four nav items up front" plan:
+  it turned out simpler to add a nav item exactly when its page exists.
+- **`Pages/Overview.razor`** (`/p/redis/overview`): connection picker (no
+  db picker — overview is server-wide), a memory/hit-ratio/ops/evicted-count
+  tile row, a memory-by-prefix table, and a slow log table. Failures in the
+  memory-by-prefix or slow-log sub-calls render an inline `MudAlert`
+  warning next to that table (showing the friendly error, including
+  ACL/NOPERM text) without blanking the rest of the page. There is **no**
+  auto-refresh and **no** `StaleDataBanner` in phase 1 — the page loads once
+  per connection selection; the mockup's auto-refresh interval and
+  stale-data dimming are deferred (see "Known Phase 1 limitations" below).
+- **`Client/RedisConnectionFields.razor`** (mockup 1f's connection form):
+  topology select (Standalone/Sentinel/Cluster — Cluster option present but
+  its extra fields are phase 3; selecting it in phase 1 just stores the
+  topology token and `TestConnectionAsync`/`RedisConnectionFactory` reject
+  it clearly at connect time), host:port, service name (Sentinel only —
+  and only actually applied to the connection when the topology is
+  Sentinel; see the Sentinel note below), ACL user/password, TLS checkbox,
+  "read from replica when possible" checkbox. `IsProd`-and-no-TLS shows a
+  `MudAlert` warning, same pattern as `RabbitConnectionFields`.
+- **Keys browser, Streams, Pub/Sub pages**: not built in phase 1 (see §1's
+  correction) — separate, later plans.
 
-Streams/Pub/Sub nav entries route to a page in phase 1 too, showing a
-plain "not built yet" placeholder body — this keeps `RedisPlugin.NavItems`
-and the sidebar stable across phases (no nav item appears/disappears
-mid-rollout) while phases 2/3 fill in the real page.
+**Sentinel note:** `ServiceName` is only carried onto the real
+`ConfigurationOptions` when `Topology == Sentinel` — a leftover value from
+switching the topology control away from Sentinel is dropped rather than
+silently putting a Standalone connection into Sentinel mode (setting
+`ServiceName` is what triggers Sentinel mode in StackExchange.Redis).
+Conversely, `RedisConnectionFactory` rejects a Sentinel-topology connection
+with no service name before attempting to connect, rather than silently
+connecting to the sentinel node itself as if it were the primary.
 
-- **`Pages/Overview.razor`** (`/p/redis/overview`): connection picker
-  (no db picker — overview is server-wide), memory/hit-ratio/ops/evictions
-  tile row (memory tile wide per mockup 1a, red tick at eviction threshold
-  on its bar), memory-by-prefix table, slow log table. Auto-refreshes on
-  the same `AutoRefresh`/`IPluginStore`-persisted-interval pattern as
-  RabbitMQ's `Queues.razor` (`docs/design.md` §6.8); stale data dims
-  rather than blanking on a failed refresh (`StaleDataBanner`, copied into
-  this plugin's own `Components/` per the "plugins share nothing but Sdk"
-  rule).
-- **`Pages/Keys.razor`** (`/p/redis/keys`): connection + database-index
-  picker in the header (round-tripped into the URL query string, matching
-  `ConnectionVhostPicker`'s pattern minus the vhost axis). Left pane: scan
-  progress bar + prefix tree (split on `:`, a plugin setting with default
-  `:`) + flat match list once a leaf prefix is expanded, each row showing
-  type tag / TTL-or-"no ttl" / size. Right pane: the selected key's value
-  editor, one Razor component per `RedisKeyType`
-  (`Components/StringEditor.razor`, `HashEditor.razor`, `ListEditor.razor`,
-  `SetEditor.razor`, `SortedSetEditor.razor`) swapped via a `@switch` on
-  type — mirroring mockup 1c's four side-by-side type panels, but shown
-  one at a time in the master/detail layout of 1b. Secret-pattern field
-  masking (`csrf`, `token`, `*secret*` — case-insensitive substring match,
-  a plugin setting) applies inside `HashEditor`'s field table; the "reveal"
-  action is itself audited (`redis.field.reveal`, `Safe` risk, since it's
-  read-only but sensitive).
-- **`Pages/SetTtlDialog.razor`, `DeleteByPatternDialog.razor`**: mockup 1f.
-  `DeleteByPatternDialog` calls `DryRunDeleteByPatternAsync` on open and
-  disables "Continue…" until the dry run completes.
-- **`RedisConnectionFields.razor`** (mockup 1f's connection form):
-  topology segmented control (Standalone/Sentinel/Cluster — Cluster option
-  present but its extra fields are phase 3; selecting it in phase 1 just
-  stores the topology token), host:port (+ additional seed endpoints for
-  Sentinel), ACL user/password, TLS checkbox, "read from replica when
-  possible" checkbox, tags. `IsProd`-and-no-TLS shows a `MudAlert` warning,
-  same pattern as `RabbitConnectionFields`.
+## 8. Dashboard problems and nav badge (phase 1 scope — corrected)
 
-## 8. Dashboard problems and nav badge (phase 1 scope)
-
-Phase 1 implements `GetDashboardMetricsAsync` (used memory %, hit ratio) and
-a memory-pressure `GetDashboardProblemsAsync`:
+Phase 1 implements a memory-pressure `GetDashboardProblemsAsync`:
 
 ```csharp
 private const double MemoryProblemThresholdPercent = 90.0;
@@ -377,6 +412,18 @@ public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsy
         "/p/redis/overview")];
 }
 ```
+
+**Correction (post-implementation): `GetDashboardMetricsAsync` returns no
+metrics** (`[]`), not the "used memory %"/"hit ratio %" pair this section
+originally specified. The host's dashboard (`Home.razor`) **sums**
+same-label `PluginDashboardMetric` values across every connection of a
+plugin — appropriate for a count, meaningless for a percentage (two Redis
+connections at 60% and 90% memory would render as "150"). The real
+memory-pressure signal is already surfaced correctly, per-connection, via
+`GetDashboardProblemsAsync` above, since problems are listed individually
+rather than summed. Rather than invent a new summable metric (e.g. a
+connections-over-threshold count) without an actual dashboard consumer for
+it, this hook reports nothing for now; revisit once there's a real need.
 
 The "pel" nav badge shown on the Streams item in the mockup (1a/1b/1d's
 sidebar) is `GetNavBadgeAsync` returning the total pending-entry count
@@ -443,3 +490,40 @@ changes, once the stream DTOs exist to seed meaningfully.
   to reuse for the confirm dialog's ACL-denial notice.
 - Big-keys report, Sentinel failover view (the mockup's own "try next"
   suggestions at the bottom of the doc) — not requested, not planned.
+- The Keys browser (all five non-stream type editors, TTL/rename/delete/
+  delete-by-pattern) — originally drafted as part of phase 1 (§1), it
+  turned out substantial enough to warrant its own plan; see §1's
+  correction.
+
+## Known Phase 1 limitations
+
+Flagged by the closing whole-branch review as legitimate but larger-scope
+items, each deliberately deferred rather than fixed under this phase's time
+pressure. Revisit these when the Keys plan lands, since several of them
+(connection caching, per-key I/O concurrency) get materially more
+important once that plan adds many more per-key round trips per page:
+
+- **Sentinel is effectively single-endpoint.** The connection form has one
+  Host:port field; a real Sentinel HA setup needs multiple seed endpoints.
+  Not fixed in the UI — revisit with the Keys plan or whenever multi-seed
+  Sentinel support is actually needed.
+- **Memory-by-prefix sampling is sequential**, and can block the Overview
+  page for tens of seconds against a large remote keyspace (up to 5,000
+  keys, each a sequential `MEMORY USAGE` + TTL round trip) — worth
+  refactoring to concurrent `Task.WhenAll` before/during the Keys plan,
+  which will have much more of this kind of per-key I/O.
+- **"Read from replica" (`PreferReplicaForReads`) is stored and
+  round-tripped through the secret but not actually applied** — no
+  `CommandFlags.PreferReplica` anywhere yet.
+- **No connection multiplexer caching** — every operation call does a full
+  `ConnectionMultiplexer` handshake; an Overview page load alone does
+  three. Acceptable for this phase's read-only, low-traffic page, but
+  should land before the Keys plan, which will make many more calls per
+  page.
+- **`RedisConnectionFactory.ConnectAsync(...).WaitAsync(ct)` can leak a
+  connection on cancellation** — the underlying connect isn't actually
+  cancelled, just abandoned by the awaiting task, and the resulting
+  multiplexer (once it finishes connecting) is never disposed.
+- **`AbortOnConnectFail = false`** on these short-lived, one-shot
+  connections means connect/auth failures surface later as generic errors
+  rather than a clear failure type early — worth revisiting.
