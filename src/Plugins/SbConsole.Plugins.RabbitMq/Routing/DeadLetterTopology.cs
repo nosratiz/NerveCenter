@@ -70,10 +70,12 @@ public sealed class DeadLetterTopology
 
         bool IsTerminal(string queue) => byName.TryGetValue(queue, out var q) && q.DeadLetterExchange is null;
 
+        string? AlternateOf(string name) => exchangesByName.GetValueOrDefault(name)?.AlternateExchange;
+
         var dlqs = new HashSet<string>(StringComparer.Ordinal);
         foreach (var dlx in dlxs)
         {
-            foreach (var queue in ReachableQueues(dlx, bindings))
+            foreach (var queue in ReachableQueues(dlx, bindings, AlternateOf))
             {
                 if (IsTerminal(queue)) dlqs.Add(queue);
             }
@@ -124,7 +126,11 @@ public sealed class DeadLetterTopology
     /// reachable exchange missing from the exchange list (other than the DLX itself, which falls
     /// back to direct) is a dead end -- and so doesn't count against determinism -- only when it has
     /// no outgoing bindings of its own; one that does is unknown and can route anywhere, so it always
-    /// counts as unpredictable.
+    /// counts as unpredictable. "Reachable" also follows each hop's alternate exchange (used when
+    /// nothing else matches) as an extra edge, so a hop's alternate being unpredictable also breaks
+    /// determinism; even when the reachability scan calls a hop deterministic, the actual
+    /// <see cref="RoutingMatcher.ResolveDeep"/> run for this key is still checked for an
+    /// unpredictable or hop-limited alternate-exchange detour before trusting its result.
     /// </summary>
     public DeadLetterRoute? RouteOut(string sourceQueue)
     {
@@ -150,7 +156,10 @@ public sealed class DeadLetterTopology
             return new DeadLetterRoute(dlx, dlrk, [], true, setBy);
         }
 
-        var (reachableQueues, reachableExchanges, reachedHopLimit) = ReachableTopology(dlx, _bindings);
+        string? AlternateOf(string name) =>
+            string.Equals(name, dlx, StringComparison.Ordinal) ? exchange.AlternateExchange : _exchanges.GetValueOrDefault(name)?.AlternateExchange;
+
+        var (reachableQueues, reachableExchanges, reachedHopLimit) = ReachableTopology(dlx, _bindings, AlternateOf);
 
         string? TypeOf(string name) =>
             string.Equals(name, dlx, StringComparison.Ordinal) ? exchange.Type : _exchanges.GetValueOrDefault(name)?.Type;
@@ -167,10 +176,13 @@ public sealed class DeadLetterTopology
         if (dlrk is not null && keyDeterministic)
         {
             var deep = RoutingMatcher.ResolveDeep(exchange, [.. _exchanges.Values, exchange], _bindings, dlrk, new Dictionary<string, string>());
-            return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
+            if (deep.UnpredictableExchanges.Count == 0 && !deep.ReachedHopLimit)
+            {
+                return new DeadLetterRoute(dlx, dlrk, deep.Queues.Select(q => q.Queue).ToList(), false, setBy);
+            }
         }
 
-        var allFanout = !reachedHopLimit && reachableExchanges.All(name => TypeOf(name) == "fanout");
+        var allFanout = !reachedHopLimit && reachableExchanges.All(name => IsDeadEnd(name) || TypeOf(name) == "fanout");
 
         if (dlrk is null && allFanout)
         {
@@ -183,12 +195,15 @@ public sealed class DeadLetterTopology
     /// <summary>
     /// Every queue a message leaving <paramref name="exchange"/> could reach, ignoring routing keys,
     /// and every exchange (including <paramref name="exchange"/> itself) it passes through on the
-    /// way, through any number of exchange-to-exchange hops (cycle-safe, <see cref="RoutingMatcher.MaxHops"/>
-    /// deep). <c>ReachedHopLimit</c> is true when a hop was refused only because the depth limit was
-    /// reached (not merely because it revisits an already-explored exchange).
+    /// way, through any number of exchange-to-exchange hops, following both real bindings and each
+    /// hop's alternate exchange (<paramref name="alternateExchangeOf"/>, keyed by exchange name --
+    /// used conservatively, without checking whether a binding would already have matched) as an
+    /// extra edge (cycle-safe, <see cref="RoutingMatcher.MaxHops"/> deep). <c>ReachedHopLimit</c> is
+    /// true when a hop was refused only because the depth limit was reached (not merely because it
+    /// revisits an already-explored exchange).
     /// </summary>
     private static (IReadOnlyList<string> Queues, IReadOnlyList<string> Exchanges, bool ReachedHopLimit) ReachableTopology(
-        string exchange, IReadOnlyList<BindingInfo> bindings)
+        string exchange, IReadOnlyList<BindingInfo> bindings, Func<string, string?> alternateExchangeOf)
     {
         var queues = new List<string>();
         var seenQueues = new HashSet<string>(StringComparer.Ordinal);
@@ -201,24 +216,38 @@ public sealed class DeadLetterTopology
         while (frontier.Count > 0)
         {
             var (current, depth) = frontier.Dequeue();
+
+            void FollowExchange(string next)
+            {
+                if (depth < RoutingMatcher.MaxHops)
+                {
+                    if (visited.Add(next))
+                    {
+                        exchanges.Add(next);
+                        frontier.Enqueue((next, depth + 1));
+                    }
+                }
+                else if (!visited.Contains(next))
+                {
+                    reachedHopLimit = true;
+                }
+            }
+
             foreach (var b in bindings.Where(b => string.Equals(b.Source, current, StringComparison.Ordinal)))
             {
                 if (b.IsToQueue)
                 {
                     if (seenQueues.Add(b.Destination)) queues.Add(b.Destination);
                 }
-                else if (depth < RoutingMatcher.MaxHops)
+                else
                 {
-                    if (visited.Add(b.Destination))
-                    {
-                        exchanges.Add(b.Destination);
-                        frontier.Enqueue((b.Destination, depth + 1));
-                    }
+                    FollowExchange(b.Destination);
                 }
-                else if (!visited.Contains(b.Destination))
-                {
-                    reachedHopLimit = true;
-                }
+            }
+
+            if (alternateExchangeOf(current) is { Length: > 0 } alternate)
+            {
+                FollowExchange(alternate);
             }
         }
 
@@ -227,10 +256,10 @@ public sealed class DeadLetterTopology
 
     /// <summary>
     /// Every queue a message leaving <paramref name="exchange"/> could reach, ignoring routing keys,
-    /// through any number of exchange-to-exchange hops.
+    /// through any number of exchange-to-exchange hops (see <see cref="ReachableTopology"/>).
     /// </summary>
-    private static IReadOnlyList<string> ReachableQueues(string exchange, IReadOnlyList<BindingInfo> bindings) =>
-        ReachableTopology(exchange, bindings).Queues;
+    private static IReadOnlyList<string> ReachableQueues(string exchange, IReadOnlyList<BindingInfo> bindings, Func<string, string?> alternateExchangeOf) =>
+        ReachableTopology(exchange, bindings, alternateExchangeOf).Queues;
 
     /// <summary>
     /// The queues whose dead letters can land in <paramref name="deadLetterQueue"/> (their route out
