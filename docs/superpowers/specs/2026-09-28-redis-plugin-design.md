@@ -577,3 +577,107 @@ important once that plan adds many more per-key round trips per page:
 - **`AbortOnConnectFail = false`** on these short-lived, one-shot
   connections means connect/auth failures surface later as generic errors
   rather than a clear failure type early — worth revisiting.
+
+## 13. Phase 2 addendum — Streams (post-implementation, 2026-09-28)
+
+Written once phase 2 actually shipped, per §3's note that Stream/consumer-group/PEL DTOs would be
+specified "when those phases start" rather than locked in ahead of time. This section documents the
+shapes and judgment calls phase 2 actually used; nothing here changes phase 1 or the Keys plan.
+
+**DTOs shipped** (`src/Plugins/SbConsole.Plugins.Redis/Client/Stream*.cs`):
+
+```csharp
+public sealed record StreamSummary(string Key, long Length, string LastGeneratedId, string? FirstEntryId, string? LastEntryId);
+
+public sealed record StreamOverview(
+    string Key, long Length, int RadixTreeKeys, int RadixTreeNodes,
+    int ConsumerGroupCount, string LastGeneratedId, string? FirstEntryId, string? LastEntryId);
+
+public sealed record StreamConsumerGroupSummary(string Name, int ConsumerCount, long PendingCount, string? LastDeliveredId, long? Lag);
+
+public sealed record StreamConsumer(string Name, long PendingCount, TimeSpan Idle);
+
+public sealed record StreamPendingEntry(string Id, string Consumer, TimeSpan Idle, int DeliveryCount);
+
+public sealed record StreamFieldValue(string Field, string Value);
+public sealed record StreamEntry(string Id, IReadOnlyList<StreamFieldValue> Fields);
+
+public sealed record ScanStreamsRequest(int Database, string? Pattern, long Cursor, int Count);
+public sealed record StreamScanPage(IReadOnlyList<StreamSummary> Matches, long Cursor, bool Complete, long KeysScannedSoFar, long DatabaseKeyCountAtScanStart);
+```
+
+Judgment calls worth flagging:
+
+- **`StreamEntry` and `StreamConsumer` collide by name with `StackExchange.Redis.StreamEntry`/
+  `StackExchange.Redis.StreamConsumer`.** Rather than rename our DTOs (the design brief's own
+  suggested names), both live in `SbConsole.Plugins.Redis.Client` — C#'s name-resolution rule that a
+  type declared in the current/enclosing namespace wins over one brought in by `using` means an
+  unqualified `StreamEntry`/`StreamConsumer` inside that namespace's own files (`RedisOperations.cs`,
+  the mapper) resolves to ours with no ambiguity; the library type is referenced as
+  `StackExchange.Redis.StreamEntry`/`StackExchange.Redis.StreamConsumer` wherever both are needed in
+  the same file. Test files living in a *different* namespace (`...Tests.Client`) don't get this for
+  free and must qualify both.
+- **`StreamOverview` has no total-consumer-count field.** XINFO STREAM (the source of
+  `StreamOverview`) reports `ConsumerGroupCount` but not a cross-group consumer total; summing one
+  would mean an extra XINFO GROUPS round trip an overview call doesn't otherwise need, and the
+  per-group breakdown is already in `StreamConsumerGroupSummary.ConsumerCount` for the page's
+  separate consumer-groups table.
+- **`StreamSummary` has no size/memory field.** Unlike a plain key, `MEMORY USAGE` on a stream walks
+  its whole radix tree server-side, so it's not "cheap" the way it is for the Keys browser's
+  `KeySummary` — `StreamOverview.RadixTreeKeys`/`RadixTreeNodes` (single-stream detail only) is the
+  closer substitute XINFO STREAM already gives for free.
+- **Only `RedisStreamEntryMapper` (StreamEntry/NameValueEntry → our DTOs) is a pure, unit-tested
+  parser.** `StreamInfo`, `StreamGroupInfo`, `StreamConsumerInfo`, `StreamPendingMessageInfo` all
+  have non-public constructors in StackExchange.Redis 3.3.1, so — unlike `RedisInfoParser`'s plain-
+  dictionary input — no fixture can build one directly; their mapping stays inline in
+  `RedisOperations`, untested, consistent with that file already being a thin wrapper.
+
+**`IRedisOperations` additions** — `ScanStreamsAsync`, `GetStreamOverviewAsync`,
+`GetStreamConsumerGroupsAsync`, `GetStreamConsumersAsync`, `GetStreamPendingEntriesAsync`,
+`GetStreamEntriesAsync` (XREVRANGE, `beforeId` as an exclusive-in-practice upper bound for paging
+further back), `AddStreamEntryAsync` (XADD → `Mutating`), `TrimStreamAsync` (XTRIM → `Destructive`),
+`AcknowledgeStreamEntriesAsync` (XACK → `Mutating`), `ClaimStreamEntriesAsync` (XCLAIM →
+`Mutating`), `DeleteStreamEntriesAsync` (XDEL → `Destructive`). `ScanStreamsAsync` reuses the Keys
+browser's exact raw-`SCAN`/`RedisScanReplyParser` machinery with `TYPE stream` rather than a second
+cursor-parsing path — the "no native list-all-streams command" case §1 anticipated. Everything else
+goes through `StackExchange.Redis`'s typed Stream API directly (no raw `ExecuteAsync`), since none
+of it shares the Keys browser's "need the raw cursor for a progress bar" reason to bypass the typed
+API the way `SCAN` does.
+
+**`GetOldestDeadLetterAsync` and the "pel" nav badge**, per §2's decision and §8's deferral, are
+implemented together: `RedisPlugin.FetchStreamPendingOverviewAsync` does one `SCAN TYPE stream`
+walk, one `XINFO GROUPS` per stream, and (for every group with `PendingCount > 0`) one extended-form
+`XPENDING ... COUNT 1` to read that group's oldest (lowest-id) pending entry's idle time — the
+"oldest pending entry's idle time" §2 specifies, giving `EnqueuedTime = now - idle`. The result across
+every stream/group is a total pending count (the nav badge) and the single entry with the earliest
+derived `EnqueuedTime` (`GetOldestDeadLetterAsync`'s `OldestDeadLetterEntry`, `ResourceName` =
+`"{streamKey}/{groupName}"`, `DeadLetterCount` = that group's own pending count — matching Kafka's
+"the DLQ topic's own count, not an aggregate" precedent).
+
+Two scoping decisions worth flagging:
+
+- **Scanned database is the connection's own `RedisConnectionSettings.DefaultDatabase`, not every
+  database 0–15.** Redis has no RabbitMQ-management-API-style single call covering every vhost/
+  database in one request; scanning all 16 on every dashboard/nav-badge poll was judged too
+  expensive for a background hook with no UI-selected database to work from. This mirrors phase 1's
+  Overview page already being server-wide rather than per-database. Revisit if a real
+  multi-database Streams monitoring need shows up.
+- **The result is cached for 60 seconds per secret**, mirroring `RabbitMqPlugin.GetCachedSnapshotAsync`
+  (SHA-256-keyed `ConcurrentDictionary`, `Lazy<Task<T>>` single-flight, failures never cached) —
+  the underlying walk is exactly the "listing every stream via SCAN plus XPENDING per stream on
+  every nav render" cost §8 flagged as a concern, and `NavMenu` polls every connection's badges on
+  that same interval.
+
+**`FriendlyRedisError`** gained one more mapping beyond §10's original list: `NOGROUP` (thrown by
+XACK/XCLAIM/XPENDING when the stream or named consumer group no longer exists, most often because
+it was deleted between the page loading its consumer-groups table and a row action being clicked) →
+`"Stream or consumer group not found — it may have been deleted since the page loaded"`.
+
+**UI** (`Pages/Streams.razor`, `/p/redis/streams`): connection+database picker (reusing
+`RedisConnectionDatabasePicker`), a stream list (left) and, once a stream is selected (right): an
+overview stat row, a trim control, a consumer-groups table (selecting a group loads its consumers
+and pending-entries tables), pending-entry row actions (Ack / Claim-to-consumer / Delete), an XADD
+"add entry" mini-form (repeatable field/value rows), and a recent-entries view (`GetStreamEntriesAsync`
+with no `beforeId`, newest-first). `RedisPlugin.NavItems` gains `new PluginNavItem("Streams",
+"/p/redis/streams")`; `Contribution` is `PageCount: 3, ActionCount: 19` (the Keys browser's 14 plus
+the five Streams command handlers).
