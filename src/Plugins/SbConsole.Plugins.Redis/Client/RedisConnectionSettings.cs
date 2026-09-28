@@ -75,7 +75,14 @@ public sealed record RedisConnectionSettings(
             User = EncodeIfNeeded(User, encodeCredentials),
             Password = EncodeIfNeeded(Password, encodeCredentials),
             Ssl = Ssl,
-            ServiceName = ServiceName,
+            // ServiceName only applies when the topology is actually Sentinel: setting it on
+            // ConfigurationOptions puts StackExchange.Redis into Sentinel mode automatically
+            // (see RedisConnectionFactory), so a leftover value from a user who switched the
+            // topology control away from Sentinel must never leak into the built options —
+            // otherwise a plain Standalone connection would silently try to connect as Sentinel
+            // and fail confusingly. The record's own ServiceName field is left untouched so the
+            // connection form can still show it if the user switches back to Sentinel.
+            ServiceName = Topology == RedisTopology.Sentinel ? ServiceName : null,
             AllowAdmin = true, // SbConsole is an operator tool and needs MEMORY/SLOWLOG/CLIENT — the
                                 // Redis ACL, not this client-side flag, is the real gate.
             DefaultDatabase = Topology == RedisTopology.Cluster ? 0 : DefaultDatabase,

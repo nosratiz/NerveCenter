@@ -82,4 +82,29 @@ public class RedisConnectionSettingsTests
         options.Ssl.Should().BeTrue();
         options.ServiceName.Should().Be("uk-prod");
     }
+
+    [Fact]
+    public void A_leftover_service_name_does_not_leak_into_the_options_for_a_standalone_topology()
+    {
+        // Simulates a user who selected Sentinel, typed a service name, then switched the
+        // topology control back to Standalone -- the record can still carry the leftover
+        // ServiceName value, but it must never reach the built ConfigurationOptions, since setting
+        // ServiceName on ConfigurationOptions puts StackExchange.Redis into Sentinel mode
+        // automatically regardless of what this plugin's own Topology enum says.
+        var settings = new RedisConnectionSettings(
+            RedisTopology.Standalone, ["localhost:6379"], null, null, false, "uk-prod", false, 0);
+
+        settings.ToConfigurationOptions().ServiceName.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_leftover_service_name_does_not_leak_into_the_secret_string_for_a_standalone_topology()
+    {
+        var settings = new RedisConnectionSettings(
+            RedisTopology.Standalone, ["localhost:6379"], null, null, false, "uk-prod", false, 0);
+
+        var configPortion = settings.ToSecretString().Split('|', 3)[2];
+
+        StackExchange.Redis.ConfigurationOptions.Parse(configPortion).ServiceName.Should().BeNull();
+    }
 }
