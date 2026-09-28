@@ -41,18 +41,25 @@
     <MudGrid Class="mt-2">
         <MudItem xs="12" md="4">
             <MudPaper Class="streams-list pa-3" Outlined="true">
-                <MudSimpleTable Class="streams-list-table" Dense="true" Elevation="0">
-                    <thead><tr><th>Stream</th><th>Length</th></tr></thead>
-                    <tbody>
-                        @foreach (var stream in _streams)
-                        {
-                            <tr class="@("stream-row" + (stream.Key == _selectedStreamKey ? " stream-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectStreamAsync(stream))">
-                                <td class="stream-row-key" style="font-family:monospace">@stream.Key</td>
-                                <td class="stream-row-length">@stream.Length</td>
-                            </tr>
-                        }
-                    </tbody>
-                </MudSimpleTable>
+                @if (_complete && _streams.Count == 0)
+                {
+                    <MudText Class="streams-list-empty mud-text-secondary" Typo="Typo.body2">No streams found matching this pattern.</MudText>
+                }
+                else
+                {
+                    <MudSimpleTable Class="streams-list-table" Dense="true" Elevation="0">
+                        <thead><tr><th>Stream</th><th>Length</th></tr></thead>
+                        <tbody>
+                            @foreach (var stream in _streams)
+                            {
+                                <tr class="@("stream-row" + (stream.Key == _selectedStreamKey ? " stream-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectStreamAsync(stream))">
+                                    <td class="stream-row-key" style="font-family:monospace">@stream.Key</td>
+                                    <td class="stream-row-length">@stream.Length</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
             </MudPaper>
         </MudItem>
         <MudItem xs="12" md="8">

@@ -1,11 +1,14 @@
 @* src/Plugins/SbConsole.Plugins.Redis/Pages/Keys.razor *@
 @page "/p/redis/keys"
 @using System.Globalization
+@using SbConsole.Plugins.Redis.Acl
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Keys
 @inject KeysQueryHandler QueryHandler
 @inject DeleteKeyCommandHandler DeleteKeyHandler
 @inject RenameKeyCommandHandler RenameKeyHandler
+@inject FlushDatabaseCommandHandler FlushDatabaseHandler
+@inject AclQueryHandler AclQueryHandler
 @inject IConfirmationService Confirmation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -29,7 +32,15 @@
         <MudButton Class="keys-scan" Variant="Variant.Filled" Color="Color.Primary" Disabled="_scanning" OnClick="RescanAsync">Scan</MudButton>
         <MudButton Class="keys-delete-by-pattern" Variant="Variant.Outlined" Color="Color.Error"
                    Disabled="@string.IsNullOrWhiteSpace(_pattern)" OnClick="OpenDeleteByPatternAsync">Delete matching keys…</MudButton>
+        <MudTooltip Text="Command refused by ACL (FLUSHDB)" Disabled="_canFlushDatabase">
+            <MudButton Class="keys-flush-database" Variant="Variant.Outlined" Color="Color.Error"
+                       Disabled="@(!_canFlushDatabase)" OnClick="FlushDatabaseAsync">Flush database…</MudButton>
+        </MudTooltip>
     </div>
+    @if (!_canFlushDatabase)
+    {
+        <MudText Typo="Typo.caption" Class="keys-flush-database-acl-denied mud-text-secondary d-block mb-2">Command refused by ACL (FLUSHDB) — this connection's user isn't permitted to flush the database.</MudText>
+    }
 
     <MudText Typo="Typo.caption" Class="keys-scan-progress mud-text-secondary">
         @_matches.Count match(es) so far
@@ -73,6 +84,10 @@
                             }
                         </tbody>
                     </MudSimpleTable>
+                }
+                else if (_complete && _matches.Count == 0)
+                {
+                    <MudText Class="keys-tree-empty mud-text-secondary" Typo="Typo.body2">No keys found matching this pattern.</MudText>
                 }
                 else
                 {
@@ -155,6 +170,7 @@
     private RedisKeyType? _selectedKeyType;
     private bool _renaming;
     private string _renameTarget = "";
+    private bool _canFlushDatabase = true;
 
     private IReadOnlyList<Components.RedisPrefixNode> PrefixTree =>
         Components.RedisPrefixTreeBuilder.Build(_matches.Select(m => m.Key), Delimiter);
@@ -170,6 +186,51 @@
         _selectedKeyType = null;
         _expandedPrefix = null;
         await RescanAsync();
+        await RefreshFlushDatabasePermissionAsync();
+    }
+
+    private async Task RefreshFlushDatabasePermissionAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        var result = await AclQueryHandler.HasCommandPermissionAsync(selection.Connection.Id, "FLUSHDB");
+        // Fails open on a query-level failure too, mirroring RedisOperations.HasCommandPermissionAsync's
+        // own fail-open default -- this check only ever disables a button, never blocks the real,
+        // server-enforced FLUSHDB.
+        _canFlushDatabase = !result.IsSuccess || result.Value;
+    }
+
+    private async Task FlushDatabaseAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        // The blast-radius count is the real DBSIZE the last scan observed (design spec §14),
+        // matching DeleteByPatternDialog's precedent of showing real server state, not a guess.
+        // IsProd comes from the server-resolved connection picker, never the client.
+        var target = $"{selection.Connection.Name}/db{selection.Database}";
+        if (!await Confirmation.ConfirmAsync("Flush database", target, selection.Connection.IsProd, count: (int)Math.Min(_dbSizeAtStart, int.MaxValue)))
+        {
+            return;
+        }
+
+        var result = await FlushDatabaseHandler.HandleAsync(new FlushDatabaseCommand(selection.Connection.Id, selection.Connection.Name, selection.Database));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Flushed db{selection.Database}", Severity.Success);
+            _selectedKey = null;
+            _selectedKeyType = null;
+            await RescanAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
     }
 
     private Task RescanAsync() => ScanAllAsync();
