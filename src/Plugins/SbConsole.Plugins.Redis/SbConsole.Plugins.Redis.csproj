@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Internal seams (connection factory, parsers) are exercised directly by unit tests,
+         since there is no live Redis server in the unit-test run. -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.Redis.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.9.0" />
+    <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pages/*.razor need Razor component + [Authorize] support, which live in the ASP.NET Core
+         shared framework, not a NuGet package. Same pattern the other plugins use. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
