@@ -1,0 +1,468 @@
+@* src/Plugins/SbConsole.Plugins.Redis/Pages/Streams.razor *@
+@page "/p/redis/streams"
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Client
+@using SbConsole.Plugins.Redis.Streams
+@inject StreamsQueryHandler QueryHandler
+@inject AddStreamEntryCommandHandler AddEntryHandler
+@inject TrimStreamCommandHandler TrimHandler
+@inject AcknowledgeStreamEntriesCommandHandler AckHandler
+@inject ClaimStreamEntriesCommandHandler ClaimHandler
+@inject DeleteStreamEntriesCommandHandler DeleteEntriesHandler
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+
+<PageTitle>Redis streams</PageTitle>
+<h1>Streams</h1>
+
+<RedisConnectionDatabasePicker SelectionChanged="OnSelectionChangedAsync" Loading="_scanning" />
+
+@if (_selection is not null)
+{
+    <div class="d-flex align-center flex-wrap gap-2 mb-2">
+        <MudTextField id="streams-pattern" data-testid="streams-pattern" Class="streams-pattern" T="string" Value="_pattern"
+                      ValueChanged="v => _pattern = v ?? string.Empty" Label="Pattern (glob)" Immediate="true" Style="max-width:260px" />
+        <MudButton Class="streams-scan" Variant="Variant.Filled" Color="Color.Primary" Disabled="_scanning" OnClick="RescanAsync">Scan</MudButton>
+    </div>
+
+    <MudText Typo="Typo.caption" Class="streams-scan-progress mud-text-secondary">
+        @_streams.Count stream(s) found
+        @if (!_complete)
+        {
+            <span> · scanning…</span>
+        }
+    </MudText>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Class="streams-error my-2">@_error</MudAlert>
+    }
+
+    <MudGrid Class="mt-2">
+        <MudItem xs="12" md="4">
+            <MudPaper Class="streams-list pa-3" Outlined="true">
+                <MudSimpleTable Class="streams-list-table" Dense="true" Elevation="0">
+                    <thead><tr><th>Stream</th><th>Length</th></tr></thead>
+                    <tbody>
+                        @foreach (var stream in _streams)
+                        {
+                            <tr class="@("stream-row" + (stream.Key == _selectedStreamKey ? " stream-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectStreamAsync(stream))">
+                                <td class="stream-row-key" style="font-family:monospace">@stream.Key</td>
+                                <td class="stream-row-length">@stream.Length</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="8">
+            <MudPaper Class="streams-detail pa-3" Outlined="true">
+                @if (_selectedStreamKey is null)
+                {
+                    <MudText Class="streams-detail-empty mud-text-secondary" Typo="Typo.body2">Select a stream to view its detail.</MudText>
+                }
+                else if (_detailLoading)
+                {
+                    <MudProgressCircular Class="streams-detail-loading" Size="Size.Small" Indeterminate="true" />
+                }
+                else
+                {
+                    @if (_detailError is not null)
+                    {
+                        <MudAlert Severity="Severity.Error" Class="streams-detail-error mb-2">@_detailError</MudAlert>
+                    }
+
+                    <MudText Class="streams-detail-key" Typo="Typo.h6" Style="font-family:monospace">@_selectedStreamKey</MudText>
+
+                    @if (_overview is { } overview)
+                    {
+                        <div class="d-flex flex-wrap gap-4 my-2">
+                            <MudText Class="streams-overview-length" Typo="Typo.body2">Length: @overview.Length</MudText>
+                            <MudText Class="streams-overview-groups" Typo="Typo.body2">Groups: @overview.ConsumerGroupCount</MudText>
+                            <MudText Class="streams-overview-radix" Typo="Typo.body2">Radix tree: @overview.RadixTreeKeys keys / @overview.RadixTreeNodes nodes</MudText>
+                            <MudText Class="streams-overview-lastid" Typo="Typo.body2">Last id: @overview.LastGeneratedId</MudText>
+                        </div>
+                    }
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Trim (destructive — drops entries permanently)</MudText>
+                    <div class="d-flex gap-2 align-end mt-1">
+                        <MudNumericField id="streams-trim-maxlen" data-testid="streams-trim-maxlen" Class="streams-trim-maxlen" T="long" Value="_trimMaxLen"
+                                          ValueChanged="v => _trimMaxLen = v" Label="Max length" Min="0" Immediate="true" HideSpinButtons="true" />
+                        <MudButton Class="streams-trim-submit" Variant="Variant.Outlined" Color="Color.Error" OnClick="TrimAsync">Trim</MudButton>
+                    </div>
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4">Consumer groups</MudText>
+                    <MudSimpleTable Class="streams-groups-table" Dense="true" Elevation="0">
+                        <thead><tr><th>Group</th><th>Consumers</th><th>Pending</th><th>Last delivered</th></tr></thead>
+                        <tbody>
+                            @foreach (var group in _groups)
+                            {
+                                <tr class="@("group-row" + (group.Name == _selectedGroup ? " group-row-selected" : ""))" style="cursor:pointer" @onclick="@(() => SelectGroupAsync(group.Name))">
+                                    <td class="group-row-name">@group.Name</td>
+                                    <td class="group-row-consumers">@group.ConsumerCount</td>
+                                    <td class="group-row-pending">@group.PendingCount</td>
+                                    <td class="group-row-lastdelivered">@group.LastDeliveredId</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+
+                    @if (_selectedGroup is not null)
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mt-4">Consumers — @_selectedGroup</MudText>
+                        <MudSimpleTable Class="streams-consumers-table" Dense="true" Elevation="0">
+                            <thead><tr><th>Consumer</th><th>Pending</th><th>Idle</th></tr></thead>
+                            <tbody>
+                                @foreach (var consumer in _consumers)
+                                {
+                                    <tr class="consumer-row">
+                                        <td class="consumer-row-name">@consumer.Name</td>
+                                        <td class="consumer-row-pending">@consumer.PendingCount</td>
+                                        <td class="consumer-row-idle">@FormatDuration(consumer.Idle)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+
+                        <MudText Typo="Typo.subtitle2" Class="mt-4">Pending entries — @_selectedGroup</MudText>
+                        <div class="d-flex gap-2 align-end mb-2">
+                            <MudTextField id="streams-claim-consumer" data-testid="streams-claim-consumer" Class="streams-claim-consumer" T="string" Value="_claimConsumer"
+                                          ValueChanged="v => _claimConsumer = v ?? string.Empty" Label="Claim to consumer" Immediate="true" />
+                            <MudNumericField id="streams-claim-minidle" data-testid="streams-claim-minidle" Class="streams-claim-minidle" T="long" Value="_claimMinIdleMs"
+                                              ValueChanged="v => _claimMinIdleMs = v" Label="Min idle (ms)" Immediate="true" HideSpinButtons="true" />
+                        </div>
+                        <MudSimpleTable Class="streams-pending-table" Dense="true" Elevation="0">
+                            <thead><tr><th>Id</th><th>Consumer</th><th>Idle</th><th>Deliveries</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var entry in _pending)
+                                {
+                                    <tr class="pending-row">
+                                        <td class="pending-row-id" style="font-family:monospace">@entry.Id</td>
+                                        <td class="pending-row-consumer">@entry.Consumer</td>
+                                        <td class="pending-row-idle">@FormatDuration(entry.Idle)</td>
+                                        <td class="pending-row-deliveries">@entry.DeliveryCount</td>
+                                        <td class="d-flex gap-1">
+                                            <MudButton Class="pending-row-ack" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => AckAsync(entry))">Ack</MudButton>
+                                            <MudButton Class="pending-row-claim" Size="Size.Small" Variant="Variant.Outlined"
+                                                       Disabled="@string.IsNullOrWhiteSpace(_claimConsumer)" OnClick="@(() => ClaimAsync(entry))">Claim</MudButton>
+                                            <MudButton Class="pending-row-delete" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => DeleteEntryAsync(entry))">Delete</MudButton>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4">Add entry (XADD)</MudText>
+                    <div class="d-flex gap-2 align-end mt-1">
+                        <MudTextField id="streams-newfield-name" data-testid="streams-newfield-name" Class="streams-newfield-name" T="string" Value="_newFieldName"
+                                      ValueChanged="v => _newFieldName = v ?? string.Empty" Label="Field" Immediate="true" />
+                        <MudTextField id="streams-newfield-value" data-testid="streams-newfield-value" Class="streams-newfield-value" T="string" Value="_newFieldValue"
+                                      ValueChanged="v => _newFieldValue = v ?? string.Empty" Label="Value" Immediate="true" />
+                        <MudButton Class="streams-newfield-add" Variant="Variant.Outlined"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_newFieldName))" OnClick="AddFieldRow">Add field</MudButton>
+                    </div>
+                    @if (_pendingFields.Count > 0)
+                    {
+                        <MudSimpleTable Class="streams-pendingfields-table" Dense="true" Elevation="0">
+                            <tbody>
+                                @foreach (var field in _pendingFields)
+                                {
+                                    <tr class="pendingfield-row"><td>@field.Field</td><td>@field.Value</td></tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+                    <MudButton Class="streams-xadd-submit mt-2" Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="@(_pendingFields.Count == 0)" OnClick="AddEntryAsync">Add entry</MudButton>
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4">Recent entries</MudText>
+                    <MudSimpleTable Class="streams-entries-table" Dense="true" Elevation="0">
+                        <thead><tr><th>Id</th><th>Fields</th></tr></thead>
+                        <tbody>
+                            @foreach (var entry in _recentEntries)
+                            {
+                                <tr class="entry-row">
+                                    <td class="entry-row-id" style="font-family:monospace">@entry.Id</td>
+                                    <td class="entry-row-fields">@string.Join(", ", entry.Fields.Select(f => $"{f.Field}={f.Value}"))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private const int ScanCount = 1000;
+    private const int MaxStreams = 2000;
+    private const int MaxSteps = 50;
+    private const int RecentEntriesCount = 20;
+    private const int PendingEntriesCount = 50;
+
+    private RedisSelection? _selection;
+    private string _pattern = "*";
+    private List<StreamSummary> _streams = [];
+    private long _cursor;
+    private bool _complete = true;
+    private bool _scanning;
+    private string? _error;
+
+    private string? _selectedStreamKey;
+    private StreamOverview? _overview;
+    private List<StreamConsumerGroupSummary> _groups = [];
+    private string? _selectedGroup;
+    private List<StreamConsumer> _consumers = [];
+    private List<StreamPendingEntry> _pending = [];
+    private List<StreamEntry> _recentEntries = [];
+    private bool _detailLoading;
+    private string? _detailError;
+
+    private readonly List<StreamFieldValue> _pendingFields = [];
+    private string _newFieldName = "";
+    private string _newFieldValue = "";
+    private long _trimMaxLen = 1000;
+
+    private string _claimConsumer = "";
+    private long _claimMinIdleMs;
+
+    private async Task OnSelectionChangedAsync(RedisSelection selection)
+    {
+        _selection = selection;
+        _selectedStreamKey = null;
+        await RescanAsync();
+    }
+
+    private Task RescanAsync() => ScanAllAsync();
+
+    private async Task ScanAllAsync()
+    {
+        if (_selection is not { } selection)
+        {
+            return;
+        }
+
+        _scanning = true;
+        _error = null;
+        _streams = [];
+        _cursor = 0;
+        _complete = false;
+
+        try
+        {
+            var steps = 0;
+            while (!_complete && _streams.Count < MaxStreams && steps < MaxSteps)
+            {
+                var request = new ScanStreamsRequest(selection.Database, _pattern, _cursor, ScanCount);
+                var result = await QueryHandler.ScanAsync(selection.Connection.Id, request);
+                if (!result.IsSuccess)
+                {
+                    _error = result.Error;
+                    break;
+                }
+
+                var page = result.Value!;
+                _streams.AddRange(page.Matches);
+                _cursor = page.Cursor;
+                _complete = page.Complete;
+                steps++;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    private async Task SelectStreamAsync(StreamSummary stream)
+    {
+        _selectedStreamKey = stream.Key;
+        _selectedGroup = null;
+        _consumers = [];
+        _pending = [];
+        _pendingFields.Clear();
+        _trimMaxLen = 1000;
+        await LoadDetailAsync();
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key)
+        {
+            return;
+        }
+
+        _detailLoading = true;
+        _detailError = null;
+        try
+        {
+            var overviewResult = await QueryHandler.GetOverviewAsync(selection.Connection.Id, selection.Database, key);
+            if (overviewResult.IsSuccess)
+            {
+                _overview = overviewResult.Value;
+            }
+            else
+            {
+                _detailError = overviewResult.Error;
+            }
+
+            var groupsResult = await QueryHandler.GetConsumerGroupsAsync(selection.Connection.Id, selection.Database, key);
+            _groups = groupsResult.IsSuccess ? groupsResult.Value!.ToList() : [];
+
+            var entriesResult = await QueryHandler.GetEntriesAsync(selection.Connection.Id, selection.Database, key, null, RecentEntriesCount);
+            _recentEntries = entriesResult.IsSuccess ? entriesResult.Value!.ToList() : [];
+        }
+        finally
+        {
+            _detailLoading = false;
+        }
+    }
+
+    private async Task SelectGroupAsync(string group)
+    {
+        _selectedGroup = group;
+        await LoadGroupDetailAsync();
+    }
+
+    private async Task LoadGroupDetailAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
+        {
+            return;
+        }
+
+        var consumersResult = await QueryHandler.GetConsumersAsync(selection.Connection.Id, selection.Database, key, group);
+        _consumers = consumersResult.IsSuccess ? consumersResult.Value!.ToList() : [];
+
+        var pendingResult = await QueryHandler.GetPendingEntriesAsync(selection.Connection.Id, selection.Database, key, group, PendingEntriesCount);
+        _pending = pendingResult.IsSuccess ? pendingResult.Value!.ToList() : [];
+    }
+
+    private void AddFieldRow()
+    {
+        if (string.IsNullOrWhiteSpace(_newFieldName))
+        {
+            return;
+        }
+
+        _pendingFields.Add(new StreamFieldValue(_newFieldName, _newFieldValue));
+        _newFieldName = "";
+        _newFieldValue = "";
+    }
+
+    private async Task AddEntryAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _pendingFields.Count == 0)
+        {
+            return;
+        }
+
+        var result = await AddEntryHandler.HandleAsync(new AddStreamEntryCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, [.. _pendingFields]));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Added entry {result.Value}", Severity.Success);
+            _pendingFields.Clear();
+            await LoadDetailAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task TrimAsync()
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key)
+        {
+            return;
+        }
+
+        // IsProd comes from the server-resolved connection picker, never the client.
+        if (!await Confirmation.ConfirmAsync("Trim", key, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        var result = await TrimHandler.HandleAsync(new TrimStreamCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, _trimMaxLen));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Trimmed {key}", Severity.Success);
+            await LoadDetailAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task AckAsync(StreamPendingEntry entry)
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group)
+        {
+            return;
+        }
+
+        var result = await AckHandler.HandleAsync(new AcknowledgeStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, [entry.Id]));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Acked {entry.Id}", Severity.Success);
+            _pending.RemoveAll(p => p.Id == entry.Id);
+            await LoadDetailAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task ClaimAsync(StreamPendingEntry entry)
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key || _selectedGroup is not { } group || string.IsNullOrWhiteSpace(_claimConsumer))
+        {
+            return;
+        }
+
+        var result = await ClaimHandler.HandleAsync(new ClaimStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, group, _claimConsumer, _claimMinIdleMs, [entry.Id]));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Claimed {result.Value!.Count} entry(ies)", Severity.Success);
+            await LoadGroupDetailAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private async Task DeleteEntryAsync(StreamPendingEntry entry)
+    {
+        if (_selection is not { } selection || _selectedStreamKey is not { } key)
+        {
+            return;
+        }
+
+        // IsProd comes from the server-resolved connection picker, never the client.
+        if (!await Confirmation.ConfirmAsync("Delete", entry.Id, selection.Connection.IsProd))
+        {
+            return;
+        }
+
+        var result = await DeleteEntriesHandler.HandleAsync(new DeleteStreamEntriesCommand(selection.Connection.Id, selection.Connection.Name, selection.Database, key, [entry.Id]));
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Deleted {entry.Id}", Severity.Success);
+            _pending.RemoveAll(p => p.Id == entry.Id);
+            await LoadDetailAsync();
+        }
+        else
+        {
+            Snackbar.Add(result.Error!, Severity.Error);
+        }
+    }
+
+    private static string FormatDuration(TimeSpan duration) =>
+        duration.TotalDays >= 1 ? $"{duration.TotalDays:N0}d" : duration.TotalHours >= 1 ? $"{duration.TotalHours:N0}h" : duration.TotalMinutes >= 1 ? $"{duration.TotalMinutes:N0}m" : $"{duration.TotalSeconds:N0}s";
+}

@@ -7,6 +7,7 @@ using NSubstitute;
 using SbConsole.Plugins.Redis.Client;
 using SbConsole.Plugins.Redis.Keys;
 using SbConsole.Plugins.Redis.Overview;
+using SbConsole.Plugins.Redis.Streams;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Redis.Tests.Pages;
@@ -63,6 +64,13 @@ public abstract class RedisPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new AddSetMemberCommandHandler(Operations, Connections, Audit, NullLogger<AddSetMemberCommandHandler>.Instance));
         Services.AddSingleton(new RemoveSetMemberCommandHandler(Operations, Connections, Audit, NullLogger<RemoveSetMemberCommandHandler>.Instance));
         Services.AddSingleton(new RevealHashFieldCommandHandler(Audit, NullLogger<RevealHashFieldCommandHandler>.Instance));
+
+        Services.AddSingleton(new StreamsQueryHandler(Operations, Connections, NullLogger<StreamsQueryHandler>.Instance));
+        Services.AddSingleton(new AddStreamEntryCommandHandler(Operations, Connections, Audit, NullLogger<AddStreamEntryCommandHandler>.Instance));
+        Services.AddSingleton(new TrimStreamCommandHandler(Operations, Connections, Audit, NullLogger<TrimStreamCommandHandler>.Instance));
+        Services.AddSingleton(new AcknowledgeStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<AcknowledgeStreamEntriesCommandHandler>.Instance));
+        Services.AddSingleton(new ClaimStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<ClaimStreamEntriesCommandHandler>.Instance));
+        Services.AddSingleton(new DeleteStreamEntriesCommandHandler(Operations, Connections, Audit, NullLogger<DeleteStreamEntriesCommandHandler>.Instance));
     }
 
     /// <summary>MudMenu/MudSelect items render into a MudPopoverProvider (hosted by the real layout), so menu/select tests render one alongside the component under test.</summary>
