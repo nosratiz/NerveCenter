@@ -1,14 +1,20 @@
 using System.Net;
-using System.Text;
 using StackExchange.Redis;
 
 namespace SbConsole.Plugins.Redis.Client;
 
 /// <summary>
-/// The plugin's connection secret is "{topology}|{preferReplica}|{configurationOptionsString}" —
-/// StackExchange.Redis's own ConfigurationOptions format already handles multi-endpoint lists,
-/// TLS, ACL user/password and comma/quote escaping in passwords, so it's reused verbatim rather
-/// than inventing a parser (docs/superpowers/specs/2026-09-28-redis-plugin-design.md §2). The
+/// The plugin's connection secret is "{topology}|{preferReplica}|{configurationOptionsString}".
+/// The configuration-options portion is produced and consumed entirely by
+/// StackExchange.Redis's own <see cref="ConfigurationOptions.Parse(string)"/> / <c>ToString()</c> —
+/// endpoints, TLS, ServiceName and DefaultDatabase all round-trip through the real library, not a
+/// hand-rolled parser. The one exception: <c>ConfigurationOptions</c> has no escape syntax for a
+/// comma inside a value, because comma is its own field separator (see
+/// docs/superpowers/specs/2026-09-28-redis-plugin-design.md §2 and the upstream
+/// StackExchange/StackExchange.Redis issues #680 and #883), so a password or user containing a
+/// comma cannot survive a raw round trip. To fix only that gap, <c>User</c>/<c>Password</c> are
+/// percent-encoded (<see cref="Uri.EscapeDataString"/>/<see cref="Uri.UnescapeDataString"/>)
+/// before/after being handed to the library — every other field passes through untouched. The
 /// topology/preferReplica prefix carries the two things ConfigurationOptions can't unambiguously
 /// express on its own — see the design spec for why.
 /// </summary>
@@ -33,187 +39,41 @@ public sealed record RedisConnectionSettings(
 
         var topology = Enum.Parse<RedisTopology>(parts[0], ignoreCase: true);
         var preferReplica = parts[1] == "1";
-
-        // Manually parse the configuration string to handle passwords with special characters
-        var configParts = ParseConfigurationString(parts[2]);
-
-        var endpoints = new List<string>();
-        string? user = null;
-        string? password = null;
-        bool ssl = false;
-        string? serviceName = null;
-        int defaultDatabase = 0;
-
-        foreach (var (key, value) in configParts)
-        {
-            switch (key.ToLowerInvariant())
-            {
-                case "user":
-                    user = value;
-                    break;
-                case "password":
-                    password = value;
-                    break;
-                case "ssl":
-                    ssl = value.Equals("true", StringComparison.OrdinalIgnoreCase);
-                    break;
-                case "servicename":
-                    serviceName = value;
-                    break;
-                case "defaultdatabase":
-                    if (int.TryParse(value, out var db))
-                        defaultDatabase = db;
-                    break;
-                default:
-                    // If not a recognized option, treat as an endpoint
-                    if (!key.Contains('='))
-                    {
-                        endpoints.Add(key);
-                    }
-                    break;
-            }
-        }
+        // Genuinely reuse StackExchange.Redis's own parser for everything (endpoints, TLS,
+        // ServiceName, DefaultDatabase) — the ONLY hand-written layer is decoding User/Password,
+        // because ConfigurationOptions has no escape syntax for a comma inside a value (comma is
+        // its field separator; see the design spec §2 for the upstream issue links). Every other
+        // field round-trips through the library exactly as it would for any other caller.
+        var options = ConfigurationOptions.Parse(parts[2]);
 
         return new RedisConnectionSettings(
             topology,
-            endpoints,
-            user,
-            password,
-            ssl,
-            serviceName,
+            options.EndPoints.Select(EndpointToHostPort).ToList(),
+            options.User is null ? null : Uri.UnescapeDataString(options.User),
+            options.Password is null ? null : Uri.UnescapeDataString(options.Password),
+            options.Ssl,
+            options.ServiceName,
             preferReplica,
-            defaultDatabase);
-    }
-
-    /// <summary>
-    /// Manually parse the configuration string, respecting quoted values for passwords with special characters.
-    /// </summary>
-    private static List<(string Key, string Value)> ParseConfigurationString(string config)
-    {
-        var result = new List<(string Key, string Value)>();
-        var parts = SplitConfigurationString(config);
-
-        foreach (var part in parts)
-        {
-            var eqIndex = part.IndexOf('=');
-            if (eqIndex > 0)
-            {
-                var key = part.Substring(0, eqIndex);
-                var value = part.Substring(eqIndex + 1);
-
-                // Remove surrounding quotes if present
-                if (value.StartsWith('"') && value.EndsWith('"') && value.Length > 1)
-                {
-                    value = value.Substring(1, value.Length - 2);
-                }
-
-                result.Add((key, value));
-            }
-            else if (!string.IsNullOrWhiteSpace(part))
-            {
-                // Treat as endpoint (no equals sign)
-                result.Add((part, ""));
-            }
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Split configuration string on commas, but respect quoted values.
-    /// </summary>
-    private static List<string> SplitConfigurationString(string config)
-    {
-        var parts = new List<string>();
-        var current = new StringBuilder();
-        bool inQuotes = false;
-
-        foreach (var c in config)
-        {
-            if (c == '"')
-            {
-                inQuotes = !inQuotes;
-                current.Append(c);
-            }
-            else if (c == ',' && !inQuotes)
-            {
-                if (current.Length > 0)
-                {
-                    parts.Add(current.ToString());
-                    current.Clear();
-                }
-            }
-            else
-            {
-                current.Append(c);
-            }
-        }
-
-        if (current.Length > 0)
-        {
-            parts.Add(current.ToString());
-        }
-
-        return parts;
+            options.DefaultDatabase ?? 0);
     }
 
     public string ToSecretString()
     {
-        var parts = new List<string>();
-
-        // Add endpoints
-        foreach (var hostPort in EndpointHostPorts)
-        {
-            parts.Add(hostPort);
-        }
-
-        // Add user if set
-        if (!string.IsNullOrEmpty(User))
-        {
-            parts.Add($"user={User}");
-        }
-
-        // Add password if set, with quoting if it contains special characters
-        if (!string.IsNullOrEmpty(Password))
-        {
-            if (Password.Any(c => c == ',' || c == '='))
-            {
-                parts.Add($"password=\"{Password}\"");
-            }
-            else
-            {
-                parts.Add($"password={Password}");
-            }
-        }
-
-        // Add SSL
-        parts.Add($"ssl={Ssl.ToString().ToLowerInvariant()}");
-
-        // Add ServiceName if set
-        if (!string.IsNullOrEmpty(ServiceName))
-        {
-            parts.Add($"serviceName={ServiceName}");
-        }
-
-        // Add DefaultDatabase if not 0 or for non-cluster topologies
-        if (DefaultDatabase != 0 || Topology != RedisTopology.Cluster)
-        {
-            parts.Add($"defaultDatabase={DefaultDatabase}");
-        }
-
-        var configString = string.Join(",", parts);
-
+        var options = ToConfigurationOptionsCore(encodeCredentials: true);
         var topologyToken = Topology.ToString().ToLowerInvariant();
         var preferReplicaToken = PreferReplicaForReads ? "1" : "0";
-        return $"{topologyToken}|{preferReplicaToken}|{configString}";
+        return $"{topologyToken}|{preferReplicaToken}|{options}";
     }
 
-    public ConfigurationOptions ToConfigurationOptions()
+    /// <summary>The real, connectable options — raw (unescaped) User/Password.</summary>
+    public ConfigurationOptions ToConfigurationOptions() => ToConfigurationOptionsCore(encodeCredentials: false);
+
+    private ConfigurationOptions ToConfigurationOptionsCore(bool encodeCredentials)
     {
         var options = new ConfigurationOptions
         {
-            User = User,
-            Password = Password,
+            User = EncodeIfNeeded(User, encodeCredentials),
+            Password = EncodeIfNeeded(Password, encodeCredentials),
             Ssl = Ssl,
             ServiceName = ServiceName,
             AllowAdmin = true, // SbConsole is an operator tool and needs MEMORY/SLOWLOG/CLIENT — the
@@ -228,6 +88,9 @@ public sealed record RedisConnectionSettings(
 
         return options;
     }
+
+    private static string? EncodeIfNeeded(string? value, bool encode) =>
+        value is null || !encode ? value : Uri.EscapeDataString(value);
 
     /// <summary>
     /// EndPoint.ToString() renders "AddressFamily/host:port" (e.g. "Unspecified/redis-01:6380"),

@@ -62,4 +62,24 @@ public class RedisConnectionSettingsTests
         settings.EndpointHostPorts.Should().Equal("redis-01:6380");
         settings.DefaultDatabase.Should().Be(3);
     }
+
+    [Fact]
+    public void The_configuration_options_portion_is_a_genuine_ConfigurationOptions_string()
+    {
+        // Proves RedisConnectionSettings reuses StackExchange.Redis's own parser/serializer
+        // rather than a hand-rolled one: everything after the second '|' must be independently
+        // parseable by ConfigurationOptions.Parse and carry the same endpoint/Ssl/ServiceName —
+        // fields a hand-rolled parser could drop or corrupt without any of the other tests here
+        // noticing (they only ever round-trip through this class's own Parse/ToSecretString).
+        var secret = new RedisConnectionSettings(
+            RedisTopology.Sentinel, ["sentinel-1:26379", "sentinel-2:26379"], "sbconsole", "hunter2",
+            true, "uk-prod", false, 0).ToSecretString();
+
+        var configPortion = secret.Split('|', 3)[2];
+        var options = StackExchange.Redis.ConfigurationOptions.Parse(configPortion);
+
+        options.EndPoints.Should().HaveCount(2);
+        options.Ssl.Should().BeTrue();
+        options.ServiceName.Should().Be("uk-prod");
+    }
 }
