@@ -53,4 +53,21 @@ public class RedisPluginTests
     {
         new RedisPlugin().GetConnectionSummary("not a valid secret").Should().BeEmpty();
     }
+
+    [Fact]
+    public void Connection_summary_is_empty_for_a_well_formed_but_invalid_topology_token()
+    {
+        // Three '|'-delimited parts (so it does NOT hit the FormatException branch), but
+        // "bogus" isn't a RedisTopology member — Enum.Parse throws ArgumentException, which
+        // GetConnectionSummary must also swallow, not just FormatException.
+        new RedisPlugin().GetConnectionSummary("bogus|0|host:6379").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Connection_summary_is_empty_for_a_configuration_options_keyword_it_rejects()
+    {
+        // ConfigurationOptions.Parse throws ArgumentException on an unrecognized keyword —
+        // a different source of the same exception type as the case above, still must not throw.
+        new RedisPlugin().GetConnectionSummary("standalone|0|host:6379,notarealkeyword=1").Should().BeEmpty();
+    }
 }

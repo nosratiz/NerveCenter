@@ -32,8 +32,12 @@ public sealed class RedisPlugin : IPlugin
                 ["Topology"] = settings.Topology.ToString(),
             };
         }
-        catch (FormatException)
+        catch (Exception)
         {
+            // RedisConnectionSettings.Parse can throw FormatException (wrong '|' count) or
+            // ArgumentException (bad topology token, or a ConfigurationOptions keyword it
+            // rejects) — this method's contract is "never throw", so both are swallowed the
+            // same way: an unparsable secret just gets no summary chips.
             return new Dictionary<string, string>();
         }
     }
