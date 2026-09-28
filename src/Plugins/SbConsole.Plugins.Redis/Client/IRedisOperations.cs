@@ -15,4 +15,6 @@ public interface IRedisOperations
 
     Task<IReadOnlyList<MemoryByPrefixEntry>> GetMemoryByPrefixAsync(
         string secret, int database, char delimiter, int sampleSize, CancellationToken ct = default);
+
+    Task<IReadOnlyList<SlowLogEntry>> GetSlowLogAsync(string secret, int count, CancellationToken ct = default);
 }

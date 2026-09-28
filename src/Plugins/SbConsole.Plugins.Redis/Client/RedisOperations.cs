@@ -63,6 +63,14 @@ public sealed class RedisOperations : IRedisOperations
         return RedisMemoryByPrefixSampler.Summarize(samples, delimiter, topN: 4);
     }
 
+    public async Task<IReadOnlyList<SlowLogEntry>> GetSlowLogAsync(string secret, int count, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase();
+        var raw = await db.ExecuteAsync("SLOWLOG", "GET", count.ToString()).WaitAsync(ct);
+        return RedisSlowLogParser.Parse(raw);
+    }
+
     internal static async Task<Dictionary<string, IReadOnlyDictionary<string, string>>> GetInfoSectionsAsync(
         IServer server, CancellationToken ct)
     {

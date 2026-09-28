@@ -50,6 +50,7 @@ public sealed class RedisPlugin : IPlugin
         services.AddSingleton<IRedisOperations, RedisOperations>();
         services.AddScoped<Overview.GetOverviewQueryHandler>();
         services.AddScoped<Overview.GetMemoryByPrefixQueryHandler>();
+        services.AddScoped<Overview.GetSlowLogQueryHandler>();
         // A new handler must be added here or its page fails to render at runtime.
     }
 
