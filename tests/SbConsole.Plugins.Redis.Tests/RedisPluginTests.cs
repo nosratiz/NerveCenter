@@ -15,11 +15,11 @@ public class RedisPluginTests
     }
 
     [Fact]
-    public void Nav_items_are_overview_keys_then_streams()
+    public void Nav_items_are_overview_keys_streams_then_pubsub()
     {
         var plugin = new RedisPlugin();
 
-        plugin.NavItems.Select(n => n.Href).Should().Equal("/p/redis/overview", "/p/redis/keys", "/p/redis/streams");
+        plugin.NavItems.Select(n => n.Href).Should().Equal("/p/redis/overview", "/p/redis/keys", "/p/redis/streams", "/p/redis/pubsub");
     }
 
     [Fact]

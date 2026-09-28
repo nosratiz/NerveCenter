@@ -20,6 +20,7 @@ public sealed class RedisPlugin : IPlugin
         new PluginNavItem("Overview", "/p/redis/overview"),
         new PluginNavItem("Keys", "/p/redis/keys"),
         new PluginNavItem("Streams", StreamsNavHref),
+        new PluginNavItem("Pub/Sub", "/p/redis/pubsub"),
     ];
 
     public Type? ConnectionFormComponentType => typeof(RedisConnectionFields);
@@ -45,11 +46,12 @@ public sealed class RedisPlugin : IPlugin
         }
     }
 
-    // Pages: Overview, Keys, Streams. Pub-Sub and its mutating actions ship in a later plan
-    // (docs/superpowers/specs/2026-09-28-redis-plugin-design.md §1). ActionCount counts the Keys
-    // browser's 14 audited command handlers (13 mutating/destructive + the Safe field-reveal
-    // action) plus the Streams group's 5 (add/trim/ack/claim/delete).
-    public PluginContribution Contribution => new(PageCount: 3, ActionCount: 19);
+    // Pages: Overview, Keys, Streams, Pub/Sub. ActionCount counts the Keys browser's 14 audited
+    // command handlers (13 mutating/destructive + the Safe field-reveal action) plus the Streams
+    // group's 5 (add/trim/ack/claim/delete) plus phase 3's 3 (FLUSHDB, Pub/Sub subscribe-start,
+    // Pub/Sub publish) -- 22 total. AclQueryHandler/PubSubQueryHandler's channel listing are
+    // read-only queries and don't count.
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 22);
 
     public void ConfigureServices(IServiceCollection services)
     {
