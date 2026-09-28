@@ -51,4 +51,29 @@ public interface IRedisOperations
     Task<bool> IsSetMemberAsync(string secret, int database, string key, string member, CancellationToken ct = default);
     Task AddSetMemberAsync(string secret, int database, string key, string member, CancellationToken ct = default);
     Task<bool> RemoveSetMemberAsync(string secret, int database, string key, string member, CancellationToken ct = default);
+
+    // Streams (phase 2 -- design spec addendum §3a/§4a).
+    Task<StreamScanPage> ScanStreamsAsync(string secret, ScanStreamsRequest request, CancellationToken ct = default);
+    Task<StreamOverview> GetStreamOverviewAsync(string secret, int database, string key, CancellationToken ct = default);
+    Task<IReadOnlyList<StreamConsumerGroupSummary>> GetStreamConsumerGroupsAsync(string secret, int database, string key, CancellationToken ct = default);
+    Task<IReadOnlyList<StreamConsumer>> GetStreamConsumersAsync(string secret, int database, string key, string group, CancellationToken ct = default);
+    Task<IReadOnlyList<StreamPendingEntry>> GetStreamPendingEntriesAsync(string secret, int database, string key, string group, int count, CancellationToken ct = default);
+
+    /// <summary>Most-recent-first (XREVRANGE). beforeId, when given, is an exclusive upper bound so the caller can page further back into history.</summary>
+    Task<IReadOnlyList<StreamEntry>> GetStreamEntriesAsync(string secret, int database, string key, string? beforeId, int count, CancellationToken ct = default);
+
+    /// <summary>XADD. Returns the server-generated entry id.</summary>
+    Task<string> AddStreamEntryAsync(string secret, int database, string key, IReadOnlyList<StreamFieldValue> fields, long? maxLen, CancellationToken ct = default);
+
+    /// <summary>XTRIM (approximate maxlen). Returns the number of entries evicted.</summary>
+    Task<long> TrimStreamAsync(string secret, int database, string key, long maxLen, CancellationToken ct = default);
+
+    /// <summary>XACK. Returns the number of entries actually acknowledged.</summary>
+    Task<long> AcknowledgeStreamEntriesAsync(string secret, int database, string key, string group, IReadOnlyList<string> entryIds, CancellationToken ct = default);
+
+    /// <summary>XCLAIM. Returns the claimed entries (empty for any id that no longer exists/wasn't pending).</summary>
+    Task<IReadOnlyList<StreamEntry>> ClaimStreamEntriesAsync(string secret, int database, string key, string group, string consumer, long minIdleTimeMs, IReadOnlyList<string> entryIds, CancellationToken ct = default);
+
+    /// <summary>XDEL. Returns the number of entries actually deleted.</summary>
+    Task<long> DeleteStreamEntriesAsync(string secret, int database, string key, IReadOnlyList<string> entryIds, CancellationToken ct = default);
 }

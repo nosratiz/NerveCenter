@@ -404,4 +404,158 @@ public sealed class RedisOperations : IRedisOperations
         var db = muxer.GetDatabase(database);
         return await db.SetRemoveAsync(key, member).WaitAsync(ct);
     }
+
+    // ---- Streams (phase 2) ----
+    // XINFO STREAM/GROUPS/CONSUMERS and XPENDING all return StackExchange.Redis structs
+    // (StreamInfo, StreamGroupInfo, StreamConsumerInfo, StreamPendingMessageInfo) with non-public
+    // constructors, so -- unlike RedisStreamEntryMapper's StreamEntry/NameValueEntry mapping --
+    // none of the mapping below can be pulled out into a pure, fixture-testable parser; it stays
+    // inline here, untested, matching every other call in this thin wrapper (design spec §4a).
+
+    public async Task<StreamScanPage> ScanStreamsAsync(string secret, ScanStreamsRequest request, CancellationToken ct = default)
+    {
+        // No native "list all streams" command -- SCAN ... TYPE stream, reusing the exact same
+        // raw-SCAN/RedisScanReplyParser machinery ScanKeysAsync already uses (design spec §5),
+        // rather than duplicating a second cursor-parsing path.
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(request.Database);
+        var server = muxer.GetServer(muxer.GetEndPoints()[0]);
+
+        var reply = await db.ExecuteAsync(
+            "SCAN",
+            request.Cursor.ToString(CultureInfo.InvariantCulture),
+            "MATCH", request.Pattern is { Length: > 0 } p ? p : "*",
+            "COUNT", request.Count.ToString(CultureInfo.InvariantCulture),
+            "TYPE", "stream").WaitAsync(ct);
+        var (nextCursor, keys) = RedisScanReplyParser.Parse(reply);
+
+        var matches = await Task.WhenAll(keys.Select(k => DescribeStreamAsync(db, k, ct)));
+        var dbSize = await server.DatabaseSizeAsync(request.Database).WaitAsync(ct);
+
+        return new StreamScanPage(matches, nextCursor, nextCursor == 0, request.Count, dbSize);
+    }
+
+    private static async Task<StreamSummary> DescribeStreamAsync(IDatabase db, string key, CancellationToken ct)
+    {
+        var info = await db.StreamInfoAsync(key).WaitAsync(ct);
+        return new StreamSummary(
+            key,
+            info.Length,
+            info.LastGeneratedId.ToString(),
+            info.FirstEntry.IsNull ? null : info.FirstEntry.Id.ToString(),
+            info.LastEntry.IsNull ? null : info.LastEntry.Id.ToString());
+    }
+
+    public async Task<StreamOverview> GetStreamOverviewAsync(string secret, int database, string key, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var info = await db.StreamInfoAsync(key).WaitAsync(ct);
+
+        return new StreamOverview(
+            key,
+            info.Length,
+            info.RadixTreeKeys,
+            info.RadixTreeNodes,
+            info.ConsumerGroupCount,
+            info.LastGeneratedId.ToString(),
+            info.FirstEntry.IsNull ? null : info.FirstEntry.Id.ToString(),
+            info.LastEntry.IsNull ? null : info.LastEntry.Id.ToString());
+    }
+
+    public async Task<IReadOnlyList<StreamConsumerGroupSummary>> GetStreamConsumerGroupsAsync(string secret, int database, string key, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var groups = await db.StreamGroupInfoAsync(key).WaitAsync(ct);
+
+        return groups
+            .Select(g => new StreamConsumerGroupSummary(g.Name, g.ConsumerCount, g.PendingMessageCount, g.LastDeliveredId, g.Lag))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<StreamConsumer>> GetStreamConsumersAsync(string secret, int database, string key, string group, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var consumers = await db.StreamConsumerInfoAsync(key, group).WaitAsync(ct);
+
+        return consumers
+            .Select(c => new StreamConsumer(c.Name, c.PendingMessageCount, TimeSpan.FromMilliseconds(c.IdleTimeInMilliseconds)))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<StreamPendingEntry>> GetStreamPendingEntriesAsync(string secret, int database, string key, string group, int count, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        // Extended form (XPENDING key group - + count), not just the summary -- the pending-entries
+        // table needs each entry's id/consumer/idle/delivery-count, not just the aggregate counts.
+        var entries = await db.StreamPendingMessagesAsync(key, group, count, consumerName: RedisValue.Null).WaitAsync(ct);
+
+        return entries
+            .Select(e => new StreamPendingEntry(e.MessageId.ToString(), e.ConsumerName.ToString(), TimeSpan.FromMilliseconds(e.IdleTimeInMilliseconds), e.DeliveryCount))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<StreamEntry>> GetStreamEntriesAsync(string secret, int database, string key, string? beforeId, int count, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        // Descending order (XREVRANGE semantics) so the "recent entries" view reads newest-first;
+        // beforeId, when given, becomes the (inclusive, per StreamRangeAsync's own contract) upper
+        // bound, so paging further back in history starts from just before the caller's last-seen
+        // id -- see the exclusive-filter step below.
+        var entries = beforeId is null
+            ? await db.StreamRangeAsync(key, count: count, messageOrder: Order.Descending).WaitAsync(ct)
+            : await db.StreamRangeAsync(key, maxId: beforeId, count: count, messageOrder: Order.Descending).WaitAsync(ct);
+
+        // beforeId is an exclusive bound in this method's contract, but StreamRangeAsync's maxId is
+        // inclusive -- so when a beforeId was supplied, drop it from the result if the server
+        // happened to still have that exact id (it always will, since it's the caller's own
+        // last-seen id from the previous page).
+        var filtered = beforeId is null ? entries : entries.Where(e => e.Id != beforeId).ToArray();
+        return filtered.Select(RedisStreamEntryMapper.ToStreamEntry).ToList();
+    }
+
+    public async Task<string> AddStreamEntryAsync(string secret, int database, string key, IReadOnlyList<StreamFieldValue> fields, long? maxLen, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var pairs = fields.Select(f => new NameValueEntry(f.Field, f.Value)).ToArray();
+        var id = await db.StreamAddAsync(key, pairs, maxLength: maxLen, useApproximateMaxLength: maxLen is not null).WaitAsync(ct);
+        return id.ToString();
+    }
+
+    public async Task<long> TrimStreamAsync(string secret, int database, string key, long maxLen, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        return await db.StreamTrimAsync(key, maxLen).WaitAsync(ct);
+    }
+
+    public async Task<long> AcknowledgeStreamEntriesAsync(string secret, int database, string key, string group, IReadOnlyList<string> entryIds, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var ids = entryIds.Select(id => (RedisValue)id).ToArray();
+        return await db.StreamAcknowledgeAsync(key, group, ids).WaitAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<StreamEntry>> ClaimStreamEntriesAsync(string secret, int database, string key, string group, string consumer, long minIdleTimeMs, IReadOnlyList<string> entryIds, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var ids = entryIds.Select(id => (RedisValue)id).ToArray();
+        var claimed = await db.StreamClaimAsync(key, group, consumer, minIdleTimeMs, ids).WaitAsync(ct);
+        return claimed.Select(RedisStreamEntryMapper.ToStreamEntry).ToList();
+    }
+
+    public async Task<long> DeleteStreamEntriesAsync(string secret, int database, string key, IReadOnlyList<string> entryIds, CancellationToken ct = default)
+    {
+        await using var muxer = await RedisConnectionFactory.ConnectAsync(secret, ct);
+        var db = muxer.GetDatabase(database);
+        var ids = entryIds.Select(id => (RedisValue)id).ToArray();
+        return await db.StreamDeleteAsync(key, ids).WaitAsync(ct);
+    }
 }
