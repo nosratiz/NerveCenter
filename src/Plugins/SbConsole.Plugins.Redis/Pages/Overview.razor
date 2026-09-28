@@ -224,10 +224,9 @@
 </div>
 
 @code {
-    // Mirrors RedisPlugin.MemoryProblemThresholdPercent (private there): the plugin's own "memory
-    // is a problem" line, which the dashboard also uses. Redis itself only starts evicting at 100%
-    // of maxmemory, so the bar tick is labelled a warning threshold, not an eviction point.
-    private const double MemoryProblemThresholdPercent = 90.0;
+    // The plugin's own dashboard warning threshold, shared so the tick and the dashboard agree.
+    // Redis itself only starts evicting at 100% of maxmemory, so the tick is labelled a warning.
+    private const double MemoryProblemThresholdPercent = RedisPlugin.MemoryProblemThresholdPercent;
     private const double MemoryWarnPercent = 80.0;
     private const double NoTtlWarnPercent = 30.0;
     private const int MaxSamples = 30;

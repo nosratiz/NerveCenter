@@ -92,7 +92,7 @@ public sealed class RedisPlugin : IPlugin
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         new RedisOperations().TestConnectionAsync(secret, ct);
 
-    private const double MemoryProblemThresholdPercent = 90.0;
+    internal const double MemoryProblemThresholdPercent = 90.0;
 
     // The host's dashboard (Home.razor) sums same-label PluginDashboardMetric values across every
     // connection of a plugin -- correct for a count, meaningless for a percentage (two Redis

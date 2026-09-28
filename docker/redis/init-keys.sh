@@ -107,15 +107,18 @@ if [ "$($R EXISTS logs:app)" = "0" ]; then
 fi
 
 echo "==> slow log: the commands the mockup's Overview shows, including a KEYS from outside SbConsole"
-# Threshold 0 for just these commands, so they land in SLOWLOG however fast they run here.
+# Threshold 0 for just these commands, so they land in SLOWLOG however fast they run here. The
+# threshold change itself is logged too, so the log is shrunk to exactly five entries while the
+# five demo commands run -- pushing it out -- then restored to the default length.
 printf '%s\n' \
+  "CONFIG SET slowlog-max-len 5" \
   "CONFIG SET slowlog-log-slower-than 0" \
-  "SLOWLOG RESET" \
   "SMEMBERS flags:beta" \
   "XRANGE orders:stream - + COUNT 100" \
   "ZRANGE lb:weekly 0 -1" \
   "HGETALL cart:u:77120" \
   "KEYS session:*" \
-  "CONFIG SET slowlog-log-slower-than 10000" | pipe
+  "CONFIG SET slowlog-log-slower-than 10000" \
+  "CONFIG SET slowlog-max-len 128" | pipe
 
 echo "Redis sample data seeded."

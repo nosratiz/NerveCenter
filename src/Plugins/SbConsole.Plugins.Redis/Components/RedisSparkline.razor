@@ -19,12 +19,14 @@
         {
             var min = Values.Min();
             var max = Values.Max();
-            var range = max - min;
+            // The vertical span is at least 25% of the values' magnitude, so a 97.7 -> 98.0 wobble
+            // stays a small movement instead of stretching to full height, and a flat series lies
+            // along the bottom (the baseline) like the mockup's quiet tiles.
+            var span = Math.Max(max - min, Math.Max(Math.Abs(max), 1) * 0.25);
             var step = 100.0 / (Values.Count - 1);
             return string.Join(' ', Values.Select((v, i) =>
             {
-                // Flat series sit mid-height rather than pinned to an edge.
-                var y = range == 0 ? 15 : 28 - (v - min) / range * 26;
+                var y = 28 - (v - min) / span * 26;
                 return string.Create(CultureInfo.InvariantCulture, $"{i * step:0.##},{y:0.##}");
             }));
         }
