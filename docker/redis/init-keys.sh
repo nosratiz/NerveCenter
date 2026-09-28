@@ -30,4 +30,26 @@ $R ZADD lb:weekly 9812 team-orion 8044 team-lyra 6970 team-vela 5402 team-ara >/
 echo "==> beta feature flag membership (flags:beta), unordered set"
 $R SADD flags:beta acme-uk northwind globex initech umbrella >/dev/null
 
+echo "==> order events stream (events:orders), with a consumer group + pending entries"
+# EXISTS-gated (not idempotent-per-call like XADD would need '*' IDs tracked) so re-running
+# `docker compose up -d` doesn't keep growing the stream or re-creating the group.
+if [ "$($R EXISTS events:orders)" = "0" ]; then
+  $R XADD events:orders '*' orderId 1001 status created >/dev/null
+  $R XADD events:orders '*' orderId 1002 status created >/dev/null
+  $R XADD events:orders '*' orderId 1001 status paid >/dev/null
+  $R XADD events:orders '*' orderId 1003 status created >/dev/null
+  $R XADD events:orders '*' orderId 1002 status paid >/dev/null
+  $R XGROUP CREATE events:orders order-processors 0 >/dev/null
+  # Read (but deliberately don't ack) a couple of entries into the PEL, so the Streams page's
+  # pending-entries table has real rows to claim/ack/delete against out of the box.
+  $R XREADGROUP GROUP order-processors worker-1 COUNT 2 STREAMS events:orders '>' >/dev/null
+fi
+
+echo "==> app log stream (logs:app), no consumer group -- exercises the 'no groups yet' state"
+if [ "$($R EXISTS logs:app)" = "0" ]; then
+  $R XADD logs:app '*' level info msg "worker started" >/dev/null
+  $R XADD logs:app '*' level warn msg "slow query 812ms" >/dev/null
+  $R XADD logs:app '*' level info msg "job completed" >/dev/null
+fi
+
 echo "Redis sample data seeded."

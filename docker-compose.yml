@@ -199,6 +199,24 @@ services:
       - ./docker/redis/init-keys.sh:/init-keys.sh:ro
     restart: "no"
 
+  # Long-running (not one-shot): Redis Pub/Sub has no history, so a channel only shows activity
+  # while something is actively publishing to it. This container publishes a heartbeat to
+  # notifications:live (and, every third beat, orders:events) every 5s, purely so the Pub/Sub
+  # page's live tail has something to show without a second terminal running `redis-cli publish`.
+  redis-pubsub-demo:
+    image: redis:7-alpine
+    container_name: nervecenter-redis-pubsub-demo
+    profiles: ["redis"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/publish-demo.sh"]
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-sbconsole}"
+    volumes:
+      - ./docker/redis/publish-demo.sh:/publish-demo.sh:ro
+    restart: unless-stopped
+
   # ---------------------------------------------------------------------------------------
   # Azure Service Bus emulator (profile: servicebus). Needs SQL Server as its store.
   # SQL Server 2022 ships amd64 only, so on Apple Silicon it runs under emulation --

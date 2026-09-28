@@ -151,16 +151,28 @@ the connection still saves.
 docker compose --profile redis up -d
 ```
 
-| Service      | Host address       |
-|--------------|---------------------|
-| `redis`      | `localhost:6379`   |
-| `redis-init` | (one-shot)          |
+| Service             | Host address                     |
+|---------------------|-----------------------------------|
+| `redis`             | `localhost:6379`                 |
+| `redis-init`        | (one-shot)                       |
+| `redis-pubsub-demo` | (background publisher, no port)  |
 
 Redis 7, password-protected (`--requirepass`), standalone. `redis-init` seeds a handful of
 sample keys across the types the Redis plugin's mockup shows: two `session:u:*` hashes (one
 with no TTL on purpose, so the Overview page's "no TTL" story has something to point at), a
-`jobs:email:retry` list, a `lb:weekly` sorted-set leaderboard, and a `flags:beta` set. Re-running
-`docker compose up -d` re-seeds idempotently (see [`redis/init-keys.sh`](redis/init-keys.sh)).
+`jobs:email:retry` list, a `lb:weekly` sorted-set leaderboard, and a `flags:beta` set, plus two
+streams for the Streams page — `events:orders` (with an `order-processors` consumer group and a
+couple of unacked pending entries, so the pending-entries table has something to claim/ack/delete
+out of the box) and `logs:app` (no consumer group, so the "no groups yet" state has a real example
+too). Re-running `docker compose up -d` re-seeds idempotently (see
+[`redis/init-keys.sh`](redis/init-keys.sh)).
+
+Redis Pub/Sub has no history — a channel only shows anything while something is actively
+publishing to it — so `redis-pubsub-demo` runs continuously in the background, publishing a
+heartbeat to `notifications:live` (and, every third beat, `orders:events`) every 5s. That's what
+makes the Pub/Sub page's live tail show activity without a second terminal open running
+`redis-cli publish` yourself. It's harmless to leave running; stop it with
+`docker compose stop redis-pubsub-demo` if the noise in `docker compose logs` is unwanted.
 
 ### Connect the app to it (Redis)
 
