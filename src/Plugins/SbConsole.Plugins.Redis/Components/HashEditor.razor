@@ -52,7 +52,7 @@
     {
         @if (_jsonView)
         {
-            <pre class="rds-code he-json hash-editor-json">@JsonView</pre>
+            <RedisJsonCode Json="@JsonView" Class="he-json hash-editor-json" />
         }
         else if (_page.Fields.Count == 0)
         {
@@ -92,7 +92,7 @@
                                          AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"Actions for {field.Field}")">
                                     <MudMenuItem Class="hash-field-edit" OnClick="() => StartEdit(field)">Edit field</MudMenuItem>
                                     <MudMenuItem Class="hash-field-delete" OnClick="() => DeleteFieldAsync(field.Field)">
-                                        <span class="rds-danger">Delete field</span>
+                                        <span class="mud-error-text">Delete field</span>
                                     </MudMenuItem>
                                 </MudMenu>
                             </td>
@@ -125,8 +125,6 @@
     private const int PreviewChars = 72;
     private const int ArrayPreviewItems = 2;
     private const int StaleAfterDays = 30;
-
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private HashFieldPage? _page;
     private readonly HashSet<string> _revealed = [];
@@ -208,17 +206,58 @@
         }
     }
 
+    /// <summary>
+    /// The loaded fields as one object. A field whose value is itself a JSON object/array is
+    /// embedded as JSON rather than an escaped string (prefs, recentViews), which is how people
+    /// read these; masked fields stay masked here too.
+    /// </summary>
     private string JsonView
     {
         get
         {
-            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var entry in _page?.Fields ?? [])
+            using var buffer = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
             {
-                fields[entry.Field] = IsMasked(entry.Field) ? "••••••••" : entry.Value;
+                writer.WriteStartObject();
+                foreach (var entry in _page?.Fields ?? [])
+                {
+                    writer.WritePropertyName(entry.Field);
+                    if (IsMasked(entry.Field))
+                    {
+                        writer.WriteStringValue("••••••••");
+                    }
+                    else if (AsEmbeddedJson(entry.Value) is { } json)
+                    {
+                        writer.WriteRawValue(json, skipInputValidation: true);
+                    }
+                    else
+                    {
+                        writer.WriteStringValue(entry.Value);
+                    }
+                }
+
+                writer.WriteEndObject();
             }
 
-            return JsonSerializer.Serialize(fields, Indented);
+            return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+        }
+    }
+
+    private static string? AsEmbeddedJson(string value)
+    {
+        if (!RedisValuePreview.LooksLikeJson(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(value);
+            return doc.RootElement.GetRawText();
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

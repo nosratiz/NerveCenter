@@ -1,0 +1,4 @@
+/* Token spans come from RenderTreeBuilder (no scope attribute), hence ::deep under the scoped pre. */
+.rjc ::deep .rjc-k { color: color-mix(in srgb, var(--mud-palette-text-primary) 72%, transparent); }
+.rjc ::deep .rjc-s { color: var(--mud-palette-text-primary); }
+.rjc ::deep .rjc-n { color: var(--mud-palette-text-primary); font-weight: 600; }

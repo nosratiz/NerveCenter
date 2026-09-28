@@ -49,7 +49,14 @@
                 <button type="button" class="@ViewClass(View.Text, "string-editor-view-text")" @onclick="() => _view = View.Text">Text</button>
                 <button type="button" class="@ViewClass(View.Hex, "string-editor-view-hex")" @onclick="() => _view = View.Hex">Hex</button>
             </div>
-            <pre class="rds-code se-code string-editor-code">@RenderedCode</pre>
+            @if (_view == View.Json && _jsonValid)
+            {
+                <RedisJsonCode Json="@_value.RawValue" Class="se-code string-editor-code" />
+            }
+            else
+            {
+                <pre class="rds-code se-code string-editor-code">@(_view == View.Hex ? Hex(_value.RawValue) : _value.RawValue)</pre>
+            }
             <div class="se-actions">
                 <button type="button" class="rds-btn string-editor-edit" @onclick="StartEdit">Edit</button>
                 <button type="button" class="rds-link string-editor-copy" @onclick="CopyAsync">Copy</button>
@@ -76,7 +83,7 @@
     private bool _editing;
     private string? _error;
     private View _view = View.Text;
-    private IReadOnlyList<JsonToken>? _jsonTokens;
+    private bool _jsonValid;
     private string? _loadedKey;
 
     protected override async Task OnParametersSetAsync()
@@ -100,8 +107,8 @@
         {
             _value = result.Value;
             _draft = _value!.RawValue;
-            _jsonTokens = _value.LooksLikeJson ? RedisJsonLayout.Tokenize(_value.RawValue) : null;
-            _view = _jsonTokens is not null ? View.Json : View.Text;
+            _jsonValid = _value.LooksLikeJson && RedisJsonLayout.Tokenize(_value.RawValue) is not null;
+            _view = _jsonValid ? View.Json : View.Text;
         }
         else
         {
@@ -111,41 +118,6 @@
     }
 
     private string ViewClass(View view, string marker) => view == _view ? $"{marker} rds-active" : marker;
-
-    /// <summary>The code block's content: JSON as tinted tokens (built by hand so no Razor whitespace leaks into the pre), else plain text.</summary>
-    private RenderFragment RenderedCode => builder =>
-    {
-        if (_value is null)
-        {
-            return;
-        }
-
-        if (_view == View.Json && _jsonTokens is { } tokens)
-        {
-            foreach (var token in tokens)
-            {
-                if (token.Kind == JsonTokenKind.Punctuation)
-                {
-                    builder.AddContent(0, token.Text);
-                    continue;
-                }
-
-                builder.OpenElement(1, "span");
-                builder.AddAttribute(2, "class", token.Kind switch
-                {
-                    JsonTokenKind.Key => "se-k",
-                    JsonTokenKind.String => "se-s",
-                    _ => "se-n",
-                });
-                builder.AddContent(3, token.Text);
-                builder.CloseElement();
-            }
-
-            return;
-        }
-
-        builder.AddContent(4, _view == View.Hex ? Hex(_value.RawValue) : _value.RawValue);
-    };
 
     private static string Hex(string raw)
     {

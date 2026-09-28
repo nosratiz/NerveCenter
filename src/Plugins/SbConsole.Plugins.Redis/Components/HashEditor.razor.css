@@ -14,5 +14,5 @@
 .he-menu-col { width: 40px; text-align: right; padding-top: 1px !important; padding-bottom: 1px !important; vertical-align: middle !important; }
 .he ::deep .hash-field-menu .mud-icon-button { color: var(--rds-muted); padding: 4px; }
 .he ::deep tr:hover td { background: var(--rds-faint); }
-.he-json { max-height: 560px; overflow: auto; }
+.he ::deep .he-json { max-height: 560px; overflow: auto; border-color: transparent; }
 .he-footer { display: flex; align-items: center; gap: 16px; padding: 14px 0 4px; font-size: 13px; }

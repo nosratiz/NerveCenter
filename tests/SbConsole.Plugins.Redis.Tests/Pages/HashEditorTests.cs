@@ -109,12 +109,16 @@ public class HashEditorTests : RedisPageTestBase
     [Fact]
     public async Task Json_view_shows_the_fields_as_one_object_with_secrets_still_masked()
     {
-        var cut = await RenderWithAsync(new HashFieldEntry("userId", "77120", 5), new HashFieldEntry("csrf", "s3cr3t", 6));
+        var cut = await RenderWithAsync(
+            new HashFieldEntry("userId", "77120", 5),
+            new HashFieldEntry("prefs", "{\"theme\":\"dark\"}", 16),
+            new HashFieldEntry("csrf", "s3cr3t", 6));
 
         cut.Find(".hash-editor-view-json").Click();
 
         var json = cut.Find(".hash-editor-json").TextContent;
         json.Should().Contain("\"userId\": \"77120\"");
+        json.Should().Contain("\"prefs\": { \"theme\": \"dark\" }", "a JSON-valued field is embedded as JSON, not an escaped string");
         json.Should().NotContain("s3cr3t");
         cut.FindAll(".hash-field-row").Should().BeEmpty();
     }
