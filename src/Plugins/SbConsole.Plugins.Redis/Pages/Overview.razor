@@ -1,168 +1,461 @@
-@* src/Plugins/SbConsole.Plugins.Redis/Pages/Overview.razor *@
+@* src/Plugins/SbConsole.Plugins.Redis/Pages/Overview.razor -- mockup 1a (docs/superpowers/specs/redis-mockup/full.png, top left). *@
 @page "/p/redis/overview"
 @using System.Globalization
 @using SbConsole.Plugins.Redis.Client
 @using SbConsole.Plugins.Redis.Overview
-@using SbConsole.Sdk
-@inject IConnectionProvider Connections
 @inject GetOverviewQueryHandler GetOverview
 @inject GetMemoryByPrefixQueryHandler GetMemoryByPrefix
 @inject GetSlowLogQueryHandler GetSlowLog
+@inject TimeProvider Clock
 @implements IAsyncDisposable
 
 <PageTitle>Redis overview</PageTitle>
-<h1>Overview</h1>
 
-<MudSelect T="Guid" Label="Connection" Value="_connectionId" ValueChanged="OnConnectionChangedAsync" Class="redis-overview-connection">
-    @foreach (var c in _connections)
+<div class="rds-page">
+    <RedisPageHeader Title="Overview" Meta="MetaFragment">
+        <Chips>
+            <RedisConnectionDatabasePicker ShowDatabase="false" Loading="_loading" SelectionChanged="OnSelectionChangedAsync" />
+        </Chips>
+        <Actions>
+            @if (_overview is not null && _lastInfoAt is { } infoAt)
+            {
+                <div class="rds-actions">
+                    <span class="rds-meta redis-overview-info-age">INFO @InfoAge(infoAt)</span>
+                    <button type="button" class="ov-refresh redis-overview-refresh" title="Refresh now (auto-refreshes every @((int)RefreshInterval.TotalSeconds)s)"
+                            aria-label="Refresh now" @onclick="RefreshNowAsync">
+                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                            <circle class="ov-refresh-track" cx="10" cy="10" r="8" />
+                            <circle class="ov-refresh-progress" cx="10" cy="10" r="8" pathLength="100"
+                                    stroke-dasharray="@RefreshProgress(infoAt) 100" />
+                        </svg>
+                    </button>
+                </div>
+            }
+        </Actions>
+    </RedisPageHeader>
+
+    @if (_error is not null)
     {
-        <MudSelectItem Value="c.Id">@c.Name</MudSelectItem>
+        <div class="ov-body">
+            <MudAlert Severity="Severity.Error" Class="redis-overview-error">@_error</MudAlert>
+        </div>
     }
-</MudSelect>
+    else if (_overview is { } o)
+    {
+        var memoryPercent = MemoryPercent(o);
+        var memoryWarn = memoryPercent >= MemoryWarnPercent;
+        var evictedPerMinute = EvictedPerMinute;
 
-@if (_error is not null)
-{
-    <MudAlert Severity="Severity.Error" Class="redis-overview-error">@_error</MudAlert>
-}
-else if (_overview is not null)
-{
-    <MudGrid>
-        <MudItem xs="6">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.caption">Memory</MudText>
-                <MudText Typo="Typo.h5" Class="redis-overview-memory-used">
-                    @FormatBytes(_overview.UsedMemoryBytes)
-                    @if (_overview.MaxMemoryBytes is { } max)
+        <div class="rds-tiles ov-tiles">
+            <RedisStatTile Label="Memory" LabelClass="@(memoryWarn ? "rds-warn" : null)"
+                           Aside="@(o.MaxMemoryBytes is { } max ? $"maxmemory {RedisFormat.Bytes(max)}" : null)"
+                           Class="@($"redis-overview-memory{(memoryWarn ? " ov-tile-warn" : "")}")"
+                           ValueClass="redis-overview-memory-used">
+                <Value>
+                    @RedisFormat.Bytes(o.UsedMemoryBytes)
+                    @if (memoryPercent is { } pct)
                     {
-                        <span>(@((100.0 * _overview.UsedMemoryBytes / max).ToString("N0", CultureInfo.InvariantCulture))%)</span>
+                        <small class="@(memoryWarn ? "rds-warn" : "rds-muted")">@Fmt(pct, "0")%</small>
                     }
-                </MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="2">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.caption">Hit ratio</MudText>
-                <MudText Typo="Typo.h5" Class="redis-overview-hit-ratio">@_overview.HitRatioPercent.ToString("N1", CultureInfo.InvariantCulture)%</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="2">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.caption">Ops / sec</MudText>
-                <MudText Typo="Typo.h5" Class="redis-overview-ops">@_overview.OpsPerSecond.ToString("N0", CultureInfo.InvariantCulture)</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="2">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.caption">Evicted (total)</MudText>
-                <MudText Typo="Typo.h5" Class="redis-overview-evicted">@_overview.EvictedKeysTotal.ToString("N0", CultureInfo.InvariantCulture)</MudText>
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
+                </Value>
+                <ChildContent>
+                    @if (memoryPercent is { } pct)
+                    {
+                        <div class="rds-bar ov-memory-bar @(memoryWarn ? "rds-bar-warn" : null)">
+                            <span style="width: @Fmt(Math.Min(pct, 100), "0.#")%"></span>
+                            <i style="left: @Fmt(MemoryProblemThresholdPercent, "0")%" title="warning threshold (@Fmt(MemoryProblemThresholdPercent, "0")% of maxmemory)"></i>
+                        </div>
+                    }
+                </ChildContent>
+                <Caption>
+                    @if (memoryPercent is null)
+                    {
+                        <text>no maxmemory set · policy <span class="rds-mono">@o.MaxMemoryPolicy</span></text>
+                    }
+                    else
+                    {
+                        <text>policy <span class="rds-mono">@o.MaxMemoryPolicy</span> · warns at @Fmt(MemoryProblemThresholdPercent, "0")% · frag @Fmt(o.MemoryFragmentationRatio, "0.00")</text>
+                    }
+                </Caption>
+            </RedisStatTile>
 
-    @if (_memoryByPrefixError is not null)
-    {
-        <MudAlert Severity="Severity.Warning" Class="redis-overview-memory-by-prefix-error">@_memoryByPrefixError</MudAlert>
-    }
-    <MudTable Items="_memoryByPrefix" Class="redis-overview-memory-by-prefix" T="MemoryByPrefixEntry">
-        <HeaderContent>
-            <MudTh>Prefix</MudTh><MudTh>Bytes (sampled)</MudTh><MudTh>Keys</MudTh><MudTh>No TTL</MudTh>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd>@context.Prefix</MudTd>
-            <MudTd>@FormatBytes(context.SampledBytes)</MudTd>
-            <MudTd>@context.SampledKeyCount</MudTd>
-            <MudTd>@context.KeysWithoutTtlCount</MudTd>
-        </RowTemplate>
-    </MudTable>
+            <RedisStatTile Label="Hit ratio" Class="redis-overview-hit-ratio-tile" ValueClass="redis-overview-hit-ratio">
+                <Value>@Fmt(o.HitRatioPercent, "0.0")%</Value>
+                <ChildContent><RedisSparkline Values="@_samples.Select(s => s.HitRatio).ToList()" Class="rds-accent" /></ChildContent>
+            </RedisStatTile>
 
-    @if (_slowLogError is not null)
-    {
-        <MudAlert Severity="Severity.Warning" Class="redis-overview-slowlog-error">@_slowLogError</MudAlert>
+            <RedisStatTile Label="Ops / sec" Class="redis-overview-ops-tile" ValueClass="redis-overview-ops">
+                <Value>@RedisFormat.Compact(o.OpsPerSecond)</Value>
+                <ChildContent><RedisSparkline Values="@_samples.Select(s => (double)s.Ops).ToList()" Class="rds-accent" /></ChildContent>
+            </RedisStatTile>
+
+            <RedisStatTile Label="Evicted / min" Class="redis-overview-evicted"
+                           ValueClass="@(evictedPerMinute > 0 ? "rds-danger" : null)">
+                <Value>@(evictedPerMinute is { } rate ? RedisFormat.Count((long)Math.Round(rate)) : "—")</Value>
+                <ChildContent><RedisSparkline Values="@EvictionRates" Class="rds-danger" /></ChildContent>
+                <Caption>
+                    @if (evictedPerMinute is null)
+                    {
+                        <text>sampling…</text>
+                    }
+                </Caption>
+            </RedisStatTile>
+        </div>
+
+        <div class="ov-body">
+            @if (evictedPerMinute > 0 || memoryPercent >= MemoryProblemThresholdPercent)
+            {
+                var largest = LargestPrefix;
+                <div class="rds-banner redis-overview-banner">
+                    <span class="rds-banner-ring"></span>
+                    <span class="ov-banner-text">
+                        @if (evictedPerMinute > 0)
+                        {
+                            <span>Evicting @RedisFormat.Count((long)Math.Round(evictedPerMinute.Value)) keys/min and the hit ratio is @(HitRatioFalling ? "falling with them" : "holding steady")</span>
+                        }
+                        else
+                        {
+                            <span>Memory is at @Fmt(memoryPercent!.Value, "0")% of maxmemory</span>
+                        }
+                        @if (largest is not null)
+                        {
+                            <span class="rds-muted"> — largest share is under <span class="rds-mono">@DisplayPrefix(largest.Prefix)</span> (@RedisFormat.Bytes(largest.SampledBytes), @NoTtlPhrase(largest))</span>
+                        }
+                    </span>
+                    @if (largest is not null)
+                    {
+                        <span class="rds-spacer"></span>
+                        <a class="rds-link redis-overview-open-in-keys" href="@KeysLink(largest)">Open in Keys →</a>
+                    }
+                </div>
+            }
+
+            <div class="ov-cards">
+                <div class="rds-card ov-card redis-overview-memory-by-prefix">
+                    <div class="rds-card-head">
+                        <span class="rds-card-title">Memory by prefix</span>
+                        <span class="rds-spacer"></span>
+                        <span class="rds-card-sub">sampled · MEMORY USAGE</span>
+                    </div>
+                    @if (_memoryByPrefixError is not null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="redis-overview-memory-by-prefix-error">@_memoryByPrefixError</MudAlert>
+                    }
+                    else if (_memoryByPrefix.Count == 0)
+                    {
+                        <div class="rds-footnote">No keys sampled in db0.</div>
+                    }
+                    @{
+                        var largestBytes = _memoryByPrefix.Count == 0 ? 0 : _memoryByPrefix.Max(e => e.SampledBytes);
+                    }
+                    <div class="ov-prefix-rows">
+                        @foreach (var entry in _memoryByPrefix)
+                        {
+                            var isOther = IsOtherBucket(entry);
+                            var noTtl = NoTtlPercent(entry);
+                            <div class="ov-prefix-row redis-overview-prefix-row">
+                                <span class="rds-mono ov-prefix @(isOther ? "rds-muted" : null)" title="@DisplayPrefix(entry.Prefix)">@DisplayPrefix(entry.Prefix)</span>
+                                <div class="rds-bar @(isOther ? "ov-bar-other" : noTtl >= NoTtlWarnPercent ? "rds-bar-warn" : null)">
+                                    <span style="width: @Fmt(largestBytes == 0 ? 0 : 100.0 * entry.SampledBytes / largestBytes, "0.#")%"></span>
+                                </div>
+                                <span class="rds-mono rds-num ov-size @(isOther ? "rds-muted" : null)">@RedisFormat.Bytes(entry.SampledBytes)</span>
+                                <span class="ov-ttl @(noTtl >= NoTtlWarnPercent ? "rds-warn" : "rds-muted")">
+                                    @if (!isOther)
+                                    {
+                                        @(noTtl > 0 ? $"{Fmt(noTtl, "0")}% no TTL" : "all TTL")
+                                    }
+                                </span>
+                            </div>
+                        }
+                    </div>
+                    <div class="ov-card-foot redis-overview-keyspace">
+                        <span class="ov-dbs">
+                            @for (var i = 0; i < o.Databases.Count; i++)
+                            {
+                                var db = o.Databases[i];
+                                <span class="ov-db"><span class="rds-muted">db@(db.Index)</span> <span class="rds-mono">@RedisFormat.Compact(db.KeyCount)@(i == 0 ? " keys" : "")</span></span>
+                            }
+                        </span>
+                        <span class="rds-spacer"></span>
+                        <span><span class="rds-muted">clients</span> <span class="rds-mono">@RedisFormat.Count(o.ConnectedClients)</span> <span class="rds-muted">· blocked</span> <span class="rds-mono">@RedisFormat.Count(o.BlockedClients)</span></span>
+                    </div>
+                </div>
+
+                <div class="rds-card ov-card redis-overview-slowlog">
+                    <div class="rds-card-head">
+                        <span class="rds-card-title">Slow log</span>
+                        <span class="rds-card-sub">last @_slowLog.Count</span>
+                    </div>
+                    @if (_slowLogError is not null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="redis-overview-slowlog-error">@_slowLogError</MudAlert>
+                    }
+                    else
+                    {
+                        <table class="rds-table ov-slowlog-table">
+                            <thead>
+                                <tr><th>Time</th><th class="rds-num">ms</th><th>Command</th><th>Client</th></tr>
+                            </thead>
+                            <tbody>
+                                @if (_slowLog.Count == 0)
+                                {
+                                    <tr><td colspan="4" class="rds-muted">The slow log is empty.</td></tr>
+                                }
+                                @foreach (var entry in _slowLog)
+                                {
+                                    <tr>
+                                        <td class="rds-muted">@entry.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</td>
+                                        <td class="rds-num redis-overview-slowlog-ms @SlowLogMsClass(entry.Duration)">@FormatMs(entry.Duration)</td>
+                                        <td class="ov-command" title="@entry.Command">@entry.Command</td>
+                                        <td class="rds-muted ov-client">@entry.ClientAddress</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        @if (SlowestKeysCommand is { } keys)
+                        {
+                            <div class="rds-footnote ov-footnote redis-overview-keys-footnote">The @FormatMs(keys.Duration) ms KEYS came from outside SbConsole — the plugin only ever issues SCAN.</div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
     }
-    <MudTable Items="_slowLog" Class="redis-overview-slowlog" T="SlowLogEntry">
-        <HeaderContent>
-            <MudTh>Time</MudTh><MudTh>ms</MudTh><MudTh>Command</MudTh><MudTh>Client</MudTh>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd>@context.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</MudTd>
-            <MudTd>@context.Duration.TotalMilliseconds.ToString("N0", CultureInfo.InvariantCulture)</MudTd>
-            <MudTd>@context.Command</MudTd>
-            <MudTd>@context.ClientAddress</MudTd>
-        </RowTemplate>
-    </MudTable>
-}
+</div>
 
 @code {
-    private IReadOnlyList<ConnectionInfo> _connections = [];
-    private Guid _connectionId;
+    // Mirrors RedisPlugin.MemoryProblemThresholdPercent (private there): the plugin's own "memory
+    // is a problem" line, which the dashboard also uses. Redis itself only starts evicting at 100%
+    // of maxmemory, so the bar tick is labelled a warning threshold, not an eviction point.
+    private const double MemoryProblemThresholdPercent = 90.0;
+    private const double MemoryWarnPercent = 80.0;
+    private const double NoTtlWarnPercent = 30.0;
+    private const int MaxSamples = 30;
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
+
+    private sealed record Sample(DateTimeOffset At, double HitRatio, long Ops, long EvictedTotal, double? EvictedPerMinute);
+
+    private Guid? _connectionId;
     private ServerOverview? _overview;
     private IReadOnlyList<MemoryByPrefixEntry> _memoryByPrefix = [];
     private IReadOnlyList<SlowLogEntry> _slowLog = [];
+    private readonly List<Sample> _samples = [];
+    private DateTimeOffset? _lastInfoAt;
     private string? _error;
     private string? _memoryByPrefixError;
     private string? _slowLogError;
-    private CancellationTokenSource _cts = new();
+    private bool _loading;
+    private bool _refreshing;
+    private bool _disposed;
+    private readonly CancellationTokenSource _cts = new();
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized() => _ = RunAutoRefreshAsync(_cts.Token);
+
+    private async Task OnSelectionChangedAsync(RedisSelection selection)
     {
-        _connections = await Connections.ListAsync("redis", _cts.Token);
-        if (_connections.Count > 0)
+        _connectionId = selection.Connection.Id;
+        _overview = null;
+        _error = null;
+        _samples.Clear();
+        _loading = true;
+        try
         {
-            _connectionId = _connections[0].Id;
-            await LoadAsync();
+            await RefreshAsync();
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    private async Task OnConnectionChangedAsync(Guid connectionId)
+    private async Task RefreshNowAsync() => await RefreshAsync();
+
+    // One tick a second keeps "INFO 3s ago" live; the broker is only asked every RefreshInterval.
+    private async Task RunAutoRefreshAsync(CancellationToken ct)
     {
-        _connectionId = connectionId;
-        await LoadAsync();
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TickInterval, Clock, ct);
+                await InvokeAsync(async () =>
+                {
+                    if (_lastInfoAt is { } at && Clock.GetUtcNow() - at >= RefreshInterval)
+                    {
+                        await RefreshAsync();
+                    }
+                    StateHasChanged();
+                });
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+        }
     }
 
-    private async Task LoadAsync()
+    private async Task RefreshAsync()
     {
-        _error = null;
-
-        var overviewResult = await GetOverview.HandleAsync(_connectionId, _cts.Token);
-        if (!overviewResult.IsSuccess)
+        if (_connectionId is not { } connectionId || _refreshing || _disposed)
         {
-            _error = overviewResult.Error;
-            _overview = null;
             return;
         }
-        _overview = overviewResult.Value;
 
-        // A failed sub-call must not blank the whole page (the overview tiles above are already
-        // loaded) -- but per the design spec, an ACL/NOPERM failure must be surfaced to the user,
-        // not silently rendered as an empty table indistinguishable from "no data".
-        var memoryResult = await GetMemoryByPrefix.HandleAsync(_connectionId, database: 0, ct: _cts.Token);
-        _memoryByPrefix = memoryResult.IsSuccess ? memoryResult.Value! : [];
-        _memoryByPrefixError = memoryResult.IsSuccess ? null : memoryResult.Error;
-
-        var slowLogResult = await GetSlowLog.HandleAsync(_connectionId, _cts.Token);
-        _slowLog = slowLogResult.IsSuccess ? slowLogResult.Value! : [];
-        _slowLogError = slowLogResult.IsSuccess ? null : slowLogResult.Error;
-    }
-
-    // Binary (1024-based) scaling, matching Redis's own INFO/redis-cli memory metrics convention
-    // and this codebase's precedent in RabbitMq's RabbitFormat.cs.
-    private static string FormatBytes(long bytes)
-    {
-        double value = bytes;
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
-        var unit = 0;
-        while (value >= 1024 && unit < units.Length - 1)
+        _refreshing = true;
+        try
         {
-            value /= 1024;
-            unit++;
+            var ct = _cts.Token;
+            var overviewResult = await GetOverview.HandleAsync(connectionId, ct);
+            if (connectionId != _connectionId)
+            {
+                return; // the user switched connection mid-flight; that switch loads its own data
+            }
+
+            _lastInfoAt = Clock.GetUtcNow();
+            if (!overviewResult.IsSuccess)
+            {
+                _error = overviewResult.Error;
+                _overview = null;
+                return;
+            }
+
+            _error = null;
+            _overview = overviewResult.Value!;
+            AddSample(_overview, _lastInfoAt.Value);
+
+            // A failed sub-call must not blank the whole page (the overview tiles above are already
+            // loaded) -- but per the design spec, an ACL/NOPERM failure must be surfaced to the user,
+            // not silently rendered as an empty table indistinguishable from "no data".
+            var memoryResult = await GetMemoryByPrefix.HandleAsync(connectionId, database: 0, ct: ct);
+            _memoryByPrefix = memoryResult.IsSuccess ? memoryResult.Value! : [];
+            _memoryByPrefixError = memoryResult.IsSuccess ? null : memoryResult.Error;
+
+            var slowLogResult = await GetSlowLog.HandleAsync(connectionId, ct);
+            _slowLog = slowLogResult.IsSuccess ? slowLogResult.Value! : [];
+            _slowLogError = slowLogResult.IsSuccess ? null : slowLogResult.Error;
         }
-        return $"{value.ToString("N1", CultureInfo.InvariantCulture)} {units[unit]}";
+        finally
+        {
+            _refreshing = false;
+        }
     }
+
+    // There is no server-side history: the sparklines and the evicted/min rate come from this
+    // page's own INFO samples. A counter that goes backwards (server restart / CONFIG RESETSTAT)
+    // yields no rate for that step rather than a negative one.
+    private void AddSample(ServerOverview overview, DateTimeOffset at)
+    {
+        double? perMinute = null;
+        if (_samples.Count > 0)
+        {
+            var previous = _samples[^1];
+            var elapsed = at - previous.At;
+            if (elapsed > TimeSpan.Zero && overview.EvictedKeysTotal >= previous.EvictedTotal)
+            {
+                perMinute = (overview.EvictedKeysTotal - previous.EvictedTotal) / elapsed.TotalMinutes;
+            }
+        }
+
+        _samples.Add(new Sample(at, overview.HitRatioPercent, overview.OpsPerSecond, overview.EvictedKeysTotal, perMinute));
+        if (_samples.Count > MaxSamples)
+        {
+            _samples.RemoveAt(0);
+        }
+    }
+
+    private double? EvictedPerMinute => _samples.Count > 0 ? _samples[^1].EvictedPerMinute : null;
+
+    private List<double> EvictionRates => _samples.Where(s => s.EvictedPerMinute is not null).Select(s => s.EvictedPerMinute!.Value).ToList();
+
+    private bool HitRatioFalling => _samples.Count >= 2 && _samples[^1].HitRatio < _samples[0].HitRatio - 0.1;
+
+    private RenderFragment? MetaFragment => _overview is null ? null : builder => builder.AddContent(0, MetaText(_overview));
+
+    private static string MetaText(ServerOverview o)
+    {
+        var role = o.Role switch
+        {
+            "master" => "primary",
+            "slave" => "replica",
+            _ => o.Role,
+        };
+        var replicas = o.ConnectedReplicas switch
+        {
+            <= 0 => "",
+            1 => "1 replica",
+            var n => $"{n} replicas",
+        };
+        var topology = (role, replicas) switch
+        {
+            ("", _) => replicas,
+            (_, "") => role,
+            _ => $"{role} + {replicas}",
+        };
+        return string.Join(" · ", new[] { o.RedisVersion, o.Mode, topology }.Where(s => !string.IsNullOrEmpty(s)));
+    }
+
+    private string InfoAge(DateTimeOffset at)
+    {
+        var age = Clock.GetUtcNow() - at;
+        return RedisFormat.Duration(TimeSpan.FromSeconds(Math.Floor(Math.Max(0, age.TotalSeconds)))) + " ago";
+    }
+
+    private string RefreshProgress(DateTimeOffset at) =>
+        Fmt(Math.Clamp((Clock.GetUtcNow() - at) / RefreshInterval, 0, 1) * 100, "0");
+
+    private static double? MemoryPercent(ServerOverview o) =>
+        o.MaxMemoryBytes is { } max && max > 0 ? 100.0 * o.UsedMemoryBytes / max : null;
+
+    private MemoryByPrefixEntry? LargestPrefix =>
+        _memoryByPrefix.Where(e => !IsOtherBucket(e)).MaxBy(e => e.SampledBytes);
+
+    // The sampler folds everything past its top-N into a bare "other" bucket -- not a key prefix.
+    private static bool IsOtherBucket(MemoryByPrefixEntry entry) => entry.Prefix == "other";
+
+    private static double NoTtlPercent(MemoryByPrefixEntry entry) =>
+        entry.SampledKeyCount == 0 ? 0 : 100.0 * entry.KeysWithoutTtlCount / entry.SampledKeyCount;
+
+    private static string NoTtlPhrase(MemoryByPrefixEntry entry) =>
+        entry.KeysWithoutTtlCount == 0
+            ? "every sampled key has a TTL"
+            : $"no TTL on {Fmt(NoTtlPercent(entry), "0")}% of sampled keys";
+
+    // The sampler keeps the delimiter on a prefix ("session:"); a key with no delimiter stays whole.
+    private static string KeyPattern(string prefix) => prefix.EndsWith(':') ? prefix + "*" : prefix;
+
+    private static string DisplayPrefix(string prefix) => prefix == "other" ? prefix : KeyPattern(prefix);
+
+    private string KeysLink(MemoryByPrefixEntry entry) =>
+        $"/p/redis/keys?connectionId={_connectionId}&database=0&pattern={Uri.EscapeDataString(KeyPattern(entry.Prefix))}";
+
+    private SlowLogEntry? SlowestKeysCommand =>
+        _slowLog.Where(e => e.Command.StartsWith("KEYS ", StringComparison.OrdinalIgnoreCase)).MaxBy(e => e.Duration);
+
+    private static string FormatMs(TimeSpan duration) =>
+        duration.TotalMilliseconds < 1 ? Fmt(duration.TotalMilliseconds, "0.00") : Fmt(duration.TotalMilliseconds, "N0");
+
+    private static string? SlowLogMsClass(TimeSpan duration) => duration.TotalMilliseconds switch
+    {
+        >= 100 => "rds-danger",
+        >= 20 => "rds-warn",
+        _ => null,
+    };
+
+    private static string Fmt(double value, string format) => value.ToString(format, CultureInfo.InvariantCulture);
 
     public ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        _cts.Dispose();
+        if (!_disposed)
+        {
+            _disposed = true;
+            _cts.Cancel();
+            _cts.Dispose();
+        }
         return ValueTask.CompletedTask;
     }
 }

@@ -1,0 +1,95 @@
+/* Overview-only layout (mockup 1a). Shared rds-* primitives live in wwwroot/redis.css; colors come
+   only from the --rds-* variables (defined on .rds-page) or --mud-palette-* tokens. */
+
+.ov-tiles { grid-template-columns: 2fr 1fr 1fr 1fr; }
+
+/* The tile element itself is rendered by RedisStatTile, so reach it through ::deep. */
+.ov-tiles ::deep .rds-tile.ov-tile-warn {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rds-warn) 45%, transparent);
+}
+
+.ov-memory-bar { margin: 12px 0 2px; }
+
+.ov-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 20px 20px;
+}
+
+.ov-banner-text { line-height: 1.5; }
+
+.ov-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    min-height: 420px;
+}
+
+.ov-card { display: flex; flex-direction: column; }
+.ov-card .rds-card-head { margin-bottom: 14px; }
+
+/* ---- memory by prefix ---- */
+.ov-prefix-rows { display: flex; flex-direction: column; gap: 14px; }
+.ov-prefix-row {
+    display: grid;
+    grid-template-columns: minmax(80px, 30%) 1fr 72px 88px;
+    align-items: center;
+    gap: 12px;
+}
+.ov-prefix {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ov-size { font-size: 13px; }
+.ov-ttl { font-size: 12px; line-height: 1.3; }
+.ov-bar-other > span { background: var(--rds-muted); }
+
+.ov-card-foot {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rds-line);
+    font-size: 13px;
+}
+.ov-dbs { display: inline-flex; flex-wrap: wrap; gap: 6px 18px; }
+
+/* ---- slow log ---- */
+.ov-slowlog-table td { padding: 8px; }
+.ov-command {
+    max-width: 0;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ov-client { white-space: nowrap; }
+.ov-footnote { margin-top: 10px; }
+
+/* ---- refresh indicator: a ring that fills toward the next INFO poll; click to poll now ---- */
+.ov-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+}
+.ov-refresh:hover { background: var(--rds-faint); }
+.ov-refresh svg { width: 20px; height: 20px; transform: rotate(-90deg); }
+.ov-refresh circle { fill: none; stroke-width: 2; }
+.ov-refresh-track { stroke: var(--rds-line); }
+.ov-refresh-progress { stroke: var(--rds-accent); transition: stroke-dasharray 1s linear; }
+
+@media (max-width: 960px) {
+    .ov-cards { grid-template-columns: 1fr; }
+}
