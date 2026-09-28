@@ -1,0 +1,101 @@
+@using System.Globalization
+@using SbConsole.Plugins.Redis.Streams
+@inject ClaimStreamEntriesCommandHandler ClaimHandler
+
+@* XCLAIM for the Streams page (mockup 1d): used by the pending pane's "Claim" (selected rows) and
+   by a stalled consumer's "Claim to {live consumer}…" (all of its pending entries). Asks which
+   consumer to claim to -- defaulting to the most recently active one the page picked -- since XCLAIM
+   happily accepts any name, including one that doesn't exist yet. *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Claim <strong>@EntryIds.Count.ToString("N0", CultureInfo.InvariantCulture)</strong> pending @(EntryIds.Count == 1 ? "entry" : "entries")
+            in group <span style="font-family:monospace">@Group</span>@(From is null ? "" : $" from {From}") to:
+        </MudText>
+        <MudTextField id="streams-claim-consumer" data-testid="streams-claim-consumer" Class="streams-claim-consumer" T="string" Value="_consumer"
+                      ValueChanged="v => _consumer = v ?? string.Empty" Label="Consumer" Immediate="true" />
+        @if (Consumers.Count > 0)
+        {
+            <div class="d-flex flex-wrap gap-2 mt-2">
+                @foreach (var consumer in Consumers)
+                {
+                    <MudButton Class="streams-claim-pick" data-consumer="@consumer" Size="Size.Small"
+                               Variant="@(consumer == _consumer ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                               OnClick="@(() => _consumer = consumer)">@consumer</MudButton>
+                }
+            </div>
+        }
+        <MudNumericField id="streams-claim-minidle" data-testid="streams-claim-minidle" Class="streams-claim-minidle mt-3" T="long" Value="_minIdleMs"
+                         ValueChanged="v => _minIdleMs = v" Label="Min idle (ms)" Min="0" Immediate="true" HideSpinButtons="true"
+                         HelperText="Entries idle for less than this are skipped, so a consumer that just picked one up keeps it." />
+
+        @if (_error is not null)
+        {
+            <MudAlert Class="streams-claim-error mt-3" Severity="Severity.Error" Dense="true">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (_busy)
+        {
+            <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        <MudButton Class="streams-claim-submit" Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_busy || string.IsNullOrWhiteSpace(_consumer) || EntryIds.Count == 0)" OnClick="ClaimAsync">Claim</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Guid ConnectionId { get; set; }
+    [Parameter] public string ConnectionName { get; set; } = "";
+    [Parameter] public int Database { get; set; }
+    [Parameter] public string Key { get; set; } = "";
+    [Parameter] public string Group { get; set; } = "";
+    [Parameter] public IReadOnlyList<string> EntryIds { get; set; } = [];
+
+    /// <summary>The group's known consumers, offered as one-click targets.</summary>
+    [Parameter] public IReadOnlyList<string> Consumers { get; set; } = [];
+
+    /// <summary>The preselected target consumer.</summary>
+    [Parameter] public string Consumer { get; set; } = "";
+
+    /// <summary>The consumer the entries are being moved off, when claiming a stalled consumer's entries.</summary>
+    [Parameter] public string? From { get; set; }
+
+    private string _consumer = "";
+    private long _minIdleMs;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized() => _consumer = Consumer;
+
+    private async Task ClaimAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_consumer) || EntryIds.Count == 0)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await ClaimHandler.HandleAsync(new ClaimStreamEntriesCommand(ConnectionId, ConnectionName, Database, Key, Group, _consumer, _minIdleMs, EntryIds));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(result.Value!.Count));
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
