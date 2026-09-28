@@ -175,13 +175,15 @@ plugin's mockup ([`docs/superpowers/specs/redis-mockup/`](../docs/superpowers/sp
 
 `redis-pubsub-demo` runs continuously, every 5s: it publishes a heartbeat to `notifications:live`
 (and every third beat to `orders:events`) — Pub/Sub has no history, so this is what gives the
-Pub/Sub page's live tail something to show — and appends an `orders:stream` entry that the
-healthy consumers (`fulfil-1`, `billing-7c9f`) read and ack, keeping "last ID" and idle times
-live. Stop it with `docker compose stop redis-pubsub-demo` if the noise is unwanted.
+Pub/Sub page's live tail something to show — and appends an `orders:stream` entry that every
+healthy consumer takes turns reading and acking, keeping "last ID" and idle times live while
+`billing-2a41` alone stays stalled. Stop it with `docker compose stop redis-pubsub-demo` if the noise is unwanted.
 
 Re-running `docker compose up -d` re-seeds idempotently (see
-[`redis/init-keys.sh`](redis/init-keys.sh)); to start from scratch, recreate the containers:
-`docker compose --profile redis up -d --force-recreate --no-deps redis redis-init redis-pubsub-demo`.
+[`redis/init-keys.sh`](redis/init-keys.sh)). To start from scratch, recreate the containers *and* their
+anonymous data volume (`--force-recreate` alone keeps Redis's `/data`, so the seed would skip the
+streams it finds still there):
+`docker compose --profile redis up -d --force-recreate --renew-anon-volumes --no-deps redis redis-init redis-pubsub-demo`.
 
 ### Connect the app to it (Redis)
 

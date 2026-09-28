@@ -2,8 +2,9 @@
 # Live traffic for the Redis plugin's demo stack, every 5s:
 #   - Pub/Sub has no history (a subscriber only sees messages published while subscribed), so
 #     this publishes a heartbeat to notifications:live and, every third beat, orders:events.
-#   - orders:stream gets a new entry, and the healthy consumers (fulfil-1, billing-7c9f) read and
-#     ack it -- so "last id Ns ago" and their idle times stay fresh while billing-2a41 stays stalled.
+#   - orders:stream gets a new entry, and every healthy consumer takes a turn reading and acking --
+#     fulfil-1..3, billing-7c9f, analytics-1..2 -- so "last id Ns ago" and their idle times stay
+#     fresh and their groups keep up, while billing-2a41 alone stays stalled (the mockup's story).
 set -eu
 
 R="redis-cli -h redis -a $REDIS_PASSWORD --no-auth-warning"
@@ -26,8 +27,9 @@ while true; do
   fi
 
   $R XADD orders:stream MAXLEN '~' 5000 '*' orderRef "UK-2026-$((449000 + i))" event order.created amount "$((20 + i % 300)).40" currency GBP >/dev/null
-  consume_one fulfilment fulfil-1
+  consume_one fulfilment "fulfil-$((i % 3 + 1))"
   consume_one billing billing-7c9f
+  consume_one analytics "analytics-$((i % 2 + 1))"
 
   sleep 5
 done
