@@ -56,4 +56,47 @@ public sealed class RedisPlugin : IPlugin
 
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         new RedisOperations().TestConnectionAsync(secret, ct);
+
+    private const double MemoryProblemThresholdPercent = 90.0;
+
+    public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(
+        string connectionString, CancellationToken ct = default)
+    {
+        var overview = await new RedisOperations().GetOverviewAsync(connectionString, ct);
+        return
+        [
+            new PluginDashboardMetric("Used memory %", overview.MaxMemoryBytes is { } max && max > 0
+                ? (int)(100.0 * overview.UsedMemoryBytes / max) : 0),
+            new PluginDashboardMetric("Hit ratio %", (int)overview.HitRatioPercent),
+        ];
+    }
+
+    public Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
+        Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
+        GetDashboardProblemsAsyncForTesting(new RedisOperations(), connectionId, connectionString, ct);
+
+    internal async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsyncForTesting(
+        IRedisOperations operations, Guid connectionId, string connectionString, CancellationToken ct = default)
+    {
+        var overview = await operations.GetOverviewAsync(connectionString, ct);
+        if (overview.MaxMemoryBytes is not { } max || max <= 0)
+        {
+            return [];
+        }
+
+        var usedPercent = 100.0 * overview.UsedMemoryBytes / max;
+        if (usedPercent < MemoryProblemThresholdPercent)
+        {
+            return [];
+        }
+
+        return
+        [
+            new PluginDashboardProblem(
+                "Warning",
+                "Memory usage is approaching the eviction threshold",
+                $"{usedPercent:N0}% of maxmemory ({overview.MaxMemoryPolicy})",
+                "/p/redis/overview"),
+        ];
+    }
 }

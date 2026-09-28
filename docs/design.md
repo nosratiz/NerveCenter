@@ -1030,6 +1030,62 @@ SDK default: reading a message's age needs a `basic.get`.
 seeded from `docker/rabbitmq/definitions.json` with the mockup's topology in vhost `/orders`; AMQP on
 host port 5673 (the Service Bus emulator holds 5672). See `docker/README.md`.
 
+## 6.9 Redis plugin (`SbConsole.Plugins.Redis`) (2026-09-28)
+
+SbConsole's fifth plugin: `RedisPlugin : IPlugin`, `Id`/`ConnectionKind` = `"redis"`. Redis is not a
+broker — no queue/topic model, no vhost — so the plan anchors on what Redis actually is: a keyspace
+and a server whose memory pressure is the number that pages someone at 3am. Full design (all phases):
+`docs/superpowers/specs/2026-09-28-redis-plugin-design.md`; this plan (Phase 1, tasks 1–10):
+`docs/superpowers/plans/2026-09-28-redis-plugin.md`. It ships client library `StackExchange.Redis`,
+Standalone/Sentinel connection handling, the Overview page, and these dashboard hooks — the Keys
+browser, Streams (the closest thing Redis has to a dead-letter queue, via the pending-entries list),
+Pub/Sub and Cluster topology are separate, later plans.
+
+**Connection secret.** `"{topology}|{preferReplica}|{configurationOptionsString}"`
+(`RedisConnectionSettings`). Unlike Rabbit/Kafka/AWS's house `key=value;` convention, Redis's own
+client already has a full-featured connection-string format, so the configuration-options portion is
+produced and consumed entirely by `ConfigurationOptions.Parse`/`.ToString()` — endpoints, TLS,
+`ServiceName` and `DefaultDatabase` all round-trip through the real library, not a hand-rolled parser.
+The one gap: `ConfigurationOptions` has no escape syntax for a comma inside a value (comma is its own
+field separator — StackExchange/StackExchange.Redis#680, #883), so `User`/`Password` alone are
+percent-encoded around that round trip, the same shape as RabbitMQ's percent-encoding precedent
+(§6.8) for a value its format can't otherwise carry safely. This is a corrected design: the first
+pass replaced the library round trip with a hand-rolled parser entirely, which a review caught before
+merge as a regression against the spec's own comma-safety goal — `ConfigurationOptions` genuinely
+can't escape a comma, so the fix was to percent-encode only the two credential fields, not to
+abandon the library for everything else.
+
+**Shape.** `IRedisOperations`/`RedisOperations` is the one thin wrapper every handler goes through
+(one shared instance per docs/design.md §6.8's convention — every method takes the raw secret as its
+first parameter). All the actual logic is pure and separately testable: `RedisInfoParser` turns
+parsed `INFO` sections into `ServerOverview`, `RedisMemoryByPrefixSampler` groups a `SCAN`+`MEMORY
+USAGE` sample into top-N prefixes (with an "other" bucket), and `RedisSlowLogParser` turns a raw
+`SLOWLOG GET` `RedisResult` into `SlowLogEntry` rows — none of the three touch the network, so they're
+unit-tested directly with no broker. `RedisOperations` itself stays thin: connect, call the
+StackExchange.Redis API, hand the raw result to the matching parser.
+
+**Overview page** (`Pages/Overview.razor`, `Overview/GetOverviewQueryHandler`,
+`GetMemoryByPrefixQueryHandler`, `GetSlowLogQueryHandler`): server health (version, mode, connected
+replicas, used/max memory, eviction policy, hit ratio, ops/sec, keyspace per DB), a memory-by-prefix
+sample, and the slow log. Byte formatting uses binary (1024) scaling throughout, matching Redis's own
+`INFO`/`MEMORY` convention rather than decimal (1000) SI units.
+
+**Host hooks:** `GetDashboardMetricsAsync` reports "Used memory %" and "Hit ratio %" per connection.
+`GetDashboardProblemsAsync` raises one "Warning" when used memory crosses 90% of `maxmemory` (no
+problem when `maxmemory` is unbounded — a `0`/`null` cap means eviction can't trigger, so there's
+nothing to warn about), linking to `/p/redis/overview`. Both call `RedisOperations` directly rather
+than through DI, matching the SDK-hook convention elsewhere in this codebase (the host resolves no
+scoped services when calling these). The public method constructs the real `RedisOperations`;
+`GetDashboardProblemsAsyncForTesting` is an internal seam taking `IRedisOperations` so tests substitute
+it directly — the same testability shape as RabbitMQ's `GetCachedSnapshotAsync` (§6.8).
+`GetNavBadgeAsync`, `GetResourceMetricsAsync` and `GetOldestDeadLetterAsync` stay at the SDK default:
+nothing in Phase 1's surface (a single Overview page, no per-resource concept yet) has a badge, a
+named resource to track history for, or a dead-letter analogue — those wait for the Streams plan.
+
+**Local stack:** `docker compose --profile redis up -d` — Redis 7 (`redis:7-alpine`), password-
+protected (`--requirepass`), standalone; `redis-init` seeds a handful of sample keys (two
+`session:u:*` hashes, a list, a sorted set, a set) idempotently on every `up`. See `docker/README.md`.
+
 ## 7. Error handling
 
 - Handlers return typed results (`Result<T>` with error category: `NotFound`,
