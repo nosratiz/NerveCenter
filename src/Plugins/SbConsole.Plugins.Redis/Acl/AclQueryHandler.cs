@@ -10,7 +10,7 @@ namespace SbConsole.Plugins.Redis.Acl;
 /// button both call the same HasCommandPermissionAsync("FLUSHDB"/"PUBLISH") check, matching the
 /// design brief's own framing of Pub/Sub's ACL-checking precedent as something later buttons reuse.
 /// </summary>
-public sealed class AclQueryHandler(IRedisOperations operations, IConnectionProvider connections, ILogger<AclQueryHandler> logger)
+public sealed class AclQueryHandler(IRedisOperations operations, IConnectionProvider connections, ILogger<AclQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<bool>> HasCommandPermissionAsync(Guid connectionId, string command, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.acl.check",

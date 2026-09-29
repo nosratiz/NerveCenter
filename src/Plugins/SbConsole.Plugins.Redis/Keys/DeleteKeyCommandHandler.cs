@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record DeleteKeyCommand(Guid ConnectionId, string ConnectionName, int Database, string Key);
 
 public sealed class DeleteKeyCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteKeyCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteKeyCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteKeyCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

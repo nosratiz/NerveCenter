@@ -10,7 +10,7 @@ namespace SbConsole.Plugins.ServiceBus.Client;
 /// coverage by necessity — they can't be meaningfully unit-tested without a real or emulated
 /// broker (docs/design.md §6/§8) — the substitutable interface is where the test leverage is.
 /// </summary>
-public sealed class AzureServiceBusOperations : IServiceBusOperations
+public sealed class AzureServiceBusOperations : IServiceBusOperations, ISingletonService
 {
     // docs/design.md §7 wants "a clear 'namespace unreachable' state instead of indefinite
     // spinners". The SDK's defaults do not deliver that: Azure.Core's RetryOptions defaults to

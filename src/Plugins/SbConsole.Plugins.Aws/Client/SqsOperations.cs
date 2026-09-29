@@ -13,7 +13,7 @@ namespace SbConsole.Plugins.Aws.Client;
 /// necessity -- they can't be meaningfully unit-tested without a real or emulated AWS account
 /// (design spec §8) -- the substitutable interface is where the test leverage is.
 /// </summary>
-public sealed class SqsOperations : ISqsOperations
+public sealed class SqsOperations : ISqsOperations, ISingletonService
 {
     private static AmazonSQSClient BuildSqsClient(string secret)
     {

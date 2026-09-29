@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Topics;
 
 public sealed record DeleteTopicCommand(Guid ConnectionId, string ConnectionName, string TopicArn, string TopicName);
 
-public sealed class DeleteTopicCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteTopicCommandHandler> logger)
+public sealed class DeleteTopicCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteTopicCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteTopicCommand cmd, CancellationToken ct = default)
     {

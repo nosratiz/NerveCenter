@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Queues;
 
 public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName);
 
-public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger)
+public sealed class DeleteQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteQueueCommand cmd, CancellationToken ct = default)
     {

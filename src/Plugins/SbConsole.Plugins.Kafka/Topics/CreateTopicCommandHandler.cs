@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Kafka.Topics;
 
 public sealed record CreateTopicCommand(Guid ConnectionId, string ConnectionName, string TopicName, int PartitionCount, int ReplicationFactor);
 
-public sealed class CreateTopicCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger)
+public sealed class CreateTopicCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CreateTopicCommand cmd, CancellationToken ct = default)
     {

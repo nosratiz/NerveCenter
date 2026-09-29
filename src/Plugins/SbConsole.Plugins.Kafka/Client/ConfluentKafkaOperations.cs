@@ -10,7 +10,7 @@ namespace SbConsole.Plugins.Kafka.Client;
 /// necessity -- they can't be meaningfully unit-tested without a real or emulated broker (design
 /// spec §8) -- the substitutable interface is where the test leverage is.
 /// </summary>
-public sealed class ConfluentKafkaOperations : IKafkaOperations
+public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonService
 {
     // Bounds every single blocking Confluent.Kafka call (GetMetadata, QueryWatermarkOffsets) so an
     // unreachable cluster fails fast with a clear message instead of hanging the page -- same role

@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kafka.Topics;
 
-public sealed class GetConnectionEchoQueryHandler(IConnectionProvider connections, ILogger<GetConnectionEchoQueryHandler> logger)
+public sealed class GetConnectionEchoQueryHandler(IConnectionProvider connections, ILogger<GetConnectionEchoQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<string>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {

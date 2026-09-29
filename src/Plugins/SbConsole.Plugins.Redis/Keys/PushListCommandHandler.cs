@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record PushListCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Value, bool AtHead);
 
 public sealed class PushListCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PushListCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PushListCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(PushListCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

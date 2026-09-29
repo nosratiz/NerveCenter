@@ -15,7 +15,7 @@ public sealed record DeadLetterOverviewEntry(
 /// connection (one unreachable cluster shouldn't blank the whole page) -- see design spec §5.
 /// </summary>
 public sealed class ListDeadLetterOverviewQueryHandler(
-    IKafkaOperations operations, IConnectionProvider connections, ILogger<ListDeadLetterOverviewQueryHandler> logger)
+    IKafkaOperations operations, IConnectionProvider connections, ILogger<ListDeadLetterOverviewQueryHandler> logger) : IScopedService
 {
     public async Task<IReadOnlyList<DeadLetterOverviewEntry>> HandleAsync(CancellationToken ct = default)
     {

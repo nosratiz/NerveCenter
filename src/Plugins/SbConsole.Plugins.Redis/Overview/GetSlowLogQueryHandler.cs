@@ -5,7 +5,7 @@ using SbConsole.Sdk;
 namespace SbConsole.Plugins.Redis.Overview;
 
 public sealed class GetSlowLogQueryHandler(
-    IRedisOperations operations, IConnectionProvider connections, ILogger<GetSlowLogQueryHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, ILogger<GetSlowLogQueryHandler> logger) : IScopedService
 {
     private const int Count = 10;
 

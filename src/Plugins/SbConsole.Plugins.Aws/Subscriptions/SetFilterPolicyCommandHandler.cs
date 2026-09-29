@@ -12,7 +12,7 @@ public sealed record SetFilterPolicyCommand(Guid ConnectionId, string Connection
 /// that fails FilterPolicyValidator is rejected before the secret is fetched or AWS is called,
 /// and isn't audited (nothing was attempted); every AWS attempt is audited, success or failure.
 /// </summary>
-public sealed class SetFilterPolicyCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetFilterPolicyCommandHandler> logger)
+public sealed class SetFilterPolicyCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetFilterPolicyCommandHandler> logger) : IScopedService
 {
     private const string AuditAction = "aws.subscription.filterpolicy.set";
 

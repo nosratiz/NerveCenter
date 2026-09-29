@@ -17,7 +17,7 @@ public sealed record ExchangeBindings(IReadOnlyList<BindingInfo> Outgoing, IRead
 /// own name) and can't take part in exchange-to-exchange bindings, so its bindings are synthesized
 /// from the queue list and it has nothing incoming.
 /// </summary>
-public sealed class ListExchangeBindingsQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListExchangeBindingsQueryHandler> logger)
+public sealed class ListExchangeBindingsQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListExchangeBindingsQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<ExchangeBindings>> HandleAsync(Guid connectionId, string vhost, string exchange, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Listing exchange bindings", async secret =>

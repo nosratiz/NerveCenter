@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Messages;
 
 public sealed record PurgeDeadLetterMessagesCommand(Guid ConnectionId, string ConnectionName, string QueueName);
 
-public sealed class PurgeDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeDeadLetterMessagesCommandHandler> logger)
+public sealed class PurgeDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeDeadLetterMessagesCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<int>> HandleAsync(PurgeDeadLetterMessagesCommand cmd, CancellationToken ct = default)
     {

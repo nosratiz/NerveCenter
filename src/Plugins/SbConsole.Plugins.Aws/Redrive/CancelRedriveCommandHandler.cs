@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Redrive;
 
 public sealed record CancelRedriveCommand(Guid ConnectionId, string ConnectionName, string TaskHandle, string SourceQueueName);
 
-public sealed class CancelRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CancelRedriveCommandHandler> logger)
+public sealed class CancelRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CancelRedriveCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CancelRedriveCommand cmd, CancellationToken ct = default)
     {

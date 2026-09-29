@@ -6,7 +6,7 @@ namespace SbConsole.Core.Plugins;
 
 public sealed record PluginSummary(string Id, string DisplayName, string Version, PluginContribution Contribution, int ConnectionsInUse);
 
-public sealed class ListPluginsQueryHandler(IEnumerable<IPlugin> plugins, IDbContextFactory<SbcDbContext> dbFactory)
+public sealed class ListPluginsQueryHandler(IEnumerable<IPlugin> plugins, IDbContextFactory<SbcDbContext> dbFactory) : IScopedService
 {
     public async Task<IReadOnlyList<PluginSummary>> HandleAsync(CancellationToken ct = default)
     {

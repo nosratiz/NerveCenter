@@ -11,7 +11,7 @@ public sealed record RevealHashFieldCommand(Guid ConnectionId, string Connection
 /// (design spec §7a). No IRedisOperations/IConnectionProvider call -- there is nothing to resolve a
 /// secret for.
 /// </summary>
-public sealed class RevealHashFieldCommandHandler(IAuditScope audit, ILogger<RevealHashFieldCommandHandler> logger)
+public sealed class RevealHashFieldCommandHandler(IAuditScope audit, ILogger<RevealHashFieldCommandHandler> logger) : IScopedService
 {
     public Task RecordAsync(RevealHashFieldCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.AuditQuietlyAsync(audit, logger, "redis.field.reveal",

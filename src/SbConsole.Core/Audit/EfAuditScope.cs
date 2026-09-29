@@ -13,7 +13,7 @@ namespace SbConsole.Core.Audit;
 public sealed class EfAuditScope(
     IAuditWriter writer,
     TimeProvider clock,
-    AuthenticationStateProvider authStateProvider) : IAuditScope
+    AuthenticationStateProvider authStateProvider) : IAuditScope, IScopedService
 {
     public async Task RecordAsync(string action, string target, ActionRisk risk, bool succeeded, string? detail = null, CancellationToken ct = default)
     {

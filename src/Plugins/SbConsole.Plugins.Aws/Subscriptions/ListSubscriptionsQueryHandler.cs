@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Subscriptions;
 
-public sealed class ListSubscriptionsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListSubscriptionsQueryHandler> logger)
+public sealed class ListSubscriptionsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListSubscriptionsQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<SubscriptionSummary>>> HandleAsync(Guid connectionId, string topicArn, CancellationToken ct = default)
     {

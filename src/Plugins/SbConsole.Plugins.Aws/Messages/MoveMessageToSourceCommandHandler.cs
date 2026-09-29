@@ -17,7 +17,7 @@ public sealed record MoveMessageToSourceCommand(
 /// DLQ; if the delete fails after a successful send the message now exists in both queues, and the
 /// error says so explicitly rather than looking like a plain failure the user might just retry.
 /// </summary>
-public sealed class MoveMessageToSourceCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<MoveMessageToSourceCommandHandler> logger)
+public sealed class MoveMessageToSourceCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<MoveMessageToSourceCommandHandler> logger) : IScopedService
 {
     private const string AuditAction = "aws.message.move";
 

@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record DeleteHashFieldCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Field);
 
 public sealed class DeleteHashFieldCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteHashFieldCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteHashFieldCommandHandler> logger) : IScopedService
 {
     // Mutating, not Destructive: removes one field, not the key itself (design spec §6).
     public Task<PluginResult> HandleAsync(DeleteHashFieldCommand cmd, CancellationToken ct = default) =>

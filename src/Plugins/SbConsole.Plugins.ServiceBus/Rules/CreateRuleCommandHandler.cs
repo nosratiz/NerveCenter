@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Rules;
 
 public sealed record CreateRuleCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, CreateRuleRequest Rule);
 
-public sealed class CreateRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateRuleCommandHandler> logger)
+public sealed class CreateRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateRuleCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CreateRuleCommand cmd, CancellationToken ct = default)
     {

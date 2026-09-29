@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record TrimListCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, long Start, long Stop);
 
 public sealed class TrimListCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<TrimListCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<TrimListCommandHandler> logger) : IScopedService
 {
     // Destructive: can drop list members permanently (design spec §6).
     public Task<PluginResult> HandleAsync(TrimListCommand cmd, CancellationToken ct = default) =>

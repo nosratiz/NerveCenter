@@ -5,7 +5,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Core.Plugins;
 
-public sealed class EfPluginStoreFactory(IDbContextFactory<SbcDbContext> dbFactory) : IPluginStoreFactory
+public sealed class EfPluginStoreFactory(IDbContextFactory<SbcDbContext> dbFactory) : IPluginStoreFactory, ISingletonService
 {
     public IPluginStore For(string pluginId) => new EfPluginStore(dbFactory, pluginId);
 }

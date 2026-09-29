@@ -1354,3 +1354,42 @@ test-connection flow via `ConnectionEditor.razor` and the two-pane layout
 - Service Bus and Kafka adopting `ConnectionFormComponentType` or enriched
   `ConnectionTestResult` Checks (today they use the default empty form and simple
   text results). AWS stands alone as the first adopter while the shape proves out.
+
+## 12. Marker-based DI registration (2026-09-29)
+
+Every handler and service used to be registered by a hand-written line — ~130 of them
+across `Program.cs` and the five plugins' `ConfigureServices`. Forgetting one compiled fine
+and failed only at runtime, as an HTTP 500 when a page injected it (the original
+`ProgramDiRegistrationTests` bug). The Redis plugin even carried a comment warning
+about it.
+
+**Shape.** `SbConsole.Sdk` now ships three empty lifetime markers —
+`IScopedService`, `ISingletonService`, `ITransientService` — and
+`IServiceCollection.AddMarkedServices(Assembly)`, which reflects over the assembly and
+registers every concrete, non-generic class that implements exactly one marker. They
+live in the Sdk (not Core) because plugins may reference only the Sdk.
+
+**What a marked class is registered as.** Its "service interfaces" are every interface
+it implements except the markers and framework (`System.*` / `Microsoft.*`) interfaces:
+- none (every query/command handler) → registered as the class itself;
+- exactly one (e.g. `EfAuditWriter : IAuditWriter`) → registered as that interface only,
+  with `ImplementationType` set, so the descriptor is identical to the old hand-written one;
+- several → the class is registered once and each interface forwards to it, so a
+  singleton or scoped instance isn't silently duplicated per interface.
+
+A class implementing two markers throws at startup instead of picking one arbitrarily.
+
+**Where it's called.** `Program.cs` scans Core and Web. Each plugin's `ConfigureServices`
+is now one line, `services.AddMarkedServices(typeof(XxxPlugin).Assembly)`. It stays in
+the plugin, not in the host's `AddSbConsolePlugin<T>()`, so the plugin still owns what it
+registers and plugin unit tests that call `ConfigureServices` directly keep working
+unchanged.
+
+**Still registered by hand**, because they need an instance or a factory:
+`AesGcmSecretProtector` (built from the bootstrap key), `TimeProvider.System`, the
+keyed per-plugin `IPluginStore`, `PluginRegistry`, the plugins themselves, and the
+`MetricsCollectorService` hosted service.
+
+**Guard.** `ProgramDiRegistrationTests` now resolves every public `*QueryHandler` /
+`*CommandHandler` in Core and in every registered plugin assembly from the real
+`Program.cs` container. A class missing its marker fails there, not in production.

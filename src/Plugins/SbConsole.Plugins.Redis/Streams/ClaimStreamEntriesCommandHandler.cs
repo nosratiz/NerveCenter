@@ -14,7 +14,7 @@ public sealed record ClaimStreamEntriesCommand(Guid ConnectionId, string Connect
 /// else, or no longer pending, silently isn't returned by XCLAIM).
 /// </summary>
 public sealed class ClaimStreamEntriesCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ClaimStreamEntriesCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ClaimStreamEntriesCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<StreamEntry>>> HandleAsync(ClaimStreamEntriesCommand cmd, CancellationToken ct = default)
     {

@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record SetStringCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Value, TimeSpan? Ttl = null);
 
 public sealed class SetStringCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetStringCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetStringCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(SetStringCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

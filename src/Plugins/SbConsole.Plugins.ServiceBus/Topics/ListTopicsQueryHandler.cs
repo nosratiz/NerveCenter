@@ -9,7 +9,7 @@ namespace SbConsole.Plugins.ServiceBus.Topics;
 /// (docs/design.md §6.2) without the caller having to sum Subscriptions itself.</summary>
 public sealed record TopicRow(TopicSummary Topic, long ActiveMessageCount, long DeadLetterMessageCount, IReadOnlyList<SubscriptionSummary> Subscriptions);
 
-public sealed class ListTopicsQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListTopicsQueryHandler> logger)
+public sealed class ListTopicsQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListTopicsQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<TopicRow>>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {

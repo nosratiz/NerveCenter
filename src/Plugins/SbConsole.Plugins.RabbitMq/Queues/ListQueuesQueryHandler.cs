@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.RabbitMq.Queues;
 /// <summary>Queues plus the vhost's bindings and exchanges, which DeadLetterTopology needs to flag DLQs.</summary>
 public sealed record QueuesSnapshot(IReadOnlyList<QueueSummary> Queues, IReadOnlyList<BindingInfo> Bindings, IReadOnlyList<ExchangeSummary> Exchanges);
 
-public sealed class ListQueuesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger)
+public sealed class ListQueuesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<QueuesSnapshot>> HandleAsync(Guid connectionId, string vhost, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Listing queues", async secret =>

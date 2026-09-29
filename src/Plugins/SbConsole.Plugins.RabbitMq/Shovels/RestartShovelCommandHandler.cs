@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Shovels;
 
 public sealed record RestartShovelCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Name);
 
-public sealed class RestartShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RestartShovelCommandHandler> logger)
+public sealed class RestartShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RestartShovelCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(RestartShovelCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

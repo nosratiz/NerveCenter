@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Core.Connections;
 
-public sealed class ListConnectionsQueryHandler(IDbContextFactory<SbcDbContext> dbFactory)
+public sealed class ListConnectionsQueryHandler(IDbContextFactory<SbcDbContext> dbFactory) : IScopedService
 {
     public async Task<IReadOnlyList<ConnectionInfo>> HandleAsync(string? kind = null, CancellationToken ct = default)
     {

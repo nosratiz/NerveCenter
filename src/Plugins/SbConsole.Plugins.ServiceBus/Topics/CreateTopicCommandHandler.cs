@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Topics;
 
 public sealed record CreateTopicCommand(Guid ConnectionId, string ConnectionName, string TopicName);
 
-public sealed class CreateTopicCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger)
+public sealed class CreateTopicCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CreateTopicCommand cmd, CancellationToken ct = default)
     {

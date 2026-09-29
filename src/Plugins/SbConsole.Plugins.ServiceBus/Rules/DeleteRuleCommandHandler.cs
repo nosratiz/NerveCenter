@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Rules;
 
 public sealed record DeleteRuleCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string TopicName, string SubscriptionName, string RuleName);
 
-public sealed class DeleteRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteRuleCommandHandler> logger)
+public sealed class DeleteRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteRuleCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteRuleCommand cmd, CancellationToken ct = default)
     {

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Queues;
 
 public sealed record DeleteQueueCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Queue);
 
-public sealed class DeleteQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger)
+public sealed class DeleteQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteQueueCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteQueueCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

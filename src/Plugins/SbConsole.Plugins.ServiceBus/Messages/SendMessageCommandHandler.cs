@@ -8,7 +8,7 @@ public sealed record SendMessageCommand(
     Guid ConnectionId, string ConnectionName, string QueueName, string Body, string ContentType,
     IReadOnlyDictionary<string, string>? Properties, DateTimeOffset? ScheduledEnqueueTime);
 
-public sealed class SendMessageCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SendMessageCommandHandler> logger)
+public sealed class SendMessageCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SendMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(SendMessageCommand cmd, CancellationToken ct = default)
     {

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Queues;
 
 public sealed record CreateQueueCommand(Guid ConnectionId, string ConnectionName, string Vhost, CreateQueueRequest Request);
 
-public sealed class CreateQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger)
+public sealed class CreateQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(CreateQueueCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

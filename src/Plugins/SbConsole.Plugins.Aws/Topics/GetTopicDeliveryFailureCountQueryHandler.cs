@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Topics;
 
-public sealed class GetTopicDeliveryFailureCountQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetTopicDeliveryFailureCountQueryHandler> logger)
+public sealed class GetTopicDeliveryFailureCountQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetTopicDeliveryFailureCountQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<long>> HandleAsync(Guid connectionId, string topicName, CancellationToken ct = default)
     {

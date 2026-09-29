@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Queues;
 
 public sealed record PurgeQueueCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Queue, long? ReadyCount = null);
 
-public sealed class PurgeQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeQueueCommandHandler> logger)
+public sealed class PurgeQueueCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeQueueCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(PurgeQueueCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

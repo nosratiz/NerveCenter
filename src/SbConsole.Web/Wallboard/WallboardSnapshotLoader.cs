@@ -34,7 +34,7 @@ public sealed class WallboardSnapshotLoader(
     IPluginStoreFactory pluginStoreFactory,
     ListAuditEntriesQueryHandler auditHandler,
     ILogger<WallboardSnapshotLoader> logger,
-    TimeProvider clock)
+    TimeProvider clock) : IScopedService
 {
     public async Task<WallboardSnapshot> LoadAsync(CancellationToken ct = default)
     {

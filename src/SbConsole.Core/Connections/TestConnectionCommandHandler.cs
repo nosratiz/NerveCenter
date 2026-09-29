@@ -17,7 +17,7 @@ public sealed class TestConnectionCommandHandler(
     IEnumerable<IPlugin> plugins,
     IAuditWriter audit,
     TimeProvider clock,
-    ILogger<TestConnectionCommandHandler> logger)
+    ILogger<TestConnectionCommandHandler> logger) : IScopedService
 {
     public async Task<Result<ConnectionTestResult>> HandleAsync(TestConnectionCommand cmd, CancellationToken ct = default)
     {

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Subscriptions;
 
 public sealed record UnsubscribeCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionArn);
 
-public sealed class UnsubscribeCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<UnsubscribeCommandHandler> logger)
+public sealed class UnsubscribeCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<UnsubscribeCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(UnsubscribeCommand cmd, CancellationToken ct = default)
     {

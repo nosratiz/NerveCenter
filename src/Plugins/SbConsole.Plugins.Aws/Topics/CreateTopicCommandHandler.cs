@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Topics;
 
 public sealed record CreateTopicCommand(Guid ConnectionId, string ConnectionName, CreateTopicRequest Request);
 
-public sealed class CreateTopicCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger)
+public sealed class CreateTopicCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateTopicCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<string>> HandleAsync(CreateTopicCommand cmd, CancellationToken ct = default)
     {

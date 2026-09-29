@@ -29,17 +29,7 @@ public sealed class KafkaPlugin : IPlugin
 
     public void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<IKafkaOperations, ConfluentKafkaOperations>();
-        services.AddScoped<Topics.ListTopicsQueryHandler>();
-        services.AddScoped<Topics.CreateTopicCommandHandler>();
-        services.AddScoped<Topics.DeleteTopicCommandHandler>();
-        services.AddScoped<Topics.GetConnectionEchoQueryHandler>();
-        services.AddScoped<Messages.PeekMessagesQueryHandler>();
-        services.AddScoped<Messages.ProduceMessageCommandHandler>();
-        services.AddScoped<ConsumerGroups.ListConsumerGroupsQueryHandler>();
-        services.AddScoped<ConsumerGroups.GetConsumerGroupDetailQueryHandler>();
-        services.AddScoped<ConsumerGroups.ResetConsumerGroupOffsetCommandHandler>();
-        services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
+        services.AddMarkedServices(typeof(KafkaPlugin).Assembly);
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

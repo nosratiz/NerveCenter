@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.RabbitMq.Connections;
 /// <summary>The allowlisted secret echo for the page header, plus the connection's configured vhost (the picker's default).</summary>
 public sealed record ConnectionEcho(string Echo, string DefaultVhost);
 
-public sealed class GetConnectionEchoQueryHandler(IConnectionProvider connections, ILogger<GetConnectionEchoQueryHandler> logger)
+public sealed class GetConnectionEchoQueryHandler(IConnectionProvider connections, ILogger<GetConnectionEchoQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<ConnectionEcho>> HandleAsync(Guid connectionId, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Resolving the connection echo",

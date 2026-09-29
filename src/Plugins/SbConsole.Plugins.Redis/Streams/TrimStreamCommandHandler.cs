@@ -9,7 +9,7 @@ public sealed record TrimStreamCommand(Guid ConnectionId, string ConnectionName,
 
 /// <summary>XTRIM -- Destructive: drops entries permanently, same reasoning as the Keys browser's list-trim (design spec §6a).</summary>
 public sealed class TrimStreamCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<TrimStreamCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<TrimStreamCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(TrimStreamCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -11,7 +11,7 @@ namespace SbConsole.Plugins.RabbitMq.Shovels;
 /// </summary>
 public sealed record ShovelsSnapshot(IReadOnlyList<ShovelInfo> Shovels, bool ShovelPluginMissing, IReadOnlyList<QueueSummary> Queues);
 
-public sealed class ListShovelsQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListShovelsQueryHandler> logger)
+public sealed class ListShovelsQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListShovelsQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<ShovelsSnapshot>> HandleAsync(Guid connectionId, string vhost, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Listing shovels", async secret =>

@@ -11,7 +11,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 /// each write needs its own audited action name.
 /// </summary>
 public sealed class KeysQueryHandler(
-    IRedisOperations operations, IConnectionProvider connections, ILogger<KeysQueryHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, ILogger<KeysQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<KeyScanPage>> ScanAsync(Guid connectionId, ScanKeysRequest request, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.key.scan",

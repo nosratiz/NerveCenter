@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kafka.ConsumerGroups;
 
-public sealed class GetConsumerGroupDetailQueryHandler(IKafkaOperations operations, IConnectionProvider connections, ILogger<GetConsumerGroupDetailQueryHandler> logger)
+public sealed class GetConsumerGroupDetailQueryHandler(IKafkaOperations operations, IConnectionProvider connections, ILogger<GetConsumerGroupDetailQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<ConsumerGroupDetail>> HandleAsync(Guid connectionId, string groupId, CancellationToken ct = default)
     {

@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Redrive;
 
-public sealed class ListRedriveTasksQueryHandler(ISqsOperations operations, IConnectionProvider connections, ILogger<ListRedriveTasksQueryHandler> logger)
+public sealed class ListRedriveTasksQueryHandler(ISqsOperations operations, IConnectionProvider connections, ILogger<ListRedriveTasksQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<MessageMoveTaskSummary>>> HandleAsync(Guid connectionId, string sourceQueueArn, CancellationToken ct = default)
     {

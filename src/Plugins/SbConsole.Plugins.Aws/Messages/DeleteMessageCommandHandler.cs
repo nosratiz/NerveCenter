@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Messages;
 
 public sealed record DeleteMessageCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName, string ReceiptHandle);
 
-public sealed class DeleteMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteMessageCommandHandler> logger)
+public sealed class DeleteMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteMessageCommand cmd, CancellationToken ct = default)
     {

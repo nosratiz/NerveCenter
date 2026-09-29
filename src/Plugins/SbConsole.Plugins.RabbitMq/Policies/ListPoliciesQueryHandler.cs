@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.RabbitMq.Policies;
 /// <summary>Policies plus the queues and exchanges their patterns are matched against (the Matches column).</summary>
 public sealed record PoliciesSnapshot(IReadOnlyList<PolicyInfo> Policies, IReadOnlyList<QueueSummary> Queues, IReadOnlyList<ExchangeSummary> Exchanges);
 
-public sealed class ListPoliciesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListPoliciesQueryHandler> logger)
+public sealed class ListPoliciesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListPoliciesQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<PoliciesSnapshot>> HandleAsync(Guid connectionId, string vhost, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Listing policies", async secret =>

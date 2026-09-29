@@ -8,7 +8,7 @@ public sealed record RemoveBindingCommand(
     Guid ConnectionId, string ConnectionName, string Vhost, string Exchange, string Destination, string RoutingKey, string PropertiesKey,
     BindingDestinationType DestinationType = BindingDestinationType.Queue);
 
-public sealed class RemoveBindingCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RemoveBindingCommandHandler> logger)
+public sealed class RemoveBindingCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RemoveBindingCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(RemoveBindingCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

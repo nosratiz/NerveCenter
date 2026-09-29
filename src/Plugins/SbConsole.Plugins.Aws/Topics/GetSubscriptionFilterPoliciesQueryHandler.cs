@@ -9,7 +9,7 @@ namespace SbConsole.Plugins.Aws.Topics;
 /// (Task 4), so this exists to give the Publish dialog's own dependency a name that reads clearly
 /// at its call site rather than reusing Subscriptions.ListSubscriptionsQueryHandler by cross-folder
 /// reference.</summary>
-public sealed class GetSubscriptionFilterPoliciesQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetSubscriptionFilterPoliciesQueryHandler> logger)
+public sealed class GetSubscriptionFilterPoliciesQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetSubscriptionFilterPoliciesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<SubscriptionSummary>>> HandleAsync(Guid connectionId, string topicArn, CancellationToken ct = default)
     {

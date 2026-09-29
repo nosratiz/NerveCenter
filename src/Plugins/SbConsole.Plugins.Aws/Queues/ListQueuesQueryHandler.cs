@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Queues;
 
-public sealed class ListQueuesQueryHandler(ISqsOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger)
+public sealed class ListQueuesQueryHandler(ISqsOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<QueueSummary>>> HandleAsync(Guid connectionId, string? namePrefix, CancellationToken ct = default)
     {

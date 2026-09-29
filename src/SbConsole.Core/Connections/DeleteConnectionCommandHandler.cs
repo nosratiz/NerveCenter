@@ -12,7 +12,7 @@ public sealed record DeleteConnectionCommand(Guid Id, string Actor);
 public sealed class DeleteConnectionCommandHandler(
     IDbContextFactory<SbcDbContext> dbFactory,
     IAuditWriter audit,
-    TimeProvider clock)
+    TimeProvider clock) : IScopedService
 {
     public async Task<Result> HandleAsync(DeleteConnectionCommand cmd, CancellationToken ct = default)
     {

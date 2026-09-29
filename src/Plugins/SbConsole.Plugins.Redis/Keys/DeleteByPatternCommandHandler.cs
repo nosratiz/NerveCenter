@@ -14,7 +14,7 @@ public sealed record DeleteByPatternCommand(Guid ConnectionId, string Connection
 /// of HandlerRunner.CommandAsync (whose Func&lt;string, Task&gt; run delegate has no return value).
 /// </summary>
 public sealed class DeleteByPatternCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteByPatternCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteByPatternCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<long>> HandleAsync(DeleteByPatternCommand cmd, CancellationToken ct = default)
     {

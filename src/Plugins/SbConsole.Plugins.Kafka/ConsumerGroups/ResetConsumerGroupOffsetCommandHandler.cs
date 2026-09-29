@@ -8,7 +8,7 @@ public sealed record ResetConsumerGroupOffsetCommand(
     Guid ConnectionId, string ConnectionName, string GroupId, string TopicName, int Partition,
     OffsetResetMode Mode, long? Offset, DateTimeOffset? Timestamp);
 
-public sealed class ResetConsumerGroupOffsetCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ResetConsumerGroupOffsetCommandHandler> logger)
+public sealed class ResetConsumerGroupOffsetCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ResetConsumerGroupOffsetCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(ResetConsumerGroupOffsetCommand cmd, CancellationToken ct = default)
     {

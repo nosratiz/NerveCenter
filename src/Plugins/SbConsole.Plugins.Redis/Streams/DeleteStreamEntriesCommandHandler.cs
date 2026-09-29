@@ -9,7 +9,7 @@ public sealed record DeleteStreamEntriesCommand(Guid ConnectionId, string Connec
 
 /// <summary>XDEL -- Destructive: permanently removes entries from the stream (design spec §6a).</summary>
 public sealed class DeleteStreamEntriesCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteStreamEntriesCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteStreamEntriesCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteStreamEntriesCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Queues;
 
-public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger)
+public sealed class ListQueuesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListQueuesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<QueueSummary>>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {

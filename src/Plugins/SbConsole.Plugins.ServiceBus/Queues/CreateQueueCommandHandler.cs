@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Queues;
 
 public sealed record CreateQueueCommand(Guid ConnectionId, string ConnectionName, string QueueName, int MaxDeliveryCount);
 
-public sealed class CreateQueueCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger)
+public sealed class CreateQueueCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CreateQueueCommand cmd, CancellationToken ct = default)
     {

@@ -11,7 +11,7 @@ public sealed record PublishMessageCommand(Guid ConnectionId, string ConnectionN
 /// Ok(Unroutable) so the dialog can say so in place -- but it IS audited as a failed publish: the
 /// user asked for a message to be delivered and it wasn't.
 /// </summary>
-public sealed class PublishMessageCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishMessageCommandHandler> logger)
+public sealed class PublishMessageCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishMessageCommandHandler> logger) : IScopedService
 {
     public const string Action = "rabbitmq.message.publish";
 

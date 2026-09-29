@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record RemoveSetMemberCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Member);
 
 public sealed class RemoveSetMemberCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RemoveSetMemberCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RemoveSetMemberCommandHandler> logger) : IScopedService
 {
     // Mutating, not Destructive: removes one member, not the key itself (design spec §6).
     public Task<PluginResult> HandleAsync(RemoveSetMemberCommand cmd, CancellationToken ct = default) =>
