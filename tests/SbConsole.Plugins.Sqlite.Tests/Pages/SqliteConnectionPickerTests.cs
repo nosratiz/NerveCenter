@@ -78,6 +78,22 @@ public class SqliteConnectionPickerTests : SqlitePageTestBase
     }
 
     [Fact]
+    public async Task Clicking_the_chip_opens_the_menu()
+    {
+        // MudBlazor 9's activator div only handles keydown; a mouse click must come from the
+        // ActivatorContent itself (context.ToggleAsync), or the menu never opens.
+        TwoConnections();
+        var cut = RenderPickerWithPopovers([]);
+        await SettleAsync(cut);
+
+        await cut.Find(".sqlite-connection-menu .sql-chip").ClickAsync(new());
+        await SettleAsync(cut);
+
+        cut.FindAll(".sqlite-connection-option").Should().HaveCount(2);
+        cut.FindAll(".sqlite-new-database-option").Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Selecting_another_connection_publishes_it_and_updates_the_url()
     {
         TwoConnections();

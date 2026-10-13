@@ -19,7 +19,8 @@ else
 {
     <MudMenu Class="sqlite-connection-menu" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
         <ActivatorContent>
-            <span class="sql-chip">
+            @* MudBlazor 9's activator div only handles keydown; the click has to come from here. *@
+            <span class="sql-chip" @onclick="@(e => context.ToggleAsync(e))">
                 <span class="sqlite-selected-connection">@_connection?.Name</span>
                 @if (_connection?.IsProd == true)
                 {
