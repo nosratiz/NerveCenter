@@ -469,6 +469,17 @@ WHERE ts < (strftime('%s','now','-90 days')*1000)
   AND tenant_id IN (SELECT id FROM tenants WHERE status='churned');
 ```
 
+**New database.** Every SQLite page's connection menu (and the "No SQLite connections yet" state)
+has **+ New database…**: pick a folder — the `SBC_SQLITE_ROOTS` roots, so `/sqlite` in compose —
+an optional sub-folder that already exists, a file name (`.db` is appended), WAL or DELETE, and a
+template (Empty, a small Starter schema of users/projects/tasks, or your own SQL script, which gets
+the Query page's refusals: no ATTACH, VACUUM or transaction control). It also saves the connection
+(default name `sqlite-<file>`, Read-write by default, tags, and `<folder>/backups` as the backup
+directory when that folder exists — in compose `/sqlite/backups` does) and opens its Overview. It
+never overwrites a file (also refused if a `-wal`/`-shm`/`-journal` leftover is there), never
+creates a directory, and a failed template or connection save deletes the new file again. Audited
+as `sqlite.database.create`.
+
 **Backups.** `BackupDir` ("Enable backups to") must pass the same path policy as the file: it has
 to be *inside* an `SBC_SQLITE_ROOTS` root (a root itself is refused) and may be the live file's own
 directory; it must already exist and be writable by the app's user — the seed's `backups/` is.

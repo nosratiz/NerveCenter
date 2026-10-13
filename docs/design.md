@@ -1668,3 +1668,54 @@ No `{root}` placeholder for `dotnet run`: the README says to copy the file and e
 one less feature to maintain for a dev convenience. `reports` and `shop` share `/sqlite/backups`;
 that is safe because backup files are prefixed with the database's base name and history/pruning
 are per connection id.
+
+## 17. SQLite: New database from the UI (2026-10-13)
+
+Spec: `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md` §13. **Reverses** the SQLite
+spec's §10/§11.10 non-goal "creating database files from the UI", on request — behind the same
+fail-closed `SBC_SQLITE_ROOTS` policy, so a deployment with no roots still cannot create (or open)
+anything.
+
+- **Two SDK seams, both additive.** `IHostPathPolicy.AllowedRoots` (default `[]`, Core returns
+  `BootstrapOptions.SqliteRoots` verbatim) so the dialog can offer the roots as its folder list
+  without the plugin learning env var names. `IConnectionCreator.CreateAsync(name, kind, secret,
+  tags)` → `ConnectionCreateResult` (`Created(Id)` / `Conflict` / `Invalid(Error)`) so a plugin can
+  save the connection for a thing it just made. Core's `ConnectionCreator` (marker `IScopedService`)
+  delegates to `CreateConnectionCommandHandler` — the Connections page's own path: encrypted secret,
+  plugin summary, `connection.create` audit row — with the actor resolved like `EfAuditScope`
+  (signed-in user; "system" outside a circuit; shared `AuditActor`). It refuses a kind no
+  registered plugin handles (Core can't see Web's `PluginRegistry`, so it checks the same
+  `IEnumerable<IPlugin>` the registry is built from). Plugins still never touch the DbContext.
+- **Why a plugin-side command, not a Connections-page feature.** Only the plugin knows how to make
+  a valid SQLite file and template it; only Core may persist connections. The handler
+  (`CreateDatabaseCommandHandler`, Mutating, audited `sqlite.database.create`, detail
+  `path · template · journal`) is the only place the two meet.
+- **Safety rules.** Everything is validated before the disk is touched: the folder must string-match
+  a configured root; an optional sub-folder must be relative, free of `.`/`..`, lexically inside
+  it, and already exist; the file name has no separators, `..`, leading dot, `;` or control
+  characters (`.db` appended unless `.db`/`.sqlite`/`.sqlite3`); the full path passes
+  `IHostPathPolicy.Check` (symlinks followed, SbConsole's own DB refused); neither the file nor a
+  `-wal`/`-shm`/`-journal` sibling — nor a directory or dangling symlink of that name — exists; the
+  connection name isn't taken; a script is parsed by `SqliteScript.Parse` (same refusals as the
+  Query page). Then the file is created with `FileMode.CreateNew` (O_CREAT|O_EXCL) on the resolved
+  path — stricter than the spec's "ReadWriteCreate open": a file that appears between check and
+  create makes it fail instead of being adopted — and opened writable and attach-limited for the
+  journal mode and the template in one transaction. Any failure deletes the file and its siblings;
+  so does a Conflict/Invalid/exception from `IConnectionCreator`. No directory is ever created and
+  no file overwritten. Once the file exists the remaining steps ignore cancellation, so a cancelled
+  request can't leave a file without a connection.
+- **Audit convention.** As elsewhere in the plugin, a row only for work that ran: input refused
+  before anything touched the disk (blank/taken name, refused folder/file/existing file, refused
+  script) returns an error with no `sqlite.database.create` row; once a file was created every
+  outcome is audited (success, failed template, connection not saved). A success also writes Core's
+  own `connection.create` row.
+- **UI.** "+ New database…" in the connection picker's menu (every SQLite page) and on its
+  no-connections empty state opens `NewDatabaseDialog` — the Tables page's `sql-dialog` panel,
+  floated in an overlay because the picker sits in the header bar. With no roots it shows the
+  explanation instead of the form. The `<folder>/backups` offer comes from
+  `FindBackupsDirQueryHandler` (policy-checked, must exist). On success the picker reloads its list
+  and either selects the new connection in place (already on Overview) or navigates to
+  `/p/sqlite/overview?connectionId=…`. Starter schema: users / projects / tasks (RESTRICT, CASCADE,
+  SET NULL), an index, a view, 12 rows, `ANALYZE`; no functions in defaults because files are
+  opened with `trusted_schema = OFF`. Nothing extra is confirmed for prod-tagged new connections:
+  nothing existing is touched.
