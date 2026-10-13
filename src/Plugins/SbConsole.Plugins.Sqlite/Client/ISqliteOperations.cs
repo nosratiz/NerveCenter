@@ -38,6 +38,9 @@ public interface ISqliteOperations
 
     Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, string? backupFile = null, CancellationToken ct = default);
 
+    /// <summary>Tables and views with their columns for the Query editor's completion (§12); read-only, attach-limited, capped.</summary>
+    Task<CompletionSchema> GetCompletionSchemaAsync(string secret, string? backupFile = null, CancellationToken ct = default);
+
     /// <summary>Writable; always rolls back. Throws SqliteReadOnlyConnectionException unless the secret's Mode is ReadWrite.</summary>
     Task<WriteScriptResult> DryRunWriteAsync(string secret, string sql, CancellationToken ct = default);
 
