@@ -1561,8 +1561,10 @@ pages (Overview, Tables, Query, Backups) and 16 audited actions.
   and a typed confirm on prod: verify the backup → `VACUUM INTO` a `<file>.pre-restore-<stamp>` copy
   next to the live file → online backup API into the live file (writers blocked for the copy, WAL
   handled by SQLite) → integrity check of the result. Retention is grandfather-father-son over
-  successful backups (newest per UTC day / ISO week / month; the newest success is always kept),
-  and only files named in the history, re-checked inside `BackupDir`, are ever deleted.
+  successful backups (newest per UTC day / ISO week / month; the newest success is always kept;
+  a manual backup younger than KeepDaily days is exempt — never pruned and never taking a slot
+  from a scheduled one, because the scheduler's prune minutes after a "before migration" copy
+  once deleted it; older manual backups go through the normal rules), and only files named in the history, re-checked inside `BackupDir`, are ever deleted.
 - **Scheduler and the background actor.** `SqliteBackupScheduler` is a hand-registered
   `BackgroundService` (the one thing in the plugin the markers can't register) ticking every
   minute off `TimeProvider`, with a public `TickAsync(now)` for tests. Per connection with a

@@ -549,7 +549,10 @@ copied, tables failed. The live file is never modified. Prod → typed confirm f
   `sqlite.backup.prune`): grandfather-father-son over successful backups: keep the newest per UTC
   day for the last KeepDaily days, newest per ISO week for KeepWeekly weeks, newest per month for
   KeepMonthly months; failed records older than KeepDaily days are dropped from history; the newest
-  successful backup is always kept. The page shows "next prune removes N". Only files named in the
+  successful backup is always kept. A manual backup younger than KeepDaily days is exempt: never
+  pruned, and it doesn't take a day/week/month slot from a scheduled backup (a "before migration"
+  copy taken minutes before the nightly run survives that run's prune); older manual backups go
+  through the normal rules. The page shows "next prune removes N". Only files named in the
   history, inside the backup dir (re-checked through `IHostPathPolicy`), are deleted.
   Manual prune confirms via `ConfirmAsync("Delete backups of", name, isProd, count)`; the
   scheduler prunes without confirmation (the policy is the consent).

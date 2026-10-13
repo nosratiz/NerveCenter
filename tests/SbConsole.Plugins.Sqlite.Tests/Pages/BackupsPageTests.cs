@@ -114,6 +114,17 @@ public class BackupsPageTests : SqlitePageTestBase
     }
 
     [Fact]
+    public async Task The_next_prune_count_leaves_out_a_recent_manual_backup_sharing_a_day_with_a_scheduled_one()
+    {
+        var manualBeforeNightly = Ok(Utc(10, 12, 1), BackupRecord.TriggerManual);
+        await Arrange(history: [.. All, manualBeforeNightly]);
+
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-backups-retention").TextContent.Should().Contain("next prune removes 2");
+    }
+
+    [Fact]
     public async Task Without_a_policy_the_last_success_tile_says_no_schedule()
     {
         await Arrange(policy: false);

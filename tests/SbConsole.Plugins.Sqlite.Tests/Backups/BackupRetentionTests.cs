@@ -43,9 +43,43 @@ public class BackupRetentionTests
     {
         var now = Utc(2026, 10, 13, 23);
         var early = Ok(Utc(2026, 10, 13, 2), BackupRecord.TriggerSchedule);
-        var late = Ok(Utc(2026, 10, 13, 15), BackupRecord.TriggerManual);
+        var late = Ok(Utc(2026, 10, 13, 15), BackupRecord.TriggerSchedule);
 
         BackupRetention.Plan([late, early], Policy, now).Should().Equal(early);
+    }
+
+    [Fact]
+    public void A_manual_backup_minutes_before_a_scheduled_one_the_same_day_is_not_pruned()
+    {
+        // Observed: manual "before retention delete" at 12:37, the scheduler's backup at 12:39, then its prune.
+        var now = Utc(2026, 10, 13, 12, 40);
+        var manual = Ok(Utc(2026, 10, 13, 12, 37), BackupRecord.TriggerManual);
+        var scheduled = Ok(Utc(2026, 10, 13, 12, 39), BackupRecord.TriggerSchedule);
+
+        BackupRetention.Plan([scheduled, manual], Policy, now).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_recent_manual_backup_does_not_take_the_days_slot_from_a_scheduled_one()
+    {
+        var now = Utc(2026, 10, 13, 23);
+        var scheduled = Ok(Utc(2026, 10, 13, 2), BackupRecord.TriggerSchedule);
+        var manual = Ok(Utc(2026, 10, 13, 15), BackupRecord.TriggerManual);
+        var olderScheduled = Ok(Utc(2026, 10, 13, 1), BackupRecord.TriggerSchedule);
+
+        BackupRetention.Plan([manual, scheduled, olderScheduled], Policy, now).Should().Equal(olderScheduled);
+    }
+
+    [Fact]
+    public void A_manual_backup_older_than_the_daily_window_goes_through_the_normal_rules()
+    {
+        // KeepDaily 7: Oct 5 is outside the window; the week of Mon 5 Oct keeps its newest, the Oct 6 scheduled one.
+        var now = Utc(2026, 10, 13, 12);
+        var recent = Ok(Utc(2026, 10, 13));
+        var oldManual = Ok(Utc(2026, 10, 5, 10), BackupRecord.TriggerManual);
+        var weekNewest = Ok(Utc(2026, 10, 6));
+
+        BackupRetention.Plan([recent, weekNewest, oldManual], Policy with { KeepMonthly = 0 }, now).Should().Equal(oldManual);
     }
 
     [Fact]

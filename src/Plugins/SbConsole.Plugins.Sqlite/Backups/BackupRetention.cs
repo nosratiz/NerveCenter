@@ -5,7 +5,10 @@ namespace SbConsole.Plugins.Sqlite.Backups;
 /// page can show "next prune removes N". Over successful backups only: the newest per UTC day for
 /// the last KeepDaily days (today included), the newest per ISO week (Monday-based) for the last
 /// KeepWeekly weeks, the newest per month for the last KeepMonthly months, and always the newest
-/// successful backup. Failed records older than KeepDaily days are dropped too.
+/// successful backup. A manual backup younger than KeepDaily days is exempt -- never pruned, and it
+/// doesn't take a bucket's slot from a scheduled backup (a "before migration" copy taken minutes
+/// before the nightly run must survive that run's prune); older manual backups go through the
+/// normal rules. Failed records older than KeepDaily days are dropped too.
 /// </summary>
 public static class BackupRetention
 {
@@ -20,15 +23,19 @@ public static class BackupRetention
             keep.Add(successful[0].Id);
         }
 
-        KeepNewestPer(successful, keep, Day, day => day > today.AddDays(-policy.KeepDaily));
-        var thisWeek = WeekStart(today);
-        KeepNewestPer(successful, keep, r => WeekStart(Day(r)), week => week > thisWeek.AddDays(-7 * policy.KeepWeekly));
-        var thisMonth = MonthIndex(today);
-        KeepNewestPer(successful, keep, r => MonthIndex(Day(r)), month => month > thisMonth - policy.KeepMonthly);
+        var dailyCutoff = nowUtc.AddDays(-policy.KeepDaily);
+        var exempt = successful.Where(r => r.Trigger == BackupRecord.TriggerManual && r.TakenAt > dailyCutoff).ToList();
+        keep.UnionWith(exempt.Select(r => r.Id));
+        var bucketed = successful.Except(exempt).ToList();
 
-        var failedCutoff = nowUtc.AddDays(-policy.KeepDaily);
+        KeepNewestPer(bucketed, keep, Day, day => day > today.AddDays(-policy.KeepDaily));
+        var thisWeek = WeekStart(today);
+        KeepNewestPer(bucketed, keep, r => WeekStart(Day(r)), week => week > thisWeek.AddDays(-7 * policy.KeepWeekly));
+        var thisMonth = MonthIndex(today);
+        KeepNewestPer(bucketed, keep, r => MonthIndex(Day(r)), month => month > thisMonth - policy.KeepMonthly);
+
         return records
-            .Where(r => r.Succeeded ? !keep.Contains(r.Id) : r.TakenAt < failedCutoff)
+            .Where(r => r.Succeeded ? !keep.Contains(r.Id) : r.TakenAt < dailyCutoff)
             .OrderByDescending(r => r.TakenAt)
             .ToList();
     }
