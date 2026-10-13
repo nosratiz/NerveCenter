@@ -17,3 +17,6 @@ public sealed class SqliteReadOnlyConnectionException()
 
 /// <summary>A user script SqliteScript refuses before anything runs (empty, ATTACH, VACUUM, transaction control -- spec §11.2).</summary>
 public sealed class SqliteScriptRefusedException(string reason) : Exception(reason);
+
+/// <summary>A backup the plugin refuses or can't find (backups disabled, missing directory, bad file name, failed verify -- spec §11.7).</summary>
+public sealed class SqliteBackupException(string reason) : Exception(reason);

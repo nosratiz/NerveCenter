@@ -4,7 +4,8 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Sqlite.Query;
 
-public sealed record ExportQueryCsvCommand(Guid ConnectionId, string ConnectionName, string Sql);
+/// <summary>BackupFile: export from that file in the connection's BackupDir instead of the live file (§11.7).</summary>
+public sealed record ExportQueryCsvCommand(Guid ConnectionId, string ConnectionName, string Sql, string? BackupFile = null);
 
 /// <summary>
 /// The Query page's Export CSV (design spec §11.3): re-runs the script read-only with the table
@@ -27,7 +28,7 @@ public sealed class ExportQueryCsvCommandHandler(
         CsvExport export;
         try
         {
-            export = await operations.ExportQueryCsvAsync(secret, cmd.Sql, CsvExport.MaxRows, CsvExport.MaxBytes, ct);
+            export = await operations.ExportQueryCsvAsync(secret, cmd.Sql, CsvExport.MaxRows, CsvExport.MaxBytes, cmd.BackupFile, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -37,8 +38,9 @@ public sealed class ExportQueryCsvCommandHandler(
             return PluginResult<CsvExport>.Fail(friendly);
         }
 
+        var source = cmd.BackupFile is null ? "" : $"backup {cmd.BackupFile} · ";
         await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, cmd.ConnectionName, ActionRisk.Safe, succeeded: true,
-            $"{export.Summary} · {hash} · {QueryAudit.Preview(cmd.Sql)}");
+            $"{source}{export.Summary} · {hash} · {QueryAudit.Preview(cmd.Sql)}");
         return PluginResult<CsvExport>.Ok(export);
     }
 }

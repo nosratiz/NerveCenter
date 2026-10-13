@@ -30,12 +30,13 @@ public interface ISqliteOperations
 
     // Phase 2 (design spec §11.3-§11.4). Every sql is a user script: SqliteScript.Parse refuses it
     // (SqliteScriptRefusedException) before anything opens, and it runs on an attach-limited connection.
+    // backupFile (§11.7 "Open read-only"): run against that file inside BackupDir instead of the live file.
 
-    Task<QueryResult> RunQueryAsync(string secret, string sql, int limit, CancellationToken ct = default);
+    Task<QueryResult> RunQueryAsync(string secret, string sql, int limit, string? backupFile = null, CancellationToken ct = default);
 
-    Task<ExplainPlan> ExplainQueryAsync(string secret, string sql, CancellationToken ct = default);
+    Task<ExplainPlan> ExplainQueryAsync(string secret, string sql, string? backupFile = null, CancellationToken ct = default);
 
-    Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, CancellationToken ct = default);
+    Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, string? backupFile = null, CancellationToken ct = default);
 
     /// <summary>Writable; always rolls back. Throws SqliteReadOnlyConnectionException unless the secret's Mode is ReadWrite.</summary>
     Task<WriteScriptResult> DryRunWriteAsync(string secret, string sql, CancellationToken ct = default);
@@ -44,4 +45,32 @@ public interface ISqliteOperations
     Task<WriteScriptResult> RunWriteAsync(string secret, string sql, CancellationToken ct = default);
 
     Task<WalCheckpointResult> CheckpointWalAsync(string secret, CancellationToken ct = default);
+
+    // Backups (design spec §11.7). File names are bare names inside the secret's BackupDir; every
+    // path is policy-checked. Throws SqliteBackupException when backups are disabled, the directory
+    // or file is missing, or a name is refused.
+
+    /// <summary>VACUUM INTO `&lt;base&gt;-&lt;yyyyMMdd-HHmmss&gt;.db` (then -2, -3… if taken). Never creates the directory; deletes a partial file on failure.</summary>
+    Task<BackupCreated> CreateBackupAsync(string secret, DateTimeOffset takenAtUtc, CancellationToken ct = default);
+
+    Task<BackupVerification> VerifyBackupAsync(string secret, string fileName, CancellationToken ct = default);
+
+    /// <summary>The live file's side of the comparison: no integrity_check, no SHA-256.</summary>
+    Task<SqliteFileFingerprint> GetLiveFingerprintAsync(string secret, CancellationToken ct = default);
+
+    /// <summary>Deletes the file (and any -wal/-shm/-journal sibling) inside BackupDir; a missing file is success.</summary>
+    Task DeleteBackupFileAsync(string secret, string fileName, CancellationToken ct = default);
+
+    Task<BackupFileStream> OpenBackupStreamAsync(string secret, string fileName, CancellationToken ct = default);
+
+    /// <summary>Needs Mode=ReadWrite (SqliteReadOnlyConnectionException). Aborts before touching the live file unless the backup verifies.</summary>
+    Task<RestoreOutcome> RestoreBackupAsync(string secret, string fileName, DateTimeOffset nowUtc, CancellationToken ct = default);
+
+    // Growth (design spec §11.8).
+
+    /// <summary>Total/available bytes of the live file's volume; null when unavailable.</summary>
+    Task<VolumeInfo?> GetVolumeAsync(string secret, CancellationToken ct = default);
+
+    /// <summary>The live file's size (main file only); null when it doesn't exist.</summary>
+    Task<long?> GetFileBytesAsync(string secret, CancellationToken ct = default);
 }

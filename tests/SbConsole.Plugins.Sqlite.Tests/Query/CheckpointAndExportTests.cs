@@ -95,7 +95,7 @@ public class CheckpointAndExportTests
     public async Task A_query_export_is_capped_and_audited_as_safe_with_rows_and_hash()
     {
         var export = new CsvExport("query.csv", [1], 1_234, Truncated: true);
-        _operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>()).Returns(export);
+        _operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, null, Arg.Any<CancellationToken>()).Returns(export);
 
         var result = await Export().HandleAsync(new ExportQueryCsvCommand(_connectionId, "sqlite-reports", Sql));
 
@@ -105,9 +105,22 @@ public class CheckpointAndExportTests
     }
 
     [Fact]
+    public async Task A_query_export_from_a_backup_names_the_backup_in_the_audit_row()
+    {
+        var export = new CsvExport("query.csv", [1], 3, Truncated: false);
+        _operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, "reports-20261013-020000.db", Arg.Any<CancellationToken>()).Returns(export);
+
+        var result = await Export().HandleAsync(new ExportQueryCsvCommand(_connectionId, "sqlite-reports", Sql, "reports-20261013-020000.db"));
+
+        result.Value.Should().BeSameAs(export);
+        await _audit.Received(1).RecordAsync("sqlite.query.export", "sqlite-reports", ActionRisk.Safe, true,
+            Arg.Is<string>(d => d.StartsWith("backup reports-20261013-020000.db · 3 rows", StringComparison.Ordinal)), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task A_failed_query_export_is_audited_as_failed()
     {
-        _operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>())
+        _operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, null, Arg.Any<CancellationToken>())
             .Returns<Task<CsvExport>>(_ => throw new SqliteStatementTimeoutException(30));
 
         var result = await Export().HandleAsync(new ExportQueryCsvCommand(_connectionId, "sqlite-reports", Sql));
@@ -130,7 +143,7 @@ public class CheckpointAndExportTests
     public async Task A_cancelled_query_export_rethrows()
     {
         using var cts = new CancellationTokenSource();
-        _operations.ExportQueryCsvAsync(Secret, Sql, Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns<Task<CsvExport>>(_ =>
+        _operations.ExportQueryCsvAsync(Secret, Sql, Arg.Any<int>(), Arg.Any<long>(), null, Arg.Any<CancellationToken>()).Returns<Task<CsvExport>>(_ =>
         {
             cts.Cancel();
             throw new OperationCanceledException(cts.Token);

@@ -42,8 +42,11 @@ internal sealed class TempDatabase : IDisposable
         Run(connection, sql);
     }
 
-    public string Secret(int statementTimeoutS = 30, int busyTimeoutMs = 5000, SqliteAccessMode mode = SqliteAccessMode.ReadOnly) =>
-        new SqliteConnectionSettings(Path, mode, busyTimeoutMs, statementTimeoutS).ToSecretString();
+    public string Secret(int statementTimeoutS = 30, int busyTimeoutMs = 5000, SqliteAccessMode mode = SqliteAccessMode.ReadOnly, string? backupDir = null) =>
+        new SqliteConnectionSettings(Path, mode, busyTimeoutMs, statementTimeoutS, backupDir).ToSecretString();
+
+    /// <summary>A "backups" directory beside the file (created), for the §11.7 tests.</summary>
+    public string BackupDir => System.IO.Directory.CreateDirectory(System.IO.Path.Combine(Directory, "backups")).FullName;
 
     public SqliteOperations Operations() => new(AllowingPolicy());
 

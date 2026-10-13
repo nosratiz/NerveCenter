@@ -4,11 +4,11 @@ using SQLitePCL;
 
 namespace SbConsole.Plugins.Sqlite.Client;
 
-/// <summary>Query page (mockup 1c, design spec §11.3): user SQL on read-only, attach-limited connections.</summary>
+/// <summary>Query page (mockup 1c, design spec §11.3): user SQL on read-only, attach-limited connections -- the live file or a backup (§11.7).</summary>
 public sealed partial class SqliteOperations
 {
-    public Task<QueryResult> RunQueryAsync(string secret, string sql, int limit, CancellationToken ct = default) =>
-        RunScriptAsync(secret, sql, SqliteOpenOptions.UserQuery, (c, script) =>
+    public Task<QueryResult> RunQueryAsync(string secret, string sql, int limit, string? backupFile = null, CancellationToken ct = default) =>
+        RunScriptAsync(secret, sql, QueryOptions(backupFile), (c, script) =>
         {
             var started = Stopwatch.GetTimestamp();
             (int Index, IReadOnlyList<QueryColumn> Columns, List<IReadOnlyList<CellValue>> Rows, long Total, bool Capped)? last = null;
@@ -25,8 +25,8 @@ public sealed partial class SqliteOperations
         }, ct);
 
     /// <summary>EXPLAIN QUERY PLAN of the first statement only -- the rest of the script never runs.</summary>
-    public Task<ExplainPlan> ExplainQueryAsync(string secret, string sql, CancellationToken ct = default) =>
-        RunScriptAsync(secret, sql, SqliteOpenOptions.UserQuery, (c, script) =>
+    public Task<ExplainPlan> ExplainQueryAsync(string secret, string sql, string? backupFile = null, CancellationToken ct = default) =>
+        RunScriptAsync(secret, sql, QueryOptions(backupFile), (c, script) =>
         {
             var first = script.Statements[0];
             var nodes = SqliteSql.Rows(c, "EXPLAIN QUERY PLAN " + first.Body, r => new ExplainNode(r.GetInt32(0), r.GetInt32(1), r.GetString(3)));
@@ -34,8 +34,8 @@ public sealed partial class SqliteOperations
         }, ct);
 
     /// <summary>The Query page's Export CSV: the same result set the grid shows (the last one), with the table export's caps.</summary>
-    public Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, CancellationToken ct = default) =>
-        RunScriptAsync(secret, sql, SqliteOpenOptions.UserQuery, (c, script) =>
+    public Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, string? backupFile = null, CancellationToken ct = default) =>
+        RunScriptAsync(secret, sql, QueryOptions(backupFile), (c, script) =>
         {
             // Which result set is last is only known once the script has run (a statement can depend
             // on an earlier one's temp table), so every result set is written and the last one kept.
@@ -43,6 +43,12 @@ public sealed partial class SqliteOperations
             RunStatements(c, script, (_, _, reader) => csv = WriteCsv(reader, maxRows, maxBytes));
             return new CsvExport("query.csv", csv.Content, csv.RowCount, csv.Truncated);
         }, ct);
+
+    /// <summary>
+    /// The live file, or with <paramref name="backupFile"/> that file inside the connection's
+    /// BackupDir (§11.7 "Open read-only") -- the same read-only, attach-limited open either way.
+    /// </summary>
+    private static SqliteOpenOptions QueryOptions(string? backupFile) => SqliteOpenOptions.UserQuery with { BackupFile = backupFile };
 
     /// <summary>
     /// Parses (and so refuses, §11.2) the script before anything is resolved or opened, then runs

@@ -79,15 +79,24 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
             throw new SqliteReadOnlyConnectionException();
         }
 
-        var path = pathPolicy.Check(settings.Path);
-        if (!path.Allowed)
+        string target;
+        if (options.BackupFile is { } backupFile)
         {
-            throw new SqlitePathRefusedException(path.Reason ?? "Path refused.");
+            if (options.Writable)
+            {
+                throw new SqliteBackupException("Backups are only ever opened read-only.");
+            }
+
+            target = RequireBackupFile(settings, backupFile);
+        }
+        else
+        {
+            target = ResolveLivePath(settings);
         }
 
         var limit = options.Timeout ?? TimeSpan.FromSeconds(settings.StatementTimeoutS);
         var limitSeconds = (int)Math.Ceiling(limit.TotalSeconds);
-        using var connection = Open(path.ResolvedPath!, settings, options);
+        using var connection = Open(target, settings, options);
         using var timeout = new CancellationTokenSource(limit);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
 

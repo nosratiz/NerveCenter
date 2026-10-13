@@ -47,7 +47,7 @@ public class QueryPageTests : SqlitePageTestBase
 
     public QueryPageTests()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>()).Returns(Tenants);
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>()).Returns(Tenants);
         Operations.DryRunWriteAsync(Secret, WriteSql, Arg.Any<CancellationToken>()).Returns(DryRun);
         Operations.RunWriteAsync(Secret, WriteSql, Arg.Any<CancellationToken>()).Returns(Committed);
     }
@@ -158,7 +158,7 @@ public class QueryPageTests : SqlitePageTestBase
         await cut.Find(".sqlite-query-editor").KeyDownAsync(new KeyboardEventArgs { Key = "Enter", MetaKey = true });
 
         cut.WaitForElement(".sqlite-query-grid");
-        await Operations.Received(1).RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>());
+        await Operations.Received(1).RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -169,13 +169,13 @@ public class QueryPageTests : SqlitePageTestBase
 
         await cut.Find(".sqlite-query-editor").KeyDownAsync(new KeyboardEventArgs { Key = "Enter" });
 
-        await Operations.DidNotReceive().RunQueryAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Operations.DidNotReceive().RunQueryAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task Load_100_more_re_runs_the_same_sql_with_a_larger_limit()
     {
-        Operations.RunQueryAsync(Secret, Sql, 200, Arg.Any<CancellationToken>()).Returns(Tenants with
+        Operations.RunQueryAsync(Secret, Sql, 200, null, Arg.Any<CancellationToken>()).Returns(Tenants with
         {
             Rows = [.. Tenants.Rows, [Text("globex"), Int(2204311), Int(1704067200000), new CellValue(CellKind.Null, "NULL")]],
         });
@@ -185,14 +185,14 @@ public class QueryPageTests : SqlitePageTestBase
         cut.Find(".sqlite-query-more").Click();
 
         cut.WaitForAssertion(() => cut.FindAll(".sqlite-query-grid tbody tr").Should().HaveCount(3));
-        await Operations.Received(1).RunQueryAsync(Secret, Sql, 200, Arg.Any<CancellationToken>());
+        await Operations.Received(1).RunQueryAsync(Secret, Sql, 200, null, Arg.Any<CancellationToken>());
         cut.Find(".sqlite-query-count").TextContent.Should().Be("3 of 412 rows");
     }
 
     [Fact]
     public void Load_more_is_hidden_when_every_row_is_shown()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>()).Returns(Tenants with { TotalRows = 2 });
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>()).Returns(Tenants with { TotalRows = 2 });
 
         var cut = RenderAndRun();
 
@@ -202,7 +202,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public void A_capped_count_reads_100000_plus()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>())
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>())
             .Returns(Tenants with { TotalRows = QueryResult.CountCap, TotalCapped = true });
 
         var cut = RenderAndRun();
@@ -214,7 +214,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public void A_script_without_a_result_set_says_so()
     {
-        Operations.RunQueryAsync(Secret, "PRAGMA optimize", QueryResult.DefaultLimit, Arg.Any<CancellationToken>())
+        Operations.RunQueryAsync(Secret, "PRAGMA optimize", QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>())
             .Returns(new QueryResult([], [], 0, false, 1, null, TimeSpan.FromMilliseconds(3)));
         var cut = RenderPage();
         cut.Find(".sqlite-query-editor").Input("PRAGMA optimize");
@@ -228,7 +228,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public async Task A_failed_run_shows_a_banner_with_retry_and_no_settings_link_for_a_sql_error()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>())
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>())
             .Returns<Task<QueryResult>>(_ => throw new SqliteScriptRefusedException("ATTACH isn't allowed here."), _ => Task.FromResult(Tenants));
         var cut = RenderPage();
         cut.Find(".sqlite-query-editor").Input(Sql);
@@ -242,13 +242,13 @@ public class QueryPageTests : SqlitePageTestBase
 
         cut.WaitForElement(".sqlite-query-grid");
         cut.FindAll(".sqlite-query-error").Should().BeEmpty();
-        await Operations.Received(2).RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>());
+        await Operations.Received(2).RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public void A_missing_file_error_links_to_connection_settings()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>())
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>())
             .Returns<Task<QueryResult>>(_ => throw new SqliteException("unable to open database file", 14));
         var cut = RenderPage();
         cut.Find(".sqlite-query-editor").Input(Sql);
@@ -262,7 +262,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public void Explain_renders_the_plan_tree_and_tints_scans()
     {
-        Operations.ExplainQueryAsync(Secret, Sql, Arg.Any<CancellationToken>()).Returns(new ExplainPlan(Sql, 2,
+        Operations.ExplainQueryAsync(Secret, Sql, null, Arg.Any<CancellationToken>()).Returns(new ExplainPlan(Sql, 2,
         [
             new ExplainNode(2, 0, "SEARCH e USING INDEX idx_events_ts (ts<?)"),
             new ExplainNode(5, 0, "SCAN t"),
@@ -312,7 +312,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public void Chart_tab_is_hidden_without_a_text_and_numeric_pair()
     {
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>()).Returns(new QueryResult(
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>()).Returns(new QueryResult(
             [new QueryColumn("n", null, false)], [[Int(1)]], 1, false, 1, 1, TimeSpan.FromMilliseconds(1)));
 
         var cut = RenderAndRun();
@@ -324,7 +324,7 @@ public class QueryPageTests : SqlitePageTestBase
     [Fact]
     public async Task Export_csv_downloads_the_result_sql_and_is_audited()
     {
-        Operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>())
+        Operations.ExportQueryCsvAsync(Secret, Sql, CsvExport.MaxRows, CsvExport.MaxBytes, null, Arg.Any<CancellationToken>())
             .Returns(new CsvExport("query.csv", Encoding.UTF8.GetBytes("tenant\r\nacme-uk\r\n"), 1, false));
         var module = JSInterop.SetupModule("./_content/SbConsole.Plugins.Sqlite/sqlite.js");
         module.SetupVoid("downloadFromStream", _ => true).SetVoidResult();
@@ -504,7 +504,7 @@ public class QueryPageTests : SqlitePageTestBase
     {
         TwoConnections();
         var lateA = new TaskCompletionSource<QueryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, Arg.Any<CancellationToken>()).Returns(_ => lateA.Task);
+        Operations.RunQueryAsync(Secret, Sql, QueryResult.DefaultLimit, null, Arg.Any<CancellationToken>()).Returns(_ => lateA.Task);
         var cut = RenderWithPicker();
         cut.Find(".sqlite-query-mode-write").Click();
         cut.WaitForElement(".sqlite-query-write-banner");
