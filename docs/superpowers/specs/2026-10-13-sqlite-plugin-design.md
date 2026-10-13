@@ -390,3 +390,214 @@ creating new database files.
   to both locations.
 - The demo file is ~34 MB, not 50 MB, and the compose volume is writable (SQLite needs to
   create `-shm` beside a WAL file even for read-only connections).
+
+## 11. Phases 2 and 3 — design (2026-10-13)
+
+Approved scope: everything in §1 phases 2 and 3, built on `feat/sqlite-plugin` after phase 1.
+Verified the same day against Microsoft.Data.Sqlite 10.0.12 / bundled e_sqlite3 (throwaway probe):
+`VACUUM INTO @param` works on a `Mode=ReadOnly` connection; `sqlite3_limit(SQLITE_LIMIT_ATTACHED, 0)`
+makes `ATTACH`, `VACUUM INTO` and plain `VACUUM` fail with "too many attached databases"; a
+`DELETE` with `ON DELETE CASCADE` children (rowid and WITHOUT ROWID) gives `changes()` = direct
+rows only and a `total_changes()` delta that includes every cascaded row; `sqlite3_complete`
+treats a trigger body's inner `;` correctly; `SqliteConnection.BackupDatabase` (online backup API)
+copies a file into a live read-write connection.
+
+### 11.1 Connection guard (applies to every user-SQL connection)
+
+- **ATTACH is impossible from user SQL.** Every connection that runs user-supplied SQL (Query
+  runner, write mode, Create table) sets `SQLITE_LIMIT_ATTACHED = 0` right after open. Without it,
+  `ATTACH '/any/file'` or `VACUUM INTO '/any/path'` would bypass `IHostPathPolicy` entirely (VACUUM
+  INTO even works read-only). Plugin-owned connections that need VACUUM INTO (backups) don't set
+  the limit, and they never run user SQL.
+- **Write mode needs `Mode=ReadWrite` on the saved connection.** The connection form's Read-write
+  option is now enabled. Write-capable operations take an explicit `writable` flag; the handler
+  re-reads `Mode` from the decrypted secret and refuses with "This connection is read-only — set
+  Default mode to Read-write in Connections." if it isn't ReadWrite. Opened as
+  `SqliteOpenMode.ReadWrite`, never `ReadWriteCreate` (a missing file is never created).
+- Read-only remains the default for everything, including the Query page on a read-write connection.
+
+### 11.2 Statement splitting — `SqliteScript`
+
+User scripts are split into statements by a small tokenizer (single/double/backtick/bracket quotes,
+`--` and `/* */` comments) that cuts at a `;` outside quotes/comments **only when
+`raw.sqlite3_complete` agrees** the text so far is complete (handles `CREATE TRIGGER … BEGIN …; END;`).
+Each statement records its leading keyword (after comments). Refused anywhere in a script, with a
+friendly message, before anything runs: `ATTACH`, `DETACH`, `VACUUM` (use Backups), and transaction
+control (`BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`) — the console owns the
+transaction. Empty scripts are refused.
+
+### 11.3 Query page (1c) — `/p/sqlite/query`
+
+Nav item "Query". Header: connection picker, Read-only / Write segmented switch, meta
+"opened with mode=ro · statement timeout N s" (write mode: tinted header, "write mode · every
+statement runs inside a transaction and is audited"). Query params: `connectionId`, `sql`
+(prefill, e.g. from Tables "Query" / "Open in Query →"), `backup` (§11.7 open read-only).
+
+- **Run** (`RunQueryQueryHandler`, query, not audited — same data the Tables preview shows): runs
+  every statement of the script on a read-only connection; the grid shows the **last statement that
+  returned columns**. Reads up to `limit` rows (100, "Load 100 more" re-runs with +100), keeps
+  counting further rows without materialising them up to 100,000 ("100,000+ rows"). Result:
+  columns (name + declared type), rows (same cell rendering as the Tables preview: NULL, BLOB · N
+  bytes, text truncated to 200 chars, full value as tooltip), total rows (or capped), duration.
+  INTEGER columns whose values all look like unix-ms (same range rule as column notes) get a date
+  hint under the value; the value is never changed. Ctrl/⌘+Enter runs.
+- **Explain** (`ExplainQueryQueryHandler`): `EXPLAIN QUERY PLAN` of the **first** statement only
+  (never the rest of the script) on a read-only connection; rendered as an indented tree from
+  `id`/`parent`/`detail`, beside the editor. `SCAN` lines on a table are flagged (warning tint).
+- **Grid / JSON / Chart** views of the current result: JSON = array of objects; Chart = MudChart
+  bar chart of the first text column (labels) vs the first numeric column (≤ 50 rows), hidden when
+  the result has no such pair.
+- **Export CSV** of the current query (`ExportQueryCsvCommandHandler`, Safe, audited
+  `sqlite.query.export`) — re-runs the script read-only with the same 100k rows / 50 MB caps as
+  table export, same JS stream download.
+- **Saved queries** (left panel): global list in `IPluginStore` under `saved-queries` (JSON array
+  of `{Id, Name, Sql, SavedAt}`), Save (name prompt), click to load, delete (×). Not per
+  connection — saved SQL is usually portable across copies of the same file.
+
+### 11.4 Write mode (1d)
+
+- **Switching to Write**: disabled (with the reason as tooltip) unless the connection's summary
+  Mode is read-write. On a prod connection it calls `IConfirmationService.ConfirmAsync("Enable
+  write mode on", name, isProd: true)` (typed confirm from the host). `IsProd` always from the
+  server-side `ConnectionInfo` the picker loaded. Switching connection resets to Read-only.
+- **Dry run** (`DryRunWriteQueryHandler` — a query: it changes nothing durable and writes no audit
+  row): `BEGIN IMMEDIATE`, run every statement, record per statement `changes()` and the
+  `total_changes()` delta, then **always `ROLLBACK`**. Report: per-statement direct rows, rows
+  changed by triggers / FK cascades (total − direct), duration, and the note "freed pages stay in
+  the file until VACUUM". This is more honest than a `COUNT(*)` rewrite: it is the real statement,
+  works for any DML/DDL, and resolves cascades; the cost (it does the work twice) is stated in the
+  UI. Busy/timeout errors map as usual.
+- **Run in transaction** (`RunWriteCommandHandler`, `ActionRisk.Destructive`, audited
+  `sqlite.query.write`): requires a dry run of the *same* script text first (the button is
+  disabled until then; the page tracks the dry-run's SQL); on prod confirms via
+  `ConfirmAsync("Run write script on", name, true, count: totalRowsFromDryRun)`. Executes inside
+  one `BEGIN IMMEDIATE … COMMIT`; any error → `ROLLBACK` and nothing is kept. Audit detail:
+  `sha256:<first 12 hex> · <direct> rows + <cascaded> cascaded · <duration> · <first 200 chars of SQL>`.
+  Result panel: committed, rows per statement, cascaded rows, duration, `-wal` size and free-page
+  % after; actions **Checkpoint WAL** (`CheckpointWalCommandHandler`, Mutating, audited
+  `sqlite.wal.checkpoint`, `PRAGMA wal_checkpoint(TRUNCATE)`, shows busy/log/checkpointed) and
+  **Back to read-only**.
+- The statement timeout applies; an interrupted write rolls back.
+
+### 11.5 Tables page DDL (1b, 1f, 1g)
+
+Header buttons (only for a read-write connection; otherwise rendered disabled with the reason):
+**Query** (→ Query page prefilled `SELECT * FROM "<t>" LIMIT 100`), **Rename**, **Drop**, and
+**+ Create table…** above the list. Data tab gets **Open in Query →** with the preview SQL.
+
+- **Create** (`CreateTableCommandHandler`, Mutating, audited `sqlite.table.create`): dialog with a
+  DDL editor prefilled with a template; the script must be exactly one `CREATE TABLE` statement
+  (§11.2 splitter). Runs in a transaction on a writable, attach-limited connection. Selects the
+  new table afterwards.
+- **Rename** (`RenameTableCommandHandler`, Mutating, audited `sqlite.table.rename`): new-name
+  field; `ALTER TABLE "<old>" RENAME TO "<new>"` with both quoted; the old name must exist in
+  `sqlite_schema` as a table; new name non-empty, ≤ 128 chars, not `sqlite_`-prefixed, not taken.
+  Prod → `ConfirmAsync("Rename table", old, true)`.
+- **Drop** (`GetDropImpactQueryHandler` + `DropTableCommandHandler`, Destructive, audited
+  `sqlite.table.drop`): the dialog shows rows ≈ (stat1, else "unknown"), index count, and every
+  table whose foreign keys reference it with its ON DELETE action — and what will happen given
+  that this console's connections run with `foreign_keys = ON`: CASCADE → "rows there are deleted
+  too"; SET NULL/SET DEFAULT → "their reference is cleared"; NO ACTION/RESTRICT → "the drop fails
+  if any rows reference it". Checkbox **Take a backup first** (when the connection has a backup
+  directory; runs §11.7 Back up now and aborts the drop if it fails). Then
+  `ConfirmAsync("Drop table", name, isProd)` (typed for prod). `DROP TABLE "<t>"` in a transaction.
+- **Empty file** (1g): no tables → "No tables in <path>. The file is N bytes — SQLite creates
+  pages on first write." with Create table… and **Run script** (→ Query page) when writable.
+
+### 11.6 Corrupt state (1g) — REINDEX and recover
+
+On a failed integrity check the Overview strip offers, for read-write connections:
+**REINDEX** (`ReindexCommandHandler`, Mutating, audited `sqlite.reindex`, runs `REINDEX` then a
+fresh integrity check) and **Recover into new file** (`RecoverCommandHandler`, Mutating, audited
+`sqlite.recover`; needs a backup directory). The bundled build has no `.recover`
+(`sqlite3_recover` is a CLI extension), so this is a best-effort salvage: create
+`<backupdir>/<base>-recovered-<yyyyMMdd-HHmmss>.db`, copy every table's DDL then its rows one by
+one, skipping rows/tables that error, then indexes/views/triggers; report tables copied, rows
+copied, tables failed. The live file is never modified. Prod → typed confirm for REINDEX.
+
+### 11.7 Backups (1e) — `/p/sqlite/backups`
+
+- **Backup directory** is a new optional secret key `BackupDir=` ("Enable backups to" in the
+  connection form). It must pass `IHostPathPolicy` like the file itself (so it lives under
+  `SBC_SQLITE_ROOTS`) and must not be the live file's own directory... it may be; files are named
+  `<base>-<yyyyMMdd-HHmmss>.db`. No backup dir → the Backups page explains how to enable it.
+- **Back up now** (`RunBackupCommandHandler`, Safe, audited `sqlite.backup.create`, optional
+  note): `VACUUM INTO @path` on a read-only, **not** attach-limited plugin-owned connection, under
+  a 30-minute timeout (not the statement timeout). Then verify (below). History record stored
+  even on failure (with the friendly error), so the table shows failed rows.
+- **Verify** (`VerifyBackupCommandHandler`, Safe, audited `sqlite.backup.verify`; also run after
+  every backup): opens the copy read-only → `integrity_check`, SHA-256 of the file, table count,
+  total rows ≈ (stat1), schema fingerprint (sorted `type|name|sql` of `sqlite_schema`). Detail
+  panel compares with the live file: size delta, rows ≈ delta, schema identical / N objects differ.
+- **History** in `IPluginStore` `backups:<connectionId>`: JSON array of
+  `{Id, FileName, TakenAt, Bytes, DurationMs, Trigger ("manual"|"schedule"), Actor, Note,
+  Status ("ok"|"failed"), Error, Verify ("ok"|"failed"|"unverified"), VerifyDetail, Sha256,
+  Tables, RowsApprox, SchemaFingerprint, VerifiedAt}`, newest first, capped at 200 records.
+- **Schedule…** (`SaveBackupPolicyCommandHandler`, Mutating, audited `sqlite.backup.policy`):
+  per connection in `backup-policy:<connectionId>`: `{Enabled, DailyAtUtc ("HH:mm"), KeepDaily 7,
+  KeepWeekly 4, KeepMonthly 3}`.
+- **Scheduler** `SqliteBackupScheduler : BackgroundService` (hand-registered with
+  `AddHostedService` in the plugin's `ConfigureServices`), ticks every minute (`TimeProvider`),
+  public `TickAsync(now)` for tests. For each SQLite connection with a backup dir and an enabled
+  policy: if today's slot `DailyAtUtc` has passed and there's no scheduled record at/after it,
+  take a backup (trigger "schedule", actor "system"), verify, then prune. Errors are recorded in
+  history and logged; a failed tick never stops later ticks. The same tick samples **growth**
+  (§11.8) at most once an hour per connection.
+- **Background audit**: `EfAuditScope` falls back to actor `system` when there is no
+  authentication state (background scope) instead of throwing.
+- **Retention / Prune** (`PruneBackupsCommandHandler`, Destructive, audited
+  `sqlite.backup.prune`): grandfather-father-son over successful backups: keep the newest per UTC
+  day for the last KeepDaily days, newest per ISO week for KeepWeekly weeks, newest per month for
+  KeepMonthly months; failed records older than KeepDaily days are dropped from history; the newest
+  successful backup is always kept. The page shows "next prune removes N". Only files named in the
+  history, inside the backup dir (re-checked through `IHostPathPolicy`), are deleted.
+  Manual prune confirms via `ConfirmAsync("Delete backups of", name, isProd, count)`; the
+  scheduler prunes without confirmation (the policy is the consent).
+- **Download** (`DownloadBackupCommandHandler`, Safe, audited `sqlite.backup.download`): streams
+  the file through the existing JS stream download (fine for the demo sizes; very large files are
+  better fetched from the volume directly — stated in the UI over 1 GB).
+- **Open read-only** → `/p/sqlite/query?connectionId=…&backup=<id>`: the Query page runs
+  read-only queries against that backup file instead of the live file (banner says so; write mode
+  unavailable). No temporary host connection is created — the SDK has no seam for that.
+- **Restore…** (`RestoreBackupCommandHandler`, Destructive, audited `sqlite.backup.restore`;
+  needs Mode=ReadWrite): dialog states the live path, the backup, its age ("you will lose N hours of
+  writes ≈ R rows" from the rows ≈ delta) and that the current file is kept as
+  `<file>.pre-restore-<yyyyMMdd-HHmmss>`; typed confirm via `ConfirmAsync("Restore backup over",
+  name, isProd)`. Steps: verify the backup (abort unless ok) → `VACUUM INTO` the pre-restore copy
+  next to the live file (policy-checked) → online backup API from the backup (read-only) into the
+  live file (read-write connection, busy timeout applies; writers are blocked for the copy, other
+  connections see the new content, WAL handled by SQLite) → integrity check of the live file.
+- **Failure banner**: when the newest record failed, show its error; if the failure is
+  `SQLITE_FULL` (13, "disk is full") and prune would remove files, offer **Prune N and retry**.
+  `FriendlySqliteError` maps 13 to "The disk or volume is full."
+- Header meta: "target <dir> · N kept · <total size>". Tiles: Last successful (age, policy,
+  missed slots in the last 7 days), Method (VACUUM INTO · online · compacts on the way out),
+  Verified (ok / total), Retention (`7d · 4w · 3m` · next prune removes N).
+- **Nav badge** on Backups: hours since the last successful backup when a policy is enabled and
+  it is older than 26 h (`GetNavBadgeAsync`); none otherwise.
+
+### 11.8 Overview additions (1a)
+
+- **Last backup** tile: age of the newest successful backup, "policy: daily HH:mm" or "no
+  schedule", **Back up now →** (links to Backups). "backups not enabled" when no backup dir.
+- **Growth — 30 days** card: file-size samples in `growth:<connectionId>` (`{At, Bytes}` JSON
+  array, ≤ 1 per hour, 30-day retention), taken by the scheduler tick and by every Overview load.
+  Shows first → last, delta and per-day rate, an inline SVG sparkline (palette tokens only), and
+  "volume <total> — ~N days at this rate" from `DriveInfo` of the file's volume when growth is
+  positive. Fewer than 2 samples or < 1 h of span → "collecting — first sample at …".
+- **Dashboard problems** add: Warning "Last backup failed" (newest record failed), Warning
+  "Backup overdue" (policy enabled, newest success older than 26 h).
+
+### 11.9 Contribution and docs
+
+`Contribution => new(PageCount: 4, ActionCount: 16)`. Nav: Overview, Tables, Query, Backups.
+`docs/design.md` dated section; `docker/README.md` and `.env.example` document `BackupDir`
+(`/sqlite/backups` in compose). The seed additionally creates a churned tenant's old events (so the
+mockup's retention DELETE has rows to dry-run), a `reports` / `report_runs` pair, and an empty
+`new.db` beside `reports.db` for the 1g empty state; `backups/` directory created writable.
+
+### 11.10 Phase 2/3 non-goals
+
+Per-table growth attribution, page-cache hit %, holder-process hints, loading extensions,
+creating database files from the UI (other than backups / recovered copies), temporary host
+connections for backups, cross-backup comparison.
