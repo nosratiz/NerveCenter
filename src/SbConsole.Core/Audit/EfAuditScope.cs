@@ -15,11 +15,11 @@ public sealed class EfAuditScope(
     TimeProvider clock,
     AuthenticationStateProvider authStateProvider) : IAuditScope, IScopedService
 {
-    public const string SystemActor = "system";
+    public const string SystemActor = AuditActor.System;
 
     public async Task RecordAsync(string action, string target, ActionRisk risk, bool succeeded, string? detail = null, CancellationToken ct = default)
     {
-        var actor = await ResolveActorAsync();
+        var actor = await AuditActor.ResolveAsync(authStateProvider);
 
         await writer.WriteAsync(new AuditEntry
         {
@@ -31,23 +31,5 @@ public sealed class EfAuditScope(
             Succeeded = succeeded,
             Detail = detail,
         }, ct);
-    }
-
-    /// <summary>
-    /// The signed-in user's name ("admin" if the identity has none). Outside a Blazor circuit -- a
-    /// hosted service's scope, e.g. the SQLite backup scheduler -- the server provider has no state
-    /// and throws InvalidOperationException; that work is recorded as "system" (design spec §11.7).
-    /// </summary>
-    private async Task<string> ResolveActorAsync()
-    {
-        try
-        {
-            var state = await authStateProvider.GetAuthenticationStateAsync();
-            return state.User.Identity?.Name ?? "admin";
-        }
-        catch (InvalidOperationException)
-        {
-            return SystemActor;
-        }
     }
 }

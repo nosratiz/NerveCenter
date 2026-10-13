@@ -104,6 +104,16 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         sp.GetRequiredService<ListPluginsQueryHandler>();
     }
 
+    /// <summary>SQLite design spec §13: the SDK seam plugins save a new connection through is the Core creator, by marker.</summary>
+    [Fact]
+    public void The_sdk_connection_creator_resolves_to_the_core_implementation()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+
+        scope.ServiceProvider.GetRequiredService<SbConsole.Sdk.IConnectionCreator>().Should().BeOfType<ConnectionCreator>();
+    }
+
     /// <summary>
     /// Registration is by lifetime marker (IScopedService etc.) rather than a hand-written line per
     /// handler, so the failure mode moves from "forgot the AddScoped line" to "forgot the marker".

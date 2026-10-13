@@ -1,6 +1,7 @@
 using FluentAssertions;
 using SbConsole.Core.Security;
 using SbConsole.Core.Settings;
+using SbConsole.Sdk;
 
 namespace SbConsole.Core.Tests.Security;
 
@@ -29,6 +30,26 @@ public sealed class HostPathPolicyTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "");
         return path;
+    }
+
+    [Fact]
+    public void AllowedRoots_returns_the_configured_roots_verbatim()
+    {
+        Policy(null, Root, "/srv/other/").AllowedRoots.Should().Equal(Root, "/srv/other/");
+        Policy().AllowedRoots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_implementation_without_AllowedRoots_reports_none()
+    {
+        IHostPathPolicy legacy = new LegacyPolicy();
+
+        legacy.AllowedRoots.Should().BeEmpty();
+    }
+
+    private sealed class LegacyPolicy : IHostPathPolicy
+    {
+        public PathCheckResult Check(string path) => PathCheckResult.Refuse("no");
     }
 
     [Fact]

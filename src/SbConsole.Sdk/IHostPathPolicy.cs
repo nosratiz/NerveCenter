@@ -11,6 +11,13 @@ namespace SbConsole.Sdk;
 public interface IHostPathPolicy
 {
     PathCheckResult Check(string path);
+
+    /// <summary>
+    /// The configured roots, verbatim (spec §13: the SQLite plugin's New database dialog offers them
+    /// as its folder list). Empty means nothing is allowed. Defaults to empty, so an implementation
+    /// written before this member existed needs no change -- and fails closed.
+    /// </summary>
+    IReadOnlyList<string> AllowedRoots => [];
 }
 
 public sealed record PathCheckResult(bool Allowed, string? ResolvedPath, string? Reason)

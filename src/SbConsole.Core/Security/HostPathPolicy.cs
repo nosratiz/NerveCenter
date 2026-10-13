@@ -15,6 +15,8 @@ public sealed class HostPathPolicy(BootstrapOptions options) : IHostPathPolicy, 
 {
     private const int MaxSymlinkHops = 40;
 
+    public IReadOnlyList<string> AllowedRoots => options.SqliteRoots;
+
     public PathCheckResult Check(string path)
     {
         if (options.SqliteRoots.Count == 0)
