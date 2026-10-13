@@ -38,7 +38,7 @@
     @if (_error is not null)
     {
         <div class="sql-body">
-            <div class="sql-banner sql-banner-danger sqlite-overview-error">
+            <div class="sql-banner sql-banner-danger sqlite-overview-error" role="alert">
                 <span>@_error</span>
                 <span class="sql-spacer"></span>
                 <a class="sql-link" href="/connections">Connection settings</a>
@@ -95,7 +95,7 @@
 
         <div class="sql-body">
             @* Integrity is a status strip, not a tile: it is either ok or the only thing that matters (mockup 1a note). *@
-            <div class="sql-strip sqlite-overview-integrity @IntegrityStripClass">
+            <div class="sql-strip sqlite-overview-integrity @IntegrityStripClass" role="status">
                 <span class="sql-mono">PRAGMA integrity_check</span>
                 <span class="sql-muted">→</span>
                 @if (_integrityRunning)
@@ -116,7 +116,7 @@
                 }
                 @if (_integrity is { } last && !_integrityRunning)
                 {
-                    <span class="sql-muted sqlite-overview-integrity-meta">· started @last.RanAt.ToString("yyyy-MM-dd HH:mm", Inv) UTC, took @SqliteFormat.Duration(last.Duration) · foreign_key_check @last.ForeignKeyViolations violations</span>
+                    <span class="sql-muted sqlite-overview-integrity-meta">· started @last.RanAt.ToString("yyyy-MM-dd HH:mm", Inv) UTC, took @SqliteFormat.Duration(last.Duration) · foreign_key_check @ViolationCount(last)</span>
                 }
                 <span class="sql-spacer"></span>
                 <button type="button" class="sql-btn sqlite-overview-run-integrity" disabled="@_integrityRunning" @onclick="RunIntegrityAsync">Run now</button>
@@ -225,10 +225,14 @@
     private string? _error;
     private bool _loading;
     private DateTimeOffset? _loadedAt;
+    private Guid? _dataConnectionId;
+    private int _loadGeneration;
+    private int _integrityGeneration;
 
     private string? IntegrityStripClass => _integrity switch
     {
         null => null,
+        { IntegrityOk: true, ForeignKeyViolations: > 0 } => "sql-strip-warn",
         { IntegrityOk: true } => "sql-strip-ok",
         _ => "sql-strip-danger",
     };
@@ -246,6 +250,18 @@
             return;
         }
 
+        var generation = ++_loadGeneration;
+        if (_dataConnectionId != connection.Id)
+        {
+            // Another connection's data must never sit under this connection's name while it loads.
+            _dataConnectionId = connection.Id;
+            _overview = null;
+            _loadedAt = null;
+            _integrity = null;
+            _integrityRunning = false;
+            _integrityGeneration++;
+        }
+
         _loading = true;
         _error = null;
         _sizes = null;
@@ -255,7 +271,7 @@
         {
             var overview = await GetOverview.HandleAsync(connection.Id, _cts.Token);
             var integrity = await GetLastIntegrity.HandleAsync(connection.Id, _cts.Token);
-            if (!ReferenceEquals(connection, _connection))
+            if (generation != _loadGeneration)
             {
                 return;
             }
@@ -276,7 +292,7 @@
 
             // Sizes load separately so the tiles never wait on them (spec §5).
             var sizes = await GetTableSizes.HandleAsync(connection.Id, _cts.Token);
-            if (!ReferenceEquals(connection, _connection))
+            if (generation != _loadGeneration)
             {
                 return;
             }
@@ -296,7 +312,11 @@
         }
         finally
         {
-            _loading = false;
+            // A superseded load must not clear the busy flag of the load that replaced it.
+            if (generation == _loadGeneration)
+            {
+                _loading = false;
+            }
         }
     }
 
@@ -307,12 +327,13 @@
             return;
         }
 
+        var generation = ++_integrityGeneration;
         _integrityRunning = true;
         _integrityError = null;
         try
         {
             var result = await RunIntegrityCheck.HandleAsync(new RunIntegrityCheckCommand(connection.Id, connection.Name), _cts.Token);
-            if (!ReferenceEquals(connection, _connection))
+            if (generation != _integrityGeneration)
             {
                 return;
             }
@@ -332,12 +353,18 @@
         }
         finally
         {
-            _integrityRunning = false;
+            if (generation == _integrityGeneration)
+            {
+                _integrityRunning = false;
+            }
         }
     }
 
     private static string ErrorCount(IntegrityResult result) =>
         result.Messages.Count == 1 ? "1 error" : $"{result.Messages.Count} errors";
+
+    private static string ViolationCount(IntegrityResult result) =>
+        result.ForeignKeyViolations == 1 ? "1 violation" : $"{result.ForeignKeyViolations} violations";
 
     private static string Pct(double value) => Math.Clamp(value, 0, 100).ToString("0.#", Inv);
 

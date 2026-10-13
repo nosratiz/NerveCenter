@@ -89,8 +89,9 @@
     border-radius: 8px; background: var(--mud-palette-surface); border-left: 3px solid var(--sql-line);
 }
 .sql-strip-ok { border-left-color: var(--sql-ok); }
+.sql-strip-warn { border-left-color: var(--sql-warn); }
 .sql-strip-danger { border-left-color: var(--sql-danger); }
-.sql-banner { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; }
+.sql-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; }
 .sql-banner-danger { background: color-mix(in srgb, var(--sql-danger) 12%, transparent); }
 .sql-error-list {
     margin: 0; padding: 10px 14px; border-radius: 8px; font-family: var(--sql-mono); font-size: 12px;
