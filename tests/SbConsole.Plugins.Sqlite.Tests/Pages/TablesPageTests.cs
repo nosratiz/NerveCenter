@@ -113,6 +113,19 @@ public class TablesPageTests : SqlitePageTestBase
     }
 
     [Fact]
+    public void The_columns_indexes_and_foreign_key_tables_scroll_horizontally_inside_a_wrapper()
+    {
+        var cut = RenderPage();
+
+        cut.Find(".sql-grid-wrap > table.sqlite-columns").Should().NotBeNull();
+        cut.Find("[data-column='id'] .sqlite-column-notes").ClassList.Should().Contain("sql-notes");
+        cut.Find(".sqlite-tab-indexes").Click();
+        cut.Find(".sql-grid-wrap > table.sqlite-indexes").Should().NotBeNull();
+        cut.Find(".sqlite-tab-foreignkeys").Click();
+        cut.Find(".sql-grid-wrap > table.sqlite-foreign-keys").Should().NotBeNull();
+    }
+
+    [Fact]
     public void Honors_the_table_in_the_query_string()
     {
         Services.GetRequiredService<NavigationManager>().NavigateTo("/p/sqlite/tables?table=sessions");

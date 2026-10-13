@@ -94,6 +94,18 @@ public class OverviewPageTests : SqlitePageTestBase
     }
 
     [Fact]
+    public void An_empty_wal_file_shows_no_wal_suffix()
+    {
+        Arrange(Sample(wal: 0));
+
+        var cut = RenderPage();
+
+        cut.WaitForElement(".sqlite-overview-file-size");
+        cut.FindAll(".sqlite-overview-wal").Should().BeEmpty();
+        cut.Find(".sqlite-overview-file-size").TextContent.Should().NotContain("-wal");
+    }
+
+    [Fact]
     public void Without_dbstat_the_panel_ranks_the_largest_tables_by_estimated_rows()
     {
         Arrange();

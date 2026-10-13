@@ -140,6 +140,7 @@
 .sql-table td { padding: 6px 8px; border-bottom: 1px solid var(--sql-faint); vertical-align: top; }
 .sql-grid-wrap { overflow-x: auto; }
 .sql-grid td { white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.sql-notes { white-space: normal; min-width: 180px; }
 .sql-cell-null, .sql-cell-blob { color: var(--sql-muted); font-style: italic; }
 .sql-hint { display: block; font-size: 11px; }
 .sql-badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-right: 4px; }

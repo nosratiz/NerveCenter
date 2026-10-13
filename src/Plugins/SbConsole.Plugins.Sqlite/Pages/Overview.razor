@@ -53,7 +53,7 @@
                             Aside="@($"page {SqliteFormat.Bytes(o.PageSize)} · {SqliteFormat.Count(o.PageCount)} pages")">
                 <Value>
                     @SqliteFormat.Bytes(o.FileBytes)
-                    @if (o.WalBytes is { } wal)
+                    @if (o.WalBytes is { } wal && wal > 0)
                     {
                         <small class="sql-muted sqlite-overview-wal">+ @SqliteFormat.Bytes(wal) -wal</small>
                     }
@@ -380,7 +380,9 @@
 
     public void Dispose()
     {
+        // Cancel but never dispose: a load continuation that resumes after dispose still reads
+        // _cts.Token, and Token on a disposed source throws ObjectDisposedException. A source with no
+        // timers or linked registrations holds nothing that needs disposal.
         _cts.Cancel();
-        _cts.Dispose();
     }
 }
