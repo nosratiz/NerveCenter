@@ -8,6 +8,7 @@
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.Aws\SbConsole.Plugins.Aws.csproj" />
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
     <ProjectReference Include="..\Plugins\SbConsole.Plugins.Redis\SbConsole.Plugins.Redis.csproj" />
+    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Sqlite\SbConsole.Plugins.Sqlite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
