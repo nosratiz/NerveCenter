@@ -11,7 +11,7 @@ public sealed partial class SqliteOperations
         RunAsync(secret, c =>
         {
             var detail = ReadDetail(c, name);
-            var sql = $"SELECT * FROM {SqliteSql.QuoteIdentifier(detail.Name)}{Order(detail, descending: true)} LIMIT {limit.ToString(CultureInfo.InvariantCulture)}";
+            var sql = $"SELECT * FROM {SqliteSql.QuoteIdentifier(detail.Name)}{Order(detail, descending: true)} LIMIT {Math.Max(0, limit).ToString(CultureInfo.InvariantCulture)}";
             using var command = c.CreateCommand();
             command.CommandText = sql;
             using var reader = command.ExecuteReader();
@@ -32,7 +32,7 @@ public sealed partial class SqliteOperations
         RunAsync<IReadOnlyList<ColumnSample>>(secret, c =>
         {
             var detail = ReadDetail(c, name);
-            var source = $"SELECT * FROM {SqliteSql.QuoteIdentifier(detail.Name)}{Order(detail, descending: false)} LIMIT {sampleRows.ToString(CultureInfo.InvariantCulture)}";
+            var source = $"SELECT * FROM {SqliteSql.QuoteIdentifier(detail.Name)}{Order(detail, descending: false)} LIMIT {Math.Max(0, sampleRows).ToString(CultureInfo.InvariantCulture)}";
             var min = ColumnSample.EpochMsMin.ToString(CultureInfo.InvariantCulture);
             var max = ColumnSample.EpochMsMax.ToString(CultureInfo.InvariantCulture);
 
@@ -43,7 +43,7 @@ public sealed partial class SqliteOperations
                     WITH s AS ({{source}})
                     SELECT COUNT(*), COUNT({{q}}), COUNT(DISTINCT {{q}}),
                            COALESCE(SUM(typeof({{q}}) = 'text'), 0),
-                           COALESCE(SUM(typeof({{q}}) = 'text' AND substr(ltrim({{q}}), 1, 1) IN ('{', '[') AND json_valid({{q}})), 0),
+                           COALESCE(SUM(typeof({{q}}) = 'text' AND substr(ltrim({{q}}, ' ' || char(9) || char(10) || char(13)), 1, 1) IN ('{', '[') AND json_valid({{q}})), 0),
                            COALESCE(SUM(typeof({{q}}) = 'integer'), 0),
                            COALESCE(SUM(typeof({{q}}) = 'integer' AND {{q}} BETWEEN {{min}} AND {{max}}), 0)
                     FROM s
@@ -84,13 +84,30 @@ public sealed partial class SqliteOperations
         return reader.GetValue(ordinal) switch
         {
             long integer => new CellValue(CellKind.Integer, integer.ToString(CultureInfo.InvariantCulture), integer),
-            double real => new CellValue(CellKind.Real, real.ToString("R", CultureInfo.InvariantCulture)),
+            double real => new CellValue(CellKind.Real, FormatReal(real)),
             byte[] blob => new CellValue(CellKind.Blob, $"BLOB · {SqliteFormat.Count(blob.Length)} bytes"),
             var other => Text(Convert.ToString(other, CultureInfo.InvariantCulture) ?? ""),
         };
 
-        static CellValue Text(string text) => text.Length <= MaxCellText
-            ? new CellValue(CellKind.Text, text)
-            : new CellValue(CellKind.Text, text[..MaxCellText] + "…", Truncated: true);
+        static CellValue Text(string text)
+        {
+            if (text.Length <= MaxCellText)
+            {
+                return new CellValue(CellKind.Text, text);
+            }
+
+            // Never cut between the halves of a surrogate pair.
+            var cut = char.IsHighSurrogate(text[MaxCellText - 1]) ? MaxCellText - 1 : MaxCellText;
+            return new CellValue(CellKind.Text, text[..cut] + "…", Truncated: true);
+        }
+    }
+
+    /// <summary>Round-trip format, with ".0" appended so a whole-number REAL doesn't read as an INTEGER.</summary>
+    private static string FormatReal(double value)
+    {
+        var text = value.ToString("R", CultureInfo.InvariantCulture);
+        return text.IndexOfAny(['.', 'E', 'e']) >= 0 || text.Contains("Infinity", StringComparison.Ordinal) || text.Contains("NaN", StringComparison.Ordinal)
+            ? text
+            : text + ".0";
     }
 }

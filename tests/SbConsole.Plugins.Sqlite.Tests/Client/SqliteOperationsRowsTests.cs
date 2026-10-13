@@ -94,5 +94,105 @@ public sealed class SqliteOperationsRowsTests : IDisposable
         samples.Should().OnlyContain(s => s.SampledRows == 2);
     }
 
+    [Fact]
+    public async Task Preview_does_not_split_a_surrogate_pair_when_truncating()
+    {
+        _db.Execute($"INSERT INTO events(id, props) VALUES (5, '{new string('a', SqliteOperations.MaxCellText - 1)}😀tail');");
+
+        var cell = (await _db.Operations().PreviewRowsAsync(_db.Secret(), "events", 1)).Rows[0][3];
+
+        cell.Truncated.Should().BeTrue();
+        cell.Display.Should().EndWith("…");
+        var beforeEllipsis = cell.Display[..^1];
+        beforeEllipsis.Should().NotBeEmpty();
+        char.IsSurrogate(beforeEllipsis[^1]).Should().BeFalse();
+        System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(cell.Display)).Should().NotContain("\uFFFD");
+    }
+
+    [Fact]
+    public async Task Preview_keeps_a_whole_number_real_visibly_real()
+    {
+        _db.Execute("INSERT INTO events(id, score) VALUES (5, 2.0);");
+
+        var page = await _db.Operations().PreviewRowsAsync(_db.Secret(), "events", 1);
+
+        page.Rows[0][5].Should().Be(new CellValue(CellKind.Real, "2.0"));
+    }
+
+    [Fact]
+    public async Task Samples_count_pretty_printed_json_that_starts_with_whitespace()
+    {
+        _db.Execute("INSERT INTO events(id, props) VALUES (5, char(10) || char(9) || '{\"a\": 1}');");
+
+        var samples = await _db.Operations().SampleColumnsAsync(_db.Secret(), "events", 1000);
+
+        samples.Single(s => s.Column == "props").JsonCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Samples_take_the_first_n_rows()
+    {
+        using var db = new TempDatabase("""
+            CREATE TABLE t(id INTEGER PRIMARY KEY, j TEXT);
+            INSERT INTO t VALUES (1, '{"a":1}'), (2, '[1]'), (3, 'plain'), (4, 'plain'), (5, 'plain');
+            """);
+
+        var samples = await db.Operations().SampleColumnsAsync(db.Secret(), "t", 2);
+
+        samples.Single(s => s.Column == "j").JsonCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Preview_falls_back_to_the_underscore_alias_when_a_column_is_named_rowid()
+    {
+        using var db = new TempDatabase("""
+            CREATE TABLE t(rowid TEXT, v TEXT);
+            INSERT INTO t VALUES ('z', 'first'), ('a', 'second');
+            """);
+
+        var page = await db.Operations().PreviewRowsAsync(db.Secret(), "t", 50);
+
+        page.Sql.Should().Be("SELECT * FROM \"t\" ORDER BY _rowid_ DESC LIMIT 50");
+        page.Rows.Select(r => r[1].Display).Should().Equal("second", "first");
+    }
+
+    [Fact]
+    public async Task Preview_has_no_order_by_when_every_rowid_alias_is_shadowed()
+    {
+        using var db = new TempDatabase("""
+            CREATE TABLE t(rowid INT, _rowid_ INT, oid INT);
+            INSERT INTO t VALUES (1, 2, 3);
+            """);
+
+        var page = await db.Operations().PreviewRowsAsync(db.Secret(), "t", 50);
+
+        page.Sql.Should().NotContain("ORDER BY").And.Be("SELECT * FROM \"t\" LIMIT 50");
+        page.Rows.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Preview_orders_composite_primary_key_without_rowid_tables_by_every_key_column()
+    {
+        using var db = new TempDatabase("""
+            CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+            INSERT INTO t VALUES (1, 1, 'x'), (2, 1, 'y'), (1, 2, 'z'), (2, 2, 'w');
+            """);
+
+        var page = await db.Operations().PreviewRowsAsync(db.Secret(), "t", 50);
+
+        page.Sql.Should().Be("SELECT * FROM \"t\" ORDER BY \"a\" DESC, \"b\" DESC LIMIT 50");
+        page.Rows.Select(r => r[2].Display).Should().Equal("w", "y", "z", "x");
+    }
+
+    [Fact]
+    public async Task Negative_limits_mean_zero_rows_not_unlimited()
+    {
+        var page = await _db.Operations().PreviewRowsAsync(_db.Secret(), "events", -1);
+        var samples = await _db.Operations().SampleColumnsAsync(_db.Secret(), "events", -1);
+
+        page.Rows.Should().BeEmpty();
+        samples.Should().OnlyContain(s => s.SampledRows == 0);
+    }
+
     public void Dispose() => _db.Dispose();
 }

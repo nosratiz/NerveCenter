@@ -20,6 +20,9 @@ public sealed record RowPage(string Sql, IReadOnlyList<string> Columns, IReadOnl
 /// <summary>
 /// Aggregates over the first N rows of a table, per column (design spec §6 "Notes column").
 /// EpochMsCount = INTEGER values inside 2000-01-01..2100-01-01 as unix milliseconds.
+/// JsonCount = TEXT values whose first non-whitespace character is '{' or '[' and that pass
+/// json_valid; bare JSON scalars (123, true) are valid JSON but deliberately not counted, since
+/// the note is about JSON documents.
 /// </summary>
 public sealed record ColumnSample(
     string Column, int SampledRows, int NonNullCount, int DistinctCount, int TextCount, int JsonCount, int IntegerCount, int EpochMsCount)

@@ -60,4 +60,12 @@ public class ColumnNoteBuilderTests
 
         notes["ts"].Should().BeEmpty();
     }
+
+    [Fact]
+    public void A_mixed_column_gets_no_unix_ms_hint_even_when_its_integers_are_in_range()
+    {
+        var notes = ColumnNoteBuilder.Build(Events(), [new ColumnSample("ts", 10, 10, 10, 3, 0, 7, 7)]);
+
+        notes["ts"].Should().NotContain(ColumnNoteBuilder.UnixMsNote);
+    }
 }
