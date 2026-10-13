@@ -72,6 +72,20 @@ public class IntegrityTests
     }
 
     [Fact]
+    public async Task A_secret_lookup_failure_is_a_friendly_failed_result_without_an_audit_row()
+    {
+        _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>())
+            .Returns<Task<string?>>(_ => throw new System.Security.Cryptography.CryptographicException("The payload was invalid."));
+
+        var result = await Handler().HandleAsync(Command);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNullOrWhiteSpace();
+        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
+        await _operations.DidNotReceiveWithAnyArgs().RunIntegrityCheckAsync(default!, default);
+    }
+
+    [Fact]
     public async Task An_unknown_connection_fails_without_an_audit_row()
     {
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns((string?)null);

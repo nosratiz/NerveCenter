@@ -47,6 +47,20 @@ public class ExportTableCsvCommandHandlerTests
     }
 
     [Fact]
+    public async Task A_secret_lookup_failure_is_a_friendly_failed_result_without_an_audit_row()
+    {
+        _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>())
+            .Returns<Task<string?>>(_ => throw new System.Security.Cryptography.CryptographicException("The payload was invalid."));
+
+        var result = await Handler().HandleAsync(new ExportTableCsvCommand(_connectionId, "sqlite-reports", "events"));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNullOrWhiteSpace();
+        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
+        await _operations.DidNotReceiveWithAnyArgs().ExportCsvAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
     public async Task A_byte_capped_export_says_so_in_the_audit_detail()
     {
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns(Secret);

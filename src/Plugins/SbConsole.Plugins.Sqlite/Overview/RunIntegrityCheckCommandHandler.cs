@@ -23,10 +23,10 @@ public sealed class RunIntegrityCheckCommandHandler(
 
     public async Task<PluginResult<IntegrityResult>> HandleAsync(RunIntegrityCheckCommand cmd, CancellationToken ct = default)
     {
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        var (secret, secretError) = await HandlerRunner.TryResolveSecretAsync(connections, logger, cmd.ConnectionId, $"{Action} on {cmd.ConnectionName}", ct);
         if (secret is null)
         {
-            return PluginResult<IntegrityResult>.Fail(HandlerRunner.ConnectionNotFound);
+            return PluginResult<IntegrityResult>.Fail(secretError!);
         }
 
         var ranAt = clock.GetUtcNow();

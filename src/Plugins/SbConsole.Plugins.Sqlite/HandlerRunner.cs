@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SbConsole.Plugins.Sqlite.Client;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Sqlite;
@@ -30,6 +31,28 @@ internal static class HandlerRunner
         {
             logger.LogError(ex, "SQLite query failed: {Description}", description);
             return PluginResult<T>.Fail(ex);
+        }
+    }
+
+    /// <summary>
+    /// Resolves a connection's secret for the command handlers, which need it outside their try (the
+    /// audit row is written only for work that actually ran). A lookup failure -- typically a
+    /// decryption error after SBC_DATA_KEY rotated -- is logged and returned as a friendly error so it
+    /// never escapes and kills the Blazor circuit. Neither "not found" nor a lookup failure is
+    /// audited: nothing ran.
+    /// </summary>
+    public static async Task<(string? Secret, string? Error)> TryResolveSecretAsync(
+        IConnectionProvider connections, ILogger logger, Guid connectionId, string description, CancellationToken ct)
+    {
+        try
+        {
+            var secret = await connections.GetSecretAsync(connectionId, ct);
+            return secret is null ? (null, ConnectionNotFound) : (secret, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogError(ex, "SQLite secret lookup failed: {Description}", description);
+            return (null, FriendlySqliteError.From(ex));
         }
     }
 

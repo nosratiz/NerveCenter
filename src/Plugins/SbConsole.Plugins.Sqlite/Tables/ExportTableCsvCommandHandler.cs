@@ -15,10 +15,10 @@ public sealed class ExportTableCsvCommandHandler(
     public async Task<PluginResult<CsvExport>> HandleAsync(ExportTableCsvCommand cmd, CancellationToken ct = default)
     {
         var target = $"{cmd.ConnectionName}/{cmd.Table}";
-        var secret = await connections.GetSecretAsync(cmd.ConnectionId, ct);
+        var (secret, secretError) = await HandlerRunner.TryResolveSecretAsync(connections, logger, cmd.ConnectionId, $"{Action} on {target}", ct);
         if (secret is null)
         {
-            return PluginResult<CsvExport>.Fail(HandlerRunner.ConnectionNotFound);
+            return PluginResult<CsvExport>.Fail(secretError!);
         }
 
         CsvExport export;
