@@ -608,3 +608,82 @@ mockup's retention DELETE has rows to dry-run), a `reports` / `report_runs` pair
 Per-table growth attribution, page-cache hit %, holder-process hints, loading extensions,
 creating database files from the UI (other than backups / recovered copies), temporary host
 connections for backups, cross-backup comparison.
+
+## 12. Query IntelliSense (2026-10-13)
+
+Requested after phases 2/3: completion while typing in the Query editor.
+
+- **No editor library.** The repo has no JS build pipeline, and Monaco/CodeMirror would mean
+  vendoring large prebuilt bundles. The existing `<textarea>` stays; a small popup is added.
+- **Completion logic is C#, server-side** — `SqlCompletionEngine` (pure, no I/O) in `Query/`,
+  unit-tested with xUnit like the rest of the plugin. JS only renders the popup, positions it at
+  the caret (mirror-div technique), and handles keys. One circuit round trip per request is fine
+  for a team-hosted console; requests are debounced (~120 ms) and stale responses dropped.
+- **Schema source** — `GetCompletionSchemaQueryHandler` (query, not audited): one read-only
+  attach-limited call per connection (or per `?backup=` file) returning tables and views with
+  their columns (name, declared type, pk), from `sqlite_schema` + `pragma_table_xinfo`; capped at
+  500 objects × 200 columns. Loaded when the Query page selects a connection, refreshed after a
+  committed write that ran DDL, cached on the page only.
+- **Engine input/output** — `(text, caret, schema)` → `{ ReplaceFrom, ReplaceTo, Items[] }` where
+  each item has `Label`, `InsertText`, `Kind` (keyword, function, table, view, column, alias),
+  `Detail` (e.g. column type and table, function signature). Context rules, evaluated on the
+  current statement only (split with the same quote/comment awareness as `SqliteScript`):
+  - inside a string literal or comment → nothing;
+  - after `<qualifier>.` → columns of the table/view the qualifier names, resolving aliases from
+    the statement's `FROM`/`JOIN`/`UPDATE`/`INTO` clauses (`FROM events e` → `e.` lists `events`
+    columns), case-insensitive;
+  - after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE`, `ON` (DDL `INDEX … ON`) → tables and views;
+  - otherwise → columns of the tables referenced in the statement, then keywords, functions,
+    tables/views.
+  - Matching on the identifier prefix before the caret: case-insensitive prefix matches first,
+    then substring matches; max 50 items; keywords inserted upper-case; identifiers that need it
+    are inserted quoted with `SqliteSql.QuoteIdentifier` rules.
+  - Keyword list: SQLite's keyword set; functions: core, aggregate, window, date/time and JSON
+    (`json_extract`, `->`, `->>` are not functions — skip operators).
+- **Keys** — typing an identifier character, `.` or Ctrl+Space opens it; ↑/↓ move; Enter or Tab
+  accept; Esc closes; clicking an item accepts. While the popup is open, plain Enter accepts the
+  item, but Ctrl/⌘+Enter still runs the query (it closes the popup first). Accepting replaces
+  `ReplaceFrom..ReplaceTo`, moves the caret after the insert and dispatches an `input` event so
+  Blazor's `@oninput` sees the new text. Popup themed only via `--mud-palette-*` tokens, ARIA
+  `listbox`/`option` roles with `aria-activedescendant`.
+- Works in read-only, write and `?backup=` modes alike.
+
+## 13. New database (2026-10-13)
+
+Reverses the §10/§11.10 non-goal "creating database files from the UI", on request, behind the
+same fail-closed path policy.
+
+- **SDK additions** (both default-implemented so existing implementers/substitutes keep compiling):
+  - `IHostPathPolicy.AllowedRoots` (`IReadOnlyList<string>`, default `[]`) — the configured roots,
+    so the plugin can offer them in a dropdown. Core's `HostPathPolicy` returns
+    `BootstrapOptions.SqliteRoots`.
+  - `IConnectionCreator.CreateAsync(name, kind, secret, tags, ct)` → `ConnectionCreateResult`
+    (`Created(Guid Id)` / `Conflict` / `Invalid(string Error)`), implemented in Core by delegating
+    to the existing `CreateConnectionCommandHandler` (encrypted secret, plugin summary, audit row
+    `connection.create`). A plugin uses it only for its own `ConnectionKind` (documented on the
+    interface; Core validates the kind exists).
+- **UI** — "+ New database…" in the SQLite connection picker menu on every SQLite page, and on the
+  no-connections empty state. Inline dialog (`NewDatabaseDialog`): folder (dropdown of
+  `AllowedRoots`, plus an optional sub-folder that must already exist), file name (`.db` appended
+  if no `.db`/`.sqlite`/`.sqlite3` extension; no separators, `..`, or leading dot), journal mode
+  (WAL default, DELETE), template (Empty · Starter schema · My SQL script with an editor), the
+  connection name (defaults to `sqlite-<base>`), Default mode (Read-write default), tags, and
+  backups directory (optional; offered as `<folder>/backups` when that directory exists).
+  Disabled with an explanation when no roots are configured.
+- **`CreateDatabaseCommandHandler`** (Mutating, audited `sqlite.database.create`, detail: path ·
+  template · journal):
+  1. Validate inputs; the folder must be one of `AllowedRoots` (string match on the configured
+     value, then `IHostPathPolicy.Check` on the full path); the file must not exist (also no
+     `-wal`/`-journal` siblings); the connection name must not be taken
+     (`IConnectionProvider.ListAsync`) — all before touching disk.
+  2. Create the file: `SqliteOpenMode.ReadWriteCreate` on the policy-resolved path — the only
+     user-initiated file creation besides backups and recovered copies. Set `journal_mode`.
+  3. Template, in one transaction on an attach-limited connection: Starter schema (users,
+     projects, tasks with FKs incl. one CASCADE, an index, a view, a dozen rows, `ANALYZE`); My
+     SQL script (validated by `SqliteScript.Parse` — same refusals as the Query page); Empty →
+     nothing. Any failure → delete the file and its siblings and return the friendly error.
+  4. `IConnectionCreator.CreateAsync` with the `SqliteConnectionSettings.ToSecretString()`
+     secret; on Conflict/Invalid delete the file too.
+  5. Return the new connection id; the page navigates to `/p/sqlite/overview?connectionId=…`.
+  On prod-tagged new connections nothing extra is confirmed — nothing existing is touched.
+- No file is ever overwritten; no directory is ever created.
