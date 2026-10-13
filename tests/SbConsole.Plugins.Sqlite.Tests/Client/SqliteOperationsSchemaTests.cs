@@ -103,5 +103,13 @@ public sealed class SqliteOperationsSchemaTests : IDisposable
         detail.Columns.Should().ContainSingle().Which.Name.Should().Be("x");
     }
 
+    [Fact]
+    public async Task Listing_reports_the_main_file_size_for_the_empty_state()
+    {
+        var listing = await _db.Operations().ListSchemaAsync(_db.Secret());
+
+        listing.FileBytes.Should().Be(new FileInfo(_db.Path).Length);
+    }
+
     public void Dispose() => _db.Dispose();
 }

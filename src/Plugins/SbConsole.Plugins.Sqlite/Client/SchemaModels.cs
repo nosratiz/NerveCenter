@@ -22,8 +22,11 @@ public sealed record TableSizes(bool SizesAvailable, int TableCount, int IndexCo
 
 public sealed record SchemaObject(string Name, SchemaObjectType Type, string TableName, long? EstimatedRows, long? Bytes);
 
-/// <summary>Tables page left list (mockup 1b). Estimates come from sqlite_stat1, sizes from dbstat when present.</summary>
-public sealed record SchemaListing(IReadOnlyList<SchemaObject> Objects, bool SizesAvailable)
+/// <summary>
+/// Tables page left list (mockup 1b). Estimates come from sqlite_stat1, sizes from dbstat when
+/// present. FileBytes is the main file's size, for the empty state (1g); null when not read.
+/// </summary>
+public sealed record SchemaListing(IReadOnlyList<SchemaObject> Objects, bool SizesAvailable, long? FileBytes = null)
 {
     public IEnumerable<SchemaObject> Tables => Objects.Where(o => o.Type == SchemaObjectType.Table);
 

@@ -17,7 +17,7 @@ public sealed partial class SqliteOperations
                     o.Type == SchemaObjectType.Table ? Lookup(rows, o.Name) : null,
                     sizes is null ? null : Lookup(sizes, o.Name)))
                 .ToList();
-            return new SchemaListing(objects, sizes is not null);
+            return new SchemaListing(objects, sizes is not null, new FileInfo(c.DataSource).Length);
         }, ct);
 
     public Task<TableDetail> GetTableDetailAsync(string secret, string name, CancellationToken ct = default) =>

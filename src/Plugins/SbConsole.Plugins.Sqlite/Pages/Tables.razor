@@ -1,7 +1,11 @@
-@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Tables.razor -- mockup 1b, design spec §6. Read-only:
-   Rename / Drop / Create table / "Open in Query" arrive with phase 2's write mode. *@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Tables.razor -- mockups 1b / 1f / 1g, design spec §6 and
+   §11.5. Browsing is read-only; Create / Rename / Drop are enabled only for a read-write connection
+   (Summary Mode, which the operations re-check from the secret) and go through inline dialogs. Prod
+   connections confirm Rename and Drop with the typed-name dialog; IsProd comes from the picker's
+   server-side ConnectionInfo. *@
 @page "/p/sqlite/tables"
 @using System.Globalization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.WebUtilities
 @using SbConsole.Plugins.Sqlite.Client
 @using SbConsole.Plugins.Sqlite.Tables
@@ -11,6 +15,12 @@
 @inject PreviewRowsQueryHandler PreviewRows
 @inject CountRowsQueryHandler CountRows
 @inject ExportTableCsvCommandHandler ExportCsv
+@inject CreateTableCommandHandler CreateTable
+@inject RenameTableCommandHandler RenameTable
+@inject GetDropImpactQueryHandler GetDropImpact
+@inject DropTableCommandHandler DropTable
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -22,7 +32,131 @@
         <Chips>
             <SqliteConnectionPicker Loading="_loading" SelectionChanged="OnSelectionChangedAsync" />
         </Chips>
+        <Actions>
+            @if (_listing is not null)
+            {
+                <span class="sql-btn-wrap sqlite-tables-create-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                    <button type="button" class="sql-btn sql-btn-primary sqlite-tables-create" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenCreate">+ Create table…</button>
+                </span>
+            }
+        </Actions>
     </SqlitePageHeader>
+
+    @if (_notice is not null)
+    {
+        <div class="sql-body sql-body-tight">
+            <div class="sql-notice sqlite-tables-notice" role="status">@_notice</div>
+        </div>
+    }
+
+    @if (_dialog != DdlDialog.None && _connection is { } dialogConnection)
+    {
+        <div class="sql-body sql-body-tight">
+            @switch (_dialog)
+            {
+                case DdlDialog.Create:
+                    <div class="sql-dialog sqlite-create-dialog" role="dialog" aria-label="Create table">
+                        <div class="sql-dialog-title">Create table</div>
+                        <div class="sql-footnote">
+                            Exactly one <span class="sql-mono">CREATE TABLE</span> statement. It runs inside a transaction and is audited
+                            (<span class="sql-mono">@CreateTableCommandHandler.Action</span>); anything else belongs on the Query page.
+                        </div>
+                        <textarea class="sql-editor sqlite-create-ddl" aria-label="CREATE TABLE statement" spellcheck="false"
+                                  value="@_createDdl" @oninput="e => _createDdl = e.Value?.ToString() ?? string.Empty"></textarea>
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-primary sqlite-create-submit" disabled="@(_ddlBusy || string.IsNullOrWhiteSpace(_createDdl))"
+                                    @onclick="CreateAsync">@(_ddlBusy ? "Creating…" : "Create table")</button>
+                        </div>
+                    </div>
+                    break;
+
+                case DdlDialog.Rename when _dialogTable is { } renaming:
+                    <div class="sql-dialog sqlite-rename-dialog" role="dialog" aria-label="Rename table">
+                        <div class="sql-dialog-title">Rename <span class="sql-mono">@renaming</span></div>
+                        <input class="sql-input sqlite-rename-name" aria-label="New name" maxlength="@SqliteOperations.MaxTableNameLength" spellcheck="false"
+                               value="@_renameTo" @oninput="e => _renameTo = e.Value?.ToString() ?? string.Empty" />
+                        <div class="sql-footnote">
+                            <span class="sql-mono">ALTER TABLE … RENAME TO …</span> — SQLite also updates the foreign keys, views and triggers that name it.
+                            @if (dialogConnection.IsProd)
+                            {
+                                <text> This is a <span class="sql-prod">prod</span> file: you'll be asked to type the table's name.</text>
+                            }
+                        </div>
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-primary sqlite-rename-submit" disabled="@(_ddlBusy || string.IsNullOrWhiteSpace(_renameTo))"
+                                    @onclick="RenameAsync">@(_ddlBusy ? "Renaming…" : "Rename")</button>
+                        </div>
+                    </div>
+                    break;
+
+                case DdlDialog.Drop when _dialogTable is { } dropping:
+                    <div class="sql-dialog sql-dialog-danger sqlite-drop-dialog" role="dialog" aria-label="Drop table">
+                        <div class="sql-dialog-title">Drop table</div>
+                        @if (_impact is { } impact)
+                        {
+                            <div class="sqlite-drop-summary">
+                                <span class="sql-mono">DROP TABLE @dropping</span> removes
+                                <strong class="sql-mono">@(impact.RowsApprox is { } rows ? $"{SqliteFormat.Approx(rows)} rows ≈" : "an unknown number of rows")</strong>
+                                and @IndexText(impact.IndexCount)@(dialogConnection.IsProd ? " on a prod-tagged file" : "").
+                            </div>
+                            @if (impact.References.Count > 0)
+                            {
+                                <div class="sql-footnote">Tables that reference it — this console's connections run with <span class="sql-mono">foreign_keys = ON</span>:</div>
+                                <ul class="sql-ref-list sqlite-drop-references">
+                                    @foreach (var reference in impact.References)
+                                    {
+                                        <li class="sqlite-drop-reference" data-table="@reference.Table">
+                                            <span class="sql-mono">@reference.Table (@string.Join(", ", reference.FromColumns))</span>
+                                            <span class="sql-muted">ON DELETE @reference.OnDelete</span> — @reference.Consequence
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                            else
+                            {
+                                <div class="sql-footnote sqlite-drop-no-references">No other table references it.</div>
+                            }
+                        }
+                        else if (_dialogError is null)
+                        {
+                            <div class="sql-footnote">Reading what the drop affects…</div>
+                        }
+                        <div class="sql-report-row"><span class="sql-report-label">Target</span><span class="sql-mono sqlite-drop-target">@dialogConnection.Name / @dropping</span></div>
+                        @if (_hasBackupDir)
+                        {
+                            <label class="sql-check sqlite-drop-backup">
+                                <input type="checkbox" class="sqlite-drop-backup-input" checked="@_backupFirst" @onchange="e => _backupFirst = e.Value is true" />
+                                <span>Take a backup first (<span class="sql-mono">VACUUM INTO</span> the backup directory; the drop is cancelled if it fails)</span>
+                            </label>
+                        }
+                        else
+                        {
+                            <div class="sql-footnote sqlite-drop-no-backups">Backups aren't enabled for this connection — set "Enable backups to" in Connections to take one first.</div>
+                        }
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-danger sqlite-drop-submit" disabled="@(_ddlBusy || _impact is null)"
+                                    @onclick="DropAsync">@(_ddlBusy ? (_backupFirst && _hasBackupDir ? "Backing up…" : "Dropping…") : $"Drop {dropping}…")</button>
+                        </div>
+                    </div>
+                    break;
+            }
+        </div>
+    }
 
     @if (_error is not null)
     {
@@ -41,7 +175,20 @@
         {
             <div class="sql-empty sqlite-tables-empty">
                 <div class="sql-empty-title">No tables in <span class="sql-mono">@FileName</span></div>
-                <div class="sql-muted">The file has no schema yet. Tables show up here once a migration or an application creates them.</div>
+                <div class="sql-muted sqlite-tables-empty-size">
+                    @(listing.FileBytes is { } bytes ? $"The file is {SqliteFormat.Bytes(bytes)}" : "The file has no schema yet") — SQLite creates pages on first write.
+                </div>
+                @if (CanWrite)
+                {
+                    <div class="sql-actions">
+                        <button type="button" class="sql-btn sqlite-tables-empty-create" disabled="@_ddlBusy" @onclick="OpenCreate">Create table…</button>
+                        <a class="sql-btn sqlite-tables-empty-script" href="@QueryHref(null)">Run script</a>
+                    </div>
+                }
+                else
+                {
+                    <div class="sql-footnote sqlite-tables-empty-readonly">Creating tables needs Default mode Read-write on the connection (Connections).</div>
+                }
             </div>
         }
         else
@@ -95,9 +242,19 @@
                             <span class="sql-overline">@(d.Type == SchemaObjectType.View ? "view" : "table")</span>
                             <span class="sql-detail-title sql-mono sqlite-table-name">@d.Name</span>
                             <span class="sql-spacer"></span>
+                            <a class="sql-btn sqlite-table-query" href="@QueryHref(TableQuerySql(d.Name))">Query</a>
                             <button type="button" class="sql-btn sqlite-table-export" disabled="@_exporting" @onclick="ExportAsync">
                                 @(_exporting ? "Exporting…" : "Export CSV")
                             </button>
+                            @if (d.Type == SchemaObjectType.Table)
+                            {
+                                <span class="sql-btn-wrap sqlite-table-rename-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                                    <button type="button" class="sql-btn sqlite-table-rename" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenRename">Rename</button>
+                                </span>
+                                <span class="sql-btn-wrap sqlite-table-drop-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                                    <button type="button" class="sql-btn sql-btn-danger sqlite-table-drop" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenDropAsync">Drop</button>
+                                </span>
+                            }
                         </div>
                         <div class="sql-detail-meta">
                             @d.Columns.Count columns · @d.Indexes.Count indexes
@@ -224,7 +381,10 @@
                                 }
                                 else
                                 {
-                                    <div class="sql-caption">Data preview · <span class="sql-mono sqlite-preview-sql">@preview.Sql</span></div>
+                                    <div class="sql-caption">
+                                        Data preview · <span class="sql-mono sqlite-preview-sql">@preview.Sql</span>
+                                        <a class="sql-link sqlite-preview-open-query" href="@QueryHref(preview.Sql)">Open in Query →</a>
+                                    </div>
                                     <div class="sql-grid-wrap">
                                         <table class="sql-table sql-grid sqlite-preview">
                                             <thead>
@@ -270,6 +430,10 @@
                     {
                         <div class="sql-footnote">Loading…</div>
                     }
+                    else
+                    {
+                        <div class="sql-footnote sqlite-table-none">Pick a table on the left.</div>
+                    }
                 </section>
             </div>
         }
@@ -286,7 +450,27 @@
         Data,
     }
 
+    private enum DdlDialog
+    {
+        None,
+        Create,
+        Rename,
+        Drop,
+    }
+
+    private const string ReadOnlyReason = "This connection is read-only — set Default mode to Read-write in Connections.";
+
+    internal const string CreateTemplate = """
+        CREATE TABLE new_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """;
+
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
     private readonly CancellationTokenSource _pageCts = new();
     private CancellationTokenSource _tableCts = new();
@@ -316,15 +500,55 @@
     private string? _exportMessage;
     private DetailTab _tab = DetailTab.Columns;
 
+    private bool _hasBackupDir;
+    private DdlDialog _dialog;
+    private string? _dialogTable;
+    private string? _dialogError;
+    private string _createDdl = CreateTemplate;
+    private string _renameTo = "";
+    private DropImpact? _impact;
+    private bool _backupFirst = true;
+    private bool _ddlBusy;
+    private string? _notice;
+
     private string FileName => _connection?.Summary.GetValueOrDefault("File") ?? "this file";
+
+    private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
 
     private async Task OnSelectionChangedAsync(ConnectionInfo connection)
     {
         _connection = connection;
-        await LoadListingAsync();
+        _dialog = DdlDialog.None;
+        _notice = null;
+        _hasBackupDir = await HasBackupDirAsync(connection);
+        if (ReferenceEquals(_connection, connection))
+        {
+            await LoadListingAsync();
+        }
     }
 
-    private async Task LoadListingAsync()
+    /// <summary>"Take a backup first" needs the secret's BackupDir; the backup itself re-checks everything.</summary>
+    private async Task<bool> HasBackupDirAsync(ConnectionInfo connection)
+    {
+        try
+        {
+            var secret = await Connections.GetSecretAsync(connection.Id, _pageCts.Token);
+            return secret is not null && SqliteConnectionSettings.Parse(secret).BackupDir is not null;
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false; // every handler reports an unparsable secret properly
+        }
+    }
+
+    private Task LoadListingAsync() => LoadListingAsync(QueryTable(), autoSelect: true);
+
+    /// <summary>Loads the schema and selects <paramref name="select"/> if it exists, else (with autoSelect) the first table or view.</summary>
+    private async Task LoadListingAsync(string? select, bool autoSelect)
     {
         if (_connection is not { } connection)
         {
@@ -369,13 +593,15 @@
         }
 
         _listing = result.Value!;
-        var requested = QueryTable();
-        var first = _listing.Objects.FirstOrDefault(o => o.Name == requested && o.Type is SchemaObjectType.Table or SchemaObjectType.View)
-            ?? _listing.Tables.FirstOrDefault()
-            ?? _listing.Views.FirstOrDefault();
+        var first = _listing.Objects.FirstOrDefault(o => o.Name == select && o.Type is SchemaObjectType.Table or SchemaObjectType.View)
+            ?? (autoSelect ? _listing.Tables.FirstOrDefault() ?? _listing.Views.FirstOrDefault() : null);
         if (first is not null)
         {
             await SelectAsync(first.Name);
+        }
+        else if (!autoSelect && QueryTable() is not null)
+        {
+            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("table", (string?)null), replace: true);
         }
     }
 
@@ -621,6 +847,208 @@
             }
         }
     }
+
+    // ---- DDL (spec §11.5) ----
+
+    private void OpenCreate()
+    {
+        if (!CanWrite)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Create, null);
+        _createDdl = CreateTemplate;
+    }
+
+    private void OpenRename()
+    {
+        if (!CanWrite || _detail is not { Type: SchemaObjectType.Table } detail)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Rename, detail.Name);
+        _renameTo = detail.Name;
+    }
+
+    private async Task OpenDropAsync()
+    {
+        if (!CanWrite || _connection is not { } connection || _detail is not { Type: SchemaObjectType.Table } detail)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Drop, detail.Name);
+        _backupFirst = _hasBackupDir;
+        var table = detail.Name;
+        try
+        {
+            var impact = await GetDropImpact.HandleAsync(connection.Id, table, _pageCts.Token);
+            if (_dialog != DdlDialog.Drop || _dialogTable != table || !ReferenceEquals(_connection, connection))
+            {
+                return;
+            }
+
+            if (impact.IsSuccess)
+            {
+                _impact = impact.Value;
+            }
+            else
+            {
+                _dialogError = impact.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void OpenDialog(DdlDialog dialog, string? table)
+    {
+        _dialog = dialog;
+        _dialogTable = table;
+        _dialogError = null;
+        _impact = null;
+        _notice = null;
+    }
+
+    private void CloseDialog()
+    {
+        if (_ddlBusy)
+        {
+            return;
+        }
+
+        _dialog = DdlDialog.None;
+        _dialogTable = null;
+        _dialogError = null;
+        _impact = null;
+    }
+
+    private async Task CreateAsync()
+    {
+        if (_dialog != DdlDialog.Create || _connection is not { } connection || string.IsNullOrWhiteSpace(_createDdl))
+        {
+            return;
+        }
+
+        var ddl = _createDdl;
+        var created = await RunDdlAsync(connection, () => CreateTable.HandleAsync(new CreateTableCommand(connection.Id, connection.Name, ddl), _pageCts.Token));
+        if (created is { IsSuccess: true, Value: { } name })
+        {
+            await FinishDdlAsync($"Created {name}.", name, autoSelect: true);
+        }
+    }
+
+    private async Task RenameAsync()
+    {
+        if (_dialog != DdlDialog.Rename || _connection is not { } connection || _dialogTable is not { } oldName || string.IsNullOrWhiteSpace(_renameTo))
+        {
+            return;
+        }
+
+        var newName = _renameTo.Trim();
+        // IsProd comes from the picker's server-side ConnectionInfo, never from the client.
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Rename table", oldName, true, ct: _pageCts.Token))
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_connection, connection) || _dialog != DdlDialog.Rename || _dialogTable != oldName)
+        {
+            return;
+        }
+
+        var renamed = await RunDdlAsync(connection, async () =>
+        {
+            var result = await RenameTable.HandleAsync(new RenameTableCommand(connection.Id, connection.Name, oldName, newName), _pageCts.Token);
+            return result.IsSuccess ? PluginResult<string>.Ok(newName) : PluginResult<string>.Fail(result.Error!);
+        });
+        if (renamed is { IsSuccess: true })
+        {
+            await FinishDdlAsync($"Renamed {oldName} to {newName}.", newName, autoSelect: true);
+        }
+    }
+
+    private async Task DropAsync()
+    {
+        if (_dialog != DdlDialog.Drop || _impact is null || _connection is not { } connection || _dialogTable is not { } table)
+        {
+            return;
+        }
+
+        var backupFirst = _backupFirst && _hasBackupDir;
+        if (!await Confirmation.ConfirmAsync("Drop table", table, connection.IsProd, ct: _pageCts.Token))
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_connection, connection) || _dialog != DdlDialog.Drop || _dialogTable != table)
+        {
+            return;
+        }
+
+        var actor = AuthState is null ? "admin" : (await AuthState).User.Identity?.Name ?? "admin";
+        var dropped = await RunDdlAsync(connection, async () =>
+        {
+            var result = await DropTable.HandleAsync(new DropTableCommand(connection.Id, connection.Name, table, backupFirst, actor), _pageCts.Token);
+            return result.IsSuccess ? PluginResult<string>.Ok(table) : PluginResult<string>.Fail(result.Error!);
+        });
+        if (dropped is { IsSuccess: true })
+        {
+            await FinishDdlAsync(backupFirst ? $"Backed up, then dropped {table}." : $"Dropped {table}.", null, autoSelect: false);
+        }
+    }
+
+    /// <summary>Runs one DDL command with the dialog busy; a failure stays in the dialog. Null when cancelled or superseded.</summary>
+    private async Task<PluginResult<string>?> RunDdlAsync(ConnectionInfo connection, Func<Task<PluginResult<string>>> run)
+    {
+        _ddlBusy = true;
+        _dialogError = null;
+        try
+        {
+            var result = await run();
+            if (!ReferenceEquals(_connection, connection))
+            {
+                return null;
+            }
+
+            if (!result.IsSuccess)
+            {
+                _dialogError = result.Error;
+            }
+
+            return result;
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally
+        {
+            _ddlBusy = false;
+        }
+    }
+
+    private async Task FinishDdlAsync(string notice, string? select, bool autoSelect)
+    {
+        _dialog = DdlDialog.None;
+        _dialogTable = null;
+        _impact = null;
+        await LoadListingAsync(select, autoSelect);
+        _notice = notice;
+    }
+
+    private string QueryHref(string? sql)
+    {
+        var href = $"{SqlitePlugin.QueryHref}?connectionId={_connection?.Id}";
+        return sql is null ? href : $"{href}&sql={Uri.EscapeDataString(sql)}";
+    }
+
+    private static string TableQuerySql(string table) => $"SELECT * FROM {SqliteSql.QuoteIdentifier(table)} LIMIT 100";
+
+    private static string IndexText(int count) => count == 1 ? "1 index" : $"{count} indexes";
 
     private void OnFilter(ChangeEventArgs e) => _filter = e.Value?.ToString() ?? "";
 

@@ -212,6 +212,27 @@
 .sql-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sql-report .sql-footnote { margin-top: 2px; }
 
+/* ---- Tables DDL and Overview repair (mockups 1b / 1f / 1g) ---- */
+.sql-btn-wrap { display: inline-flex; }
+.sql-btn-danger { color: var(--sql-danger); border-color: color-mix(in srgb, var(--sql-danger) 45%, transparent); }
+.sql-btn-danger:hover { background: color-mix(in srgb, var(--sql-danger) 10%, transparent); }
+.sql-dialog {
+    display: grid; gap: 10px; padding: 14px 16px; border-radius: 8px; max-width: 760px;
+    background: var(--mud-palette-surface); border: 1px solid var(--sql-line); border-top: 3px solid var(--sql-accent);
+}
+.sql-dialog-danger { border-top-color: var(--sql-danger); }
+.sql-dialog-title { font-size: 15px; font-weight: 500; }
+.sql-dialog-danger .sql-dialog-title { color: var(--sql-danger); }
+.sql-dialog .sql-editor { min-height: 140px; }
+.sql-input {
+    height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--sql-line); box-sizing: border-box;
+    background: var(--mud-palette-background); color: var(--mud-palette-text-primary); font-family: var(--sql-mono); font-size: 13px; max-width: 420px;
+}
+.sql-input:focus { outline: 2px solid color-mix(in srgb, var(--sql-accent) 50%, transparent); outline-offset: -1px; }
+.sql-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.sql-ref-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.sql-notice { color: var(--sql-ok); font-size: 13px; }
+
 @media (max-width: 900px) {
     .sql-ov-tiles, .sql-cards, .sql-split, .sql-query-editor-row { grid-template-columns: 1fr; }
     .sql-list { border-right: 0; border-bottom: 1px solid var(--sql-line); }

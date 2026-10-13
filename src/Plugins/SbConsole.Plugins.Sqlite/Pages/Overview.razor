@@ -1,4 +1,5 @@
-@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Overview.razor -- mockup 1a, design spec §5. *@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Overview.razor -- mockups 1a / 1g, design spec §5, §11.6
+   (REINDEX and Recover into new file on a failed integrity check, read-write connections only). *@
 @page "/p/sqlite/overview"
 @using System.Globalization
 @using SbConsole.Plugins.Sqlite.Client
@@ -7,6 +8,10 @@
 @inject GetTableSizesQueryHandler GetTableSizes
 @inject RunIntegrityCheckCommandHandler RunIntegrityCheck
 @inject GetLastIntegrityResultQueryHandler GetLastIntegrity
+@inject ReindexCommandHandler Reindex
+@inject RecoverCommandHandler Recover
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
 @inject TimeProvider Clock
 @implements IDisposable
 
@@ -125,10 +130,62 @@
             @if (_integrity is { IntegrityOk: false } failed && !_integrityRunning)
             {
                 <pre class="sql-error-list sqlite-overview-integrity-errors">@string.Join("\n", failed.Messages)</pre>
-                <div class="sql-footnote">
-                    Treat this file as suspect and copy it before changing anything. <span class="sql-mono">REINDEX</span> can fix
-                    index-only errors; page errors need <span class="sql-mono">.recover</span> — both arrive with write mode.
+                @if (CanWrite)
+                {
+                    <div class="sql-footnote sqlite-overview-repair-note">
+                        Treat this file as suspect and copy it before changing anything. <span class="sql-mono">REINDEX</span> can fix
+                        index-only errors and runs a fresh check; page errors need a salvage — <strong>Recover into new file</strong> copies
+                        every row it can still read into a new file in the backup directory and never changes this one.
+                    </div>
+                    <div class="sql-actions sqlite-overview-repair">
+                        <span class="sql-btn-wrap sqlite-overview-recover-wrap" title="@(_hasBackupDir ? null : SqliteOperations.BackupsNotEnabled)">
+                            <button type="button" class="sql-btn sqlite-overview-recover" disabled="@(!_hasBackupDir || Repairing)" @onclick="RecoverAsync">
+                                @(_recovering ? "Recovering…" : "Recover into new file")
+                            </button>
+                        </span>
+                        <button type="button" class="sql-btn sqlite-overview-reindex" disabled="@Repairing" @onclick="ReindexAsync">
+                            @(_reindexing ? "Reindexing…" : "REINDEX")
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="sql-footnote sqlite-overview-repair-readonly">
+                        Treat this file as suspect and copy it before changing anything. <span class="sql-mono">REINDEX</span> can fix
+                        index-only errors; page errors need <strong>Recover into new file</strong>. Both need Default mode Read-write on
+                        the connection (Connections).
+                    </div>
+                }
+            }
+
+            @if (_reindexNotice is not null)
+            {
+                <div class="sql-footnote sqlite-overview-reindex-result" role="status">@_reindexNotice</div>
+            }
+
+            @if (_recovered is { } recovered)
+            {
+                <div class="sql-report @(recovered.Failures.Count == 0 ? "sql-report-ok" : "sql-report-warn") sqlite-overview-recover-result" role="status">
+                    <div class="sql-overline">Recovered into new file</div>
+                    <div class="sql-report-row"><span class="sql-report-label">File</span><span class="sql-mono sqlite-overview-recover-file">@recovered.FileName</span></div>
+                    <div class="sql-report-row sqlite-overview-recover-counts">
+                        <span class="sql-report-label">Copied</span>
+                        <span>@recovered.TablesCopied tables · @SqliteFormat.Count(recovered.RowsCopied) rows@(recovered.RowsSkipped > 0 ? $" · {SqliteFormat.Count(recovered.RowsSkipped)} rows skipped" : "") · @recovered.OtherObjectsCopied indexes, views and triggers</span>
+                    </div>
+                    @foreach (var failure in recovered.Failures)
+                    {
+                        <div class="sql-report-row sqlite-overview-recover-failure">
+                            <span class="sql-report-label">Failed @failure.Type</span>
+                            <span><span class="sql-mono">@failure.Name</span> — @failure.Reason</span>
+                        </div>
+                    }
+                    <div class="sql-footnote">The live file was only read. Check the copy, then swap it in yourself (or restore it from Backups).</div>
                 </div>
+            }
+
+            @if (_repairError is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-overview-repair-error">@_repairError</MudAlert>
             }
 
             @if (_integrityError is not null)
@@ -228,6 +285,16 @@
     private Guid? _dataConnectionId;
     private int _loadGeneration;
     private int _integrityGeneration;
+    private bool _hasBackupDir;
+    private bool _reindexing;
+    private bool _recovering;
+    private string? _reindexNotice;
+    private SalvageOutcome? _recovered;
+    private string? _repairError;
+
+    private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private bool Repairing => _reindexing || _recovering || _integrityRunning;
 
     private string? IntegrityStripClass => _integrity switch
     {
@@ -240,7 +307,132 @@
     private async Task OnSelectionChangedAsync(ConnectionInfo connection)
     {
         _connection = connection;
-        await LoadAsync();
+        ResetRepair();
+        _hasBackupDir = await HasBackupDirAsync(connection);
+        if (ReferenceEquals(_connection, connection))
+        {
+            await LoadAsync();
+        }
+    }
+
+    /// <summary>Recover writes into the secret's BackupDir; the operation re-checks it through the path policy.</summary>
+    private async Task<bool> HasBackupDirAsync(ConnectionInfo connection)
+    {
+        try
+        {
+            var secret = await Connections.GetSecretAsync(connection.Id, _cts.Token);
+            return secret is not null && SqliteConnectionSettings.Parse(secret).BackupDir is not null;
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private void ResetRepair()
+    {
+        _reindexing = false;
+        _recovering = false;
+        _reindexNotice = null;
+        _recovered = null;
+        _repairError = null;
+    }
+
+    private async Task ReindexAsync()
+    {
+        if (!CanWrite || Repairing || _connection is not { } connection)
+        {
+            return;
+        }
+
+        // IsProd comes from the picker's server-side ConnectionInfo, never from the client.
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Reindex", connection.Name, true, ct: _cts.Token))
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_connection, connection))
+        {
+            return;
+        }
+
+        _reindexing = true;
+        _reindexNotice = null;
+        _repairError = null;
+        try
+        {
+            var result = await Reindex.HandleAsync(new ReindexCommand(connection.Id, connection.Name), _cts.Token);
+            if (!ReferenceEquals(_connection, connection))
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _integrity = result.Value;
+                _integrityGeneration++; // a check started earlier must not overwrite this fresher result
+                _reindexNotice = result.Value!.IntegrityOk
+                    ? "REINDEX finished — the fresh integrity check is ok."
+                    : $"REINDEX finished — {ErrorCount(result.Value)} remain, so they aren't index-only. Recover into new file salvages what can be read.";
+            }
+            else
+            {
+                _repairError = result.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_connection, connection))
+            {
+                _reindexing = false;
+            }
+        }
+    }
+
+    private async Task RecoverAsync()
+    {
+        if (!CanWrite || !_hasBackupDir || Repairing || _connection is not { } connection)
+        {
+            return;
+        }
+
+        _recovering = true;
+        _recovered = null;
+        _repairError = null;
+        try
+        {
+            var result = await Recover.HandleAsync(new RecoverCommand(connection.Id, connection.Name), _cts.Token);
+            if (!ReferenceEquals(_connection, connection))
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _recovered = result.Value;
+            }
+            else
+            {
+                _repairError = result.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_connection, connection))
+            {
+                _recovering = false;
+            }
+        }
     }
 
     private async Task LoadAsync()
