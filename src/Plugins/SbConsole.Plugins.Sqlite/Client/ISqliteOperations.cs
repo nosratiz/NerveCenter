@@ -13,4 +13,6 @@ public interface ISqliteOperations
     Task<SqliteOverview> GetOverviewAsync(string secret, CancellationToken ct = default);
 
     Task<TableSizes> GetTableSizesAsync(string secret, CancellationToken ct = default);
+
+    Task<IntegrityCheckOutcome> RunIntegrityCheckAsync(string secret, CancellationToken ct = default);
 }
