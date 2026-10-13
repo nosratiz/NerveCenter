@@ -149,4 +149,49 @@ public class SqliteConnectionFieldsTests : BunitContext, IAsyncLifetime
 
         SqliteConnectionSettings.Parse(emitted.Last()).Mode.Should().Be(SqliteAccessMode.ReadWrite);
     }
+
+    [Fact]
+    public void The_backup_directory_field_hydrates_and_explains_itself()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db", BackupDir: "/data/backups").ToSecretString(), out _);
+
+        cut.Find(".sqlite-conn-backupdir input").GetAttribute("value").Should().Be("/data/backups");
+        cut.Find(".sqlite-conn-backupdir").TextContent.Should().Contain("Enable backups to");
+        cut.Find(".sqlite-conn-backupdir").TextContent.Should()
+            .Contain("Directory inside the SbConsole container, under SBC_SQLITE_ROOTS; leave empty to disable backups");
+    }
+
+    [Fact]
+    public void Editing_the_backup_directory_emits_it_and_clearing_it_removes_it()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db").ToSecretString(), out var emitted);
+
+        cut.Find(".sqlite-conn-backupdir input").Input("/data/backups");
+        SqliteConnectionSettings.Parse(emitted.Last()).BackupDir.Should().Be("/data/backups");
+
+        cut.Find(".sqlite-conn-backupdir input").Input("");
+        SqliteConnectionSettings.Parse(emitted.Last()).BackupDir.Should().BeNull();
+        emitted.Last().Should().NotContain("BackupDir");
+    }
+
+    [Fact]
+    public void A_backup_directory_with_a_semicolon_is_flagged_and_not_emitted()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db").ToSecretString(), out var emitted);
+
+        cut.Find(".sqlite-conn-backupdir input").Input("/data/a;b");
+
+        emitted.Should().BeEmpty();
+        cut.Find(".sqlite-conn-backupdir .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("can't contain ';'");
+    }
+
+    [Fact]
+    public void Editing_another_field_keeps_the_backup_directory()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db", BackupDir: "/data/backups").ToSecretString(), out var emitted);
+
+        cut.Find(".sqlite-conn-busy input").Input("2500");
+
+        SqliteConnectionSettings.Parse(emitted.Last()).BackupDir.Should().Be("/data/backups");
+    }
 }

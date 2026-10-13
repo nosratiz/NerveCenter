@@ -1,10 +1,15 @@
 @* src/Plugins/SbConsole.Plugins.Sqlite/Client/SqliteConnectionFields.razor -- mockup 1f's connection
-   form: no host, port or credentials, just a file path and a mode (design spec §4.1). *@
+   form: no host, port or credentials, just a file path, a mode (design spec §4.1) and an optional
+   backup directory (§11.7). *@
 @using MudBlazor
 
 <MudTextField T="string" Class="sqlite-conn-path" Label="File path" Value="_path" ValueChanged="OnPathChanged" Immediate="true"
               Error="@(PathError is not null)" ErrorText="@PathError"
               HelperText="Path is resolved inside the SbConsole container — mount the volume there." />
+
+<MudTextField T="string" Class="mt-3 sqlite-conn-backupdir" Label="Enable backups to" Value="_backupDir" ValueChanged="OnBackupDirChanged" Immediate="true"
+              Error="@(BackupDirError is not null)" ErrorText="@BackupDirError"
+              HelperText="Directory inside the SbConsole container, under SBC_SQLITE_ROOTS; leave empty to disable backups" />
 
 <MudRadioGroup T="SqliteAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
     <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadOnly" Class="sqlite-conn-mode-readonly">Read-only</MudRadio>
@@ -25,6 +30,7 @@
     [Parameter] public bool IsProd { get; set; }
 
     private string _path = "";
+    private string _backupDir = "";
     private SqliteAccessMode _mode = SqliteAccessMode.ReadOnly;
     private int _busyTimeoutMs = SqliteConnectionSettings.DefaultBusyTimeoutMs;
     private int _statementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS;
@@ -37,6 +43,8 @@
         : string.IsNullOrWhiteSpace(_path) ? "A file path is required."
         : _path.Contains(';') ? "The path can't contain ';'."
         : null;
+    // Optional: empty is valid (backups disabled), so only the separator is an error.
+    private string? BackupDirError => _backupDir.Contains(';') ? "The directory can't contain ';'." : null;
     private string? BusyError => _busyTouched && _busyTimeoutMs <= 0 ? "Must be at least 1 ms." : null;
     private string? StatementError => _statementTouched && _statementTimeoutS <= 0 ? "Must be at least 1 s." : null;
 
@@ -57,6 +65,7 @@
             _mode = settings.Mode;
             _busyTimeoutMs = settings.BusyTimeoutMs;
             _statementTimeoutS = settings.StatementTimeoutS;
+            _backupDir = settings.BackupDir ?? "";
         }
         catch (FormatException)
         {
@@ -68,6 +77,12 @@
     {
         _pathTouched = true;
         _path = value ?? "";
+        return RaiseChangedAsync();
+    }
+
+    private Task OnBackupDirChanged(string? value)
+    {
+        _backupDir = value ?? "";
         return RaiseChangedAsync();
     }
 
@@ -99,7 +114,8 @@
         string secret;
         try
         {
-            secret = new SqliteConnectionSettings(_path.Trim(), _mode, _busyTimeoutMs, _statementTimeoutS).ToSecretString();
+            secret = new SqliteConnectionSettings(_path.Trim(), _mode, _busyTimeoutMs, _statementTimeoutS,
+                string.IsNullOrWhiteSpace(_backupDir) ? null : _backupDir.Trim()).ToSecretString();
         }
         catch (ArgumentException)
         {

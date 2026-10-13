@@ -13,13 +13,15 @@ public enum SqliteAccessMode
 /// The saved secret, house key=value; convention (design spec §4.1):
 /// "Path=/data/reports.db;Mode=ReadOnly;BusyTimeoutMs=5000;StatementTimeoutS=30". Nothing in it is
 /// credential-shaped, but it is stored through the normal encrypted secret path anyway. Mode is
-/// stored so phase 2 (write mode) needs no migration; phase 1 always opens read-only.
+/// stored so phase 2 (write mode) needs no migration; phase 1 always opens read-only. BackupDir
+/// (design spec §11.7) is optional and only written when set: null = backups disabled.
 /// </summary>
 public sealed record SqliteConnectionSettings(
     string Path,
     SqliteAccessMode Mode = SqliteAccessMode.ReadOnly,
     int BusyTimeoutMs = SqliteConnectionSettings.DefaultBusyTimeoutMs,
-    int StatementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS)
+    int StatementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS,
+    string? BackupDir = null)
 {
     public const int DefaultBusyTimeoutMs = 5000;
     public const int DefaultStatementTimeoutS = 30;
@@ -58,7 +60,8 @@ public sealed record SqliteConnectionSettings(
             path,
             mode,
             PositiveInt(values, "BusyTimeoutMs", DefaultBusyTimeoutMs),
-            PositiveInt(values, "StatementTimeoutS", DefaultStatementTimeoutS));
+            PositiveInt(values, "StatementTimeoutS", DefaultStatementTimeoutS),
+            values.TryGetValue("BackupDir", out var backupDir) && backupDir.Length > 0 ? backupDir : null);
     }
 
     public string ToSecretString()
@@ -78,8 +81,14 @@ public sealed record SqliteConnectionSettings(
             throw new ArgumentException("Timeouts must be positive.");
         }
 
-        return string.Create(CultureInfo.InvariantCulture,
+        if (BackupDir is not null && BackupDir.Contains(';'))
+        {
+            throw new ArgumentException("BackupDir can't contain ';'.", nameof(BackupDir));
+        }
+
+        var secret = string.Create(CultureInfo.InvariantCulture,
             $"Path={Path};Mode={Mode};BusyTimeoutMs={BusyTimeoutMs};StatementTimeoutS={StatementTimeoutS}");
+        return string.IsNullOrWhiteSpace(BackupDir) ? secret : $"{secret};BackupDir={BackupDir.Trim()}";
     }
 
     private static int PositiveInt(Dictionary<string, string> values, string key, int fallback)
