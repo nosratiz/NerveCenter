@@ -231,6 +231,10 @@ public class TablesDdlPageTests : SqlitePageTestBase
             second => second.Should().Contain("audit_marks (event_id)").And.Contain("the drop fails if any rows reference it"));
         cut.Find(".sqlite-drop-target").TextContent.Should().Be("sqlite-reports / events");
         cut.Find(".sqlite-drop-backup-input").HasAttribute("checked").Should().BeTrue();
+        // A <label> wrapping the input: clicking the text toggles the box in the browser.
+        var label = cut.Find("label.sqlite-drop-backup");
+        label.QuerySelector("input[type=checkbox].sqlite-drop-backup-input").Should().NotBeNull();
+        label.TextContent.Should().Contain("Take a backup first");
     }
 
     [Fact]

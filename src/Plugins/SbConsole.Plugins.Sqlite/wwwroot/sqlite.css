@@ -233,6 +233,9 @@
 }
 .sql-input:focus { outline: 2px solid color-mix(in srgb, var(--sql-accent) 50%, transparent); outline-offset: -1px; }
 .sql-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+/* The native box takes the accent when checked (both themes); the label text dims while unchecked, so the state reads at a glance. */
+.sql-check input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--mud-palette-primary); }
+.sql-check:has(input[type="checkbox"]:not(:checked)) { color: var(--mud-palette-text-secondary); }
 .sql-ref-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .sql-notice { color: var(--sql-ok); font-size: 13px; }
 
