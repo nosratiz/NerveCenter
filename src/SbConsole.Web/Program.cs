@@ -67,6 +67,10 @@ builder.Services.AddHostedService<MetricsCollectorService>();
 
 var app = builder.Build();
 
+// Plugins are constructed with new() (AddSbConsolePlugin), so any that need a host service in their
+// instance hooks resolve it here -- see IPlugin.Initialize.
+app.Services.GetRequiredService<PluginRegistry>().InitializeAll(app.Services);
+
 using (var scope = app.Services.CreateScope())
 {
     var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<SbcDbContext>>();
