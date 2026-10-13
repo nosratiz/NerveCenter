@@ -6,8 +6,14 @@ public sealed class InMemoryPluginStore : IPluginStore
 {
     public Dictionary<string, string> Values { get; } = new(StringComparer.Ordinal);
 
-    public Task<string?> GetAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(Values.TryGetValue(key, out var value) ? value : null);
+    /// <summary>Number of reads so far; lets a test observe that a handler's continuation has run.</summary>
+    public int GetCount { get; private set; }
+
+    public Task<string?> GetAsync(string key, CancellationToken ct = default)
+    {
+        GetCount++;
+        return Task.FromResult(Values.TryGetValue(key, out var value) ? value : null);
+    }
 
     public Task SetAsync(string key, string value, CancellationToken ct = default)
     {

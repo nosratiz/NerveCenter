@@ -38,8 +38,8 @@
     @if (_error is not null)
     {
         <div class="sql-body">
-            <div class="sql-banner sql-banner-danger sqlite-overview-error" role="alert">
-                <span>@_error</span>
+            <div class="sql-banner sql-banner-danger sqlite-overview-error">
+                <span class="sqlite-overview-error-text" role="alert">@_error</span>
                 <span class="sql-spacer"></span>
                 <a class="sql-link" href="/connections">Connection settings</a>
                 <button type="button" class="sql-btn sqlite-overview-retry" @onclick="LoadAsync">Retry</button>
@@ -95,24 +95,24 @@
 
         <div class="sql-body">
             @* Integrity is a status strip, not a tile: it is either ok or the only thing that matters (mockup 1a note). *@
-            <div class="sql-strip sqlite-overview-integrity @IntegrityStripClass" role="status">
+            <div class="sql-strip sqlite-overview-integrity @IntegrityStripClass">
                 <span class="sql-mono">PRAGMA integrity_check</span>
                 <span class="sql-muted">→</span>
                 @if (_integrityRunning)
                 {
-                    <span class="sql-muted sqlite-overview-integrity-status">running…</span>
+                    <span class="sql-muted sqlite-overview-integrity-status" role="status">running…</span>
                 }
                 else if (_integrity is null)
                 {
-                    <span class="sql-muted sqlite-overview-integrity-status">never run</span>
+                    <span class="sql-muted sqlite-overview-integrity-status" role="status">never run</span>
                 }
                 else if (_integrity.IntegrityOk)
                 {
-                    <span class="sql-ok sqlite-overview-integrity-status">ok</span>
+                    <span class="sql-ok sqlite-overview-integrity-status" role="status">ok</span>
                 }
                 else
                 {
-                    <span class="sql-danger sqlite-overview-integrity-status">@ErrorCount(_integrity)</span>
+                    <span class="sql-danger sqlite-overview-integrity-status" role="status">@ErrorCount(_integrity)</span>
                 }
                 @if (_integrity is { } last && !_integrityRunning)
                 {

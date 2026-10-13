@@ -149,7 +149,8 @@ public class OverviewPageTests : SqlitePageTestBase
         var cut = RenderPage();
 
         cut.WaitForAssertion(() => cut.Find(".sqlite-overview-integrity-status").TextContent.Should().Be("never run"));
-        cut.Find(".sqlite-overview-integrity").GetAttribute("role").Should().Be("status");
+        cut.Find(".sqlite-overview-integrity-status").GetAttribute("role").Should().Be("status");
+        cut.Find(".sqlite-overview-integrity").HasAttribute("role").Should().BeFalse();
     }
 
     [Fact]
@@ -210,7 +211,8 @@ public class OverviewPageTests : SqlitePageTestBase
 
         cut.WaitForAssertion(() => cut.Find(".sqlite-overview-error").TextContent.Should()
             .Contain("File not found, or not readable by the SbConsole container user."));
-        cut.Find(".sqlite-overview-error").GetAttribute("role").Should().Be("alert");
+        cut.Find(".sqlite-overview-error-text").GetAttribute("role").Should().Be("alert");
+        cut.Find(".sqlite-overview-error").HasAttribute("role").Should().BeFalse();
 
         Operations.GetOverviewAsync(Secret, Arg.Any<CancellationToken>()).Returns(Sample());
         cut.Find(".sqlite-overview-retry").Click();
@@ -263,7 +265,10 @@ public class OverviewPageTests : SqlitePageTestBase
         cut.WaitForElement(".sqlite-overview-refresh");
 
         await SelectSecondAsync(cut);
+        var readsBefore = Store.GetCount;
         pendingA.SetResult(Sample());
+        // A's continuation reads the stored integrity result right before the stale-response guard; wait for that read.
+        cut.WaitForAssertion(() => Store.GetCount.Should().BeGreaterThan(readsBefore));
         await cut.InvokeAsync(() => { });
 
         cut.FindAll(".sqlite-overview-file").Should().BeEmpty();
