@@ -34,13 +34,7 @@ public sealed class ExportTableCsvCommandHandler(
             return PluginResult<CsvExport>.Fail(friendly);
         }
 
-        var detail = $"{SqliteFormat.Count(export.RowCount)} rows"
-            + (export.Truncated
-                ? export.RowCount >= CsvExport.MaxRows
-                    ? $" (truncated at {SqliteFormat.Count(CsvExport.MaxRows)} rows)"
-                    : $" (truncated at {SqliteFormat.Bytes(CsvExport.MaxBytes)})"
-                : "");
-        await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Safe, succeeded: true, detail);
+        await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Safe, succeeded: true, export.Summary);
         return PluginResult<CsvExport>.Ok(export);
     }
 }

@@ -8,4 +8,12 @@ public sealed record CsvExport(string FileName, byte[] Content, int RowCount, bo
 {
     public const int MaxRows = 100_000;
     public const long MaxBytes = 50L * 1024 * 1024;
+
+    /// <summary>"1,234 rows", plus which cap truncated it -- the footer and the audit detail.</summary>
+    public string Summary => $"{SqliteFormat.Count(RowCount)} rows"
+        + (Truncated
+            ? RowCount >= MaxRows
+                ? $" (truncated at {SqliteFormat.Count(MaxRows)} rows)"
+                : $" (truncated at {SqliteFormat.Bytes(MaxBytes)})"
+            : "");
 }
