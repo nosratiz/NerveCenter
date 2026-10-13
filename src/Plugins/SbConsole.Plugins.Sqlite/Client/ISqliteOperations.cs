@@ -15,4 +15,8 @@ public interface ISqliteOperations
     Task<TableSizes> GetTableSizesAsync(string secret, CancellationToken ct = default);
 
     Task<IntegrityCheckOutcome> RunIntegrityCheckAsync(string secret, CancellationToken ct = default);
+
+    Task<SchemaListing> ListSchemaAsync(string secret, CancellationToken ct = default);
+
+    Task<TableDetail> GetTableDetailAsync(string secret, string name, CancellationToken ct = default);
 }
