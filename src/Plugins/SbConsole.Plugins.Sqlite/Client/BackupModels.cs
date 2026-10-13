@@ -48,9 +48,16 @@ public sealed record BackupFileStream(string FileName, Stream Content, long Leng
 
 /// <summary>
 /// A restore that ran (spec §11.7): the live file's previous content is kept as PreRestoreFileName
-/// next to it; IntegrityOk / Messages are the live file's integrity_check right after the copy.
+/// next to it; IntegrityOk / Messages / ForeignKeyViolations are the live file's integrity_check and
+/// foreign_key_check right after the copy, which took CheckDuration of the whole Duration.
 /// </summary>
-public sealed record RestoreOutcome(string PreRestoreFileName, bool IntegrityOk, IReadOnlyList<string> Messages, TimeSpan Duration);
+public sealed record RestoreOutcome(
+    string PreRestoreFileName,
+    bool IntegrityOk,
+    IReadOnlyList<string> Messages,
+    int ForeignKeyViolations,
+    TimeSpan CheckDuration,
+    TimeSpan Duration);
 
 /// <summary>The volume holding the live file (DriveInfo), for "~N days at this rate" (spec §11.8).</summary>
 public sealed record VolumeInfo(long TotalBytes, long AvailableBytes);

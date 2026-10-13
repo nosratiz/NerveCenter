@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SbConsole.Plugins.Sqlite.Client;
+using SbConsole.Plugins.Sqlite.Overview;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Sqlite.Backups;
@@ -11,7 +12,8 @@ public sealed record RestoreBackupCommand(Guid ConnectionId, string ConnectionNa
 /// Restore… (design spec §11.7). Destructive, audited "sqlite.backup.restore"; the page confirms
 /// first (typed on prod, IsProd from the server-side ConnectionInfo). Needs Mode=ReadWrite -- the
 /// operations re-read it from the decrypted secret. Verify → pre-restore copy → online backup →
-/// integrity check of the live file.
+/// integrity + foreign key check of the live file, stored as the connection's last integrity result
+/// so the Overview strip describes the restored file, not the one it replaced.
 /// </summary>
 public sealed class RestoreBackupCommandHandler(
     ISqliteOperations operations,
@@ -53,6 +55,18 @@ public sealed class RestoreBackupCommandHandler(
             var friendly = FriendlySqliteError.From(ex);
             await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, cmd.ConnectionName, ActionRisk.Destructive, succeeded: false, $"{record.FileName} · {friendly}");
             return PluginResult<RestoreOutcome>.Fail(friendly);
+        }
+
+        var checkResult = new IntegrityResult(outcome.IntegrityOk, outcome.Messages, outcome.ForeignKeyViolations,
+            clock.GetUtcNow() - outcome.CheckDuration, outcome.CheckDuration);
+        try
+        {
+            await IntegrityResultStore.WriteAsync(store, cmd.ConnectionId, checkResult, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // The restore itself happened; losing the cached check only means a stale strip on the Overview.
+            logger.LogError(ex, "Storing the post-restore integrity result for {Target} failed.", cmd.ConnectionName);
         }
 
         var integrity = outcome.IntegrityOk ? "integrity ok" : $"integrity: {outcome.Messages.Count} {(outcome.Messages.Count == 1 ? "problem" : "problems")}";

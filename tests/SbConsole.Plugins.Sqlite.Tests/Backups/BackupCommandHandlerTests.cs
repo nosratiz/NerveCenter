@@ -5,6 +5,7 @@ using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using SbConsole.Plugins.Sqlite.Backups;
 using SbConsole.Plugins.Sqlite.Client;
+using SbConsole.Plugins.Sqlite.Overview;
 using SbConsole.Sdk;
 using static SbConsole.Plugins.Sqlite.Tests.Backups.BackupTestData;
 
@@ -389,13 +390,41 @@ public class BackupCommandHandlerTests
     {
         var record = await Stored(Ok(Now.AddDays(-1), fileName: FileName));
         _operations.RestoreBackupAsync(Secret, FileName, Now, Arg.Any<CancellationToken>())
-            .Returns(new RestoreOutcome("reports.db.pre-restore-20261013-020000", true, ["ok"], TimeSpan.FromSeconds(12)));
+            .Returns(new RestoreOutcome("reports.db.pre-restore-20261013-020000", true, ["ok"], 0, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(12)));
 
         var result = await Restore().HandleAsync(new RestoreBackupCommand(_connectionId, Target, record.Id));
 
         result.Value!.PreRestoreFileName.Should().Be("reports.db.pre-restore-20261013-020000");
         await _audit.Received(1).RecordAsync("sqlite.backup.restore", Target, ActionRisk.Destructive, true,
             $"{FileName} · previous file kept as reports.db.pre-restore-20261013-020000 · integrity ok · 12 s", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_restore_stores_the_restored_files_integrity_for_the_overview()
+    {
+        var record = await Stored(Ok(Now.AddDays(-1), fileName: FileName));
+        await IntegrityResultStore.WriteAsync(_store, _connectionId, new IntegrityResult(false, ["page 7 corrupt"], 0, Now.AddDays(-3), TimeSpan.FromSeconds(1)));
+        _operations.RestoreBackupAsync(Secret, FileName, Now, Arg.Any<CancellationToken>())
+            .Returns(new RestoreOutcome("reports.db.pre-restore-20261013-020000", true, ["ok"], 3, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(12)));
+
+        await Restore().HandleAsync(new RestoreBackupCommand(_connectionId, Target, record.Id));
+
+        (await IntegrityResultStore.ReadAsync(_store, _connectionId)).Should().BeEquivalentTo(
+            new IntegrityResult(true, ["ok"], 3, Now.AddSeconds(-2), TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_failed_restore_leaves_the_stored_integrity_result_alone()
+    {
+        var record = await Stored(Ok(Now.AddDays(-1), fileName: FileName));
+        var previous = new IntegrityResult(true, ["ok"], 0, Now.AddDays(-3), TimeSpan.FromSeconds(1));
+        await IntegrityResultStore.WriteAsync(_store, _connectionId, previous);
+        _operations.RestoreBackupAsync(Secret, FileName, Now, Arg.Any<CancellationToken>())
+            .Returns<Task<RestoreOutcome>>(_ => throw new SqliteBackupException("The backup failed its integrity check — nothing was restored."));
+
+        await Restore().HandleAsync(new RestoreBackupCommand(_connectionId, Target, record.Id));
+
+        (await IntegrityResultStore.ReadAsync(_store, _connectionId)).Should().BeEquivalentTo(previous);
     }
 
     [Fact]

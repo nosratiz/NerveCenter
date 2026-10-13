@@ -103,15 +103,16 @@ public sealed partial class SqliteOperations
             var preName = FreeName(liveDir, $"{Path.GetFileName(live)}.pre-restore-{Stamp(nowUtc)}", "");
             VacuumInto(secret, ResolveInside(liveDir, preName), ct);
 
-            var after = Run(secret, new SqliteOpenOptions(Writable: true, Timeout: SqliteOpenOptions.BackupTimeout), c =>
+            var (after, checkDuration) = Run(secret, new SqliteOpenOptions(Writable: true, Timeout: SqliteOpenOptions.BackupTimeout), c =>
             {
                 using var source = Open(backupPath, settings, SqliteOpenOptions.Plugin);
                 source.BackupDatabase(c);
-                return IntegrityMessages(c);
+                var checkStarted = Stopwatch.GetTimestamp();
+                return (ReadIntegrity(c), Stopwatch.GetElapsedTime(checkStarted));
             }, ct);
 
             _logger.LogInformation("Restored {Backup} over {Live}; previous content kept as {PreRestore}.", backupPath, live, preName);
-            return new RestoreOutcome(preName, IsOk(after), after, Stopwatch.GetElapsedTime(started));
+            return new RestoreOutcome(preName, after.IntegrityOk, after.Messages, after.ForeignKeyViolations, checkDuration, Stopwatch.GetElapsedTime(started));
         }, ct);
 
     public Task<VolumeInfo?> GetVolumeAsync(string secret, CancellationToken ct = default) =>

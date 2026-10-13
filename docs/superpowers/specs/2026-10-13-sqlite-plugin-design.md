@@ -571,7 +571,9 @@ copied, tables failed. The live file is never modified. Prod → typed confirm f
   name, isProd)`. Steps: verify the backup (abort unless ok) → `VACUUM INTO` the pre-restore copy
   next to the live file (policy-checked) → online backup API from the backup (read-only) into the
   live file (read-write connection, busy timeout applies; writers are blocked for the copy, other
-  connections see the new content, WAL handled by SQLite) → integrity check of the live file.
+  connections see the new content, WAL handled by SQLite) → integrity + foreign key check of the
+  live file, stored as the connection's last integrity result (the Overview strip then describes
+  the restored file, not the one it replaced).
 - **Failure banner**: when the newest record failed, show its error; if the failure is
   `SQLITE_FULL` (13, "disk is full") and prune would remove files, offer **Prune N and retry**.
   `FriendlySqliteError` maps 13 to "The disk or volume is full."

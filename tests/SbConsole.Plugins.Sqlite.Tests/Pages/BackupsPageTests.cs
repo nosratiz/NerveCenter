@@ -318,7 +318,7 @@ public class BackupsPageTests : SqlitePageTestBase
     {
         await Arrange();
         Operations.RestoreBackupAsync(_secret, _nightly.FileName!, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
-            .Returns(new RestoreOutcome("reports.db.pre-restore-20261013-094051", true, ["ok"], TimeSpan.FromSeconds(134)));
+            .Returns(new RestoreOutcome("reports.db.pre-restore-20261013-094051", true, ["ok"], 0, TimeSpan.FromSeconds(9), TimeSpan.FromSeconds(134)));
         var cut = RenderPage();
         Select(cut, _nightly);
         cut.Find(".sqlite-backup-restore").Click();

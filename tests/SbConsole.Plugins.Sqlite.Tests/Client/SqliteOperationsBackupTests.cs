@@ -272,12 +272,32 @@ public sealed class SqliteOperationsBackupTests : IDisposable
         outcome.PreRestoreFileName.Should().Be("reports.db.pre-restore-20261013-093000");
         outcome.IntegrityOk.Should().BeTrue();
         outcome.Messages.Should().Equal("ok");
+        outcome.ForeignKeyViolations.Should().Be(0);
+        outcome.CheckDuration.Should().BeGreaterThanOrEqualTo(TimeSpan.Zero);
         SqliteConnection.ClearAllPools();
         Count(_db.Path, "SELECT COUNT(*) FROM events WHERE name IN ('a', 'b', 'c')").Should().Be(3);
         Count(_db.Path, "SELECT COUNT(*) FROM events WHERE name = 'later'").Should().Be(0);
         var preRestore = Path.Combine(_db.Directory, outcome.PreRestoreFileName);
         Count(preRestore, "SELECT COUNT(*) FROM events WHERE name = 'later'").Should().Be(1);
         Count(preRestore, "SELECT COUNT(*) FROM events WHERE name = 'a'").Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Restore_counts_foreign_key_violations_in_the_restored_file()
+    {
+        _db.Execute("""
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id));
+            INSERT INTO child VALUES (1, 7), (2, 8);
+            """);
+        var operations = _db.Operations();
+        var created = await operations.CreateBackupAsync(BackupSecret(), TakenAt);
+
+        var outcome = await operations.RestoreBackupAsync(BackupSecret(SqliteAccessMode.ReadWrite), created.FileName, TakenAt);
+
+        outcome.IntegrityOk.Should().BeTrue();
+        outcome.ForeignKeyViolations.Should().Be(2);
     }
 
     [Fact]
