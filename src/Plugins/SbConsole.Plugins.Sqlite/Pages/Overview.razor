@@ -1,0 +1,359 @@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Overview.razor -- mockup 1a, design spec §5. *@
+@page "/p/sqlite/overview"
+@using System.Globalization
+@using SbConsole.Plugins.Sqlite.Client
+@using SbConsole.Plugins.Sqlite.Overview
+@inject GetOverviewQueryHandler GetOverview
+@inject GetTableSizesQueryHandler GetTableSizes
+@inject RunIntegrityCheckCommandHandler RunIntegrityCheck
+@inject GetLastIntegrityResultQueryHandler GetLastIntegrity
+@inject TimeProvider Clock
+@implements IDisposable
+
+<PageTitle>SQLite overview</PageTitle>
+
+<div class="sql-page">
+    <SqlitePageHeader Title="Overview">
+        <Chips>
+            <SqliteConnectionPicker Loading="_loading" SelectionChanged="OnSelectionChangedAsync" />
+        </Chips>
+        <Meta>
+            @if (_overview is { } meta)
+            {
+                <span class="sqlite-overview-meta">@meta.Path · @meta.SqliteVersion · @meta.JournalMode</span>
+            }
+        </Meta>
+        <Actions>
+            @if (_loadedAt is { } at)
+            {
+                <span class="sql-meta sqlite-overview-loaded">PRAGMA @at.ToString("HH:mm:ss", Inv) UTC</span>
+            }
+            @if (_connection is not null)
+            {
+                <button type="button" class="sql-btn sqlite-overview-refresh" disabled="@_loading" @onclick="LoadAsync">Refresh</button>
+            }
+        </Actions>
+    </SqlitePageHeader>
+
+    @if (_error is not null)
+    {
+        <div class="sql-body">
+            <div class="sql-banner sql-banner-danger sqlite-overview-error">
+                <span>@_error</span>
+                <span class="sql-spacer"></span>
+                <a class="sql-link" href="/connections">Connection settings</a>
+                <button type="button" class="sql-btn sqlite-overview-retry" @onclick="LoadAsync">Retry</button>
+            </div>
+        </div>
+    }
+    else if (_overview is { } o)
+    {
+        <div class="sql-tiles sql-ov-tiles">
+            <SqliteStatTile Label="File" Class="sqlite-overview-file" ValueClass="sqlite-overview-file-size"
+                            Aside="@($"page {SqliteFormat.Bytes(o.PageSize)} · {SqliteFormat.Count(o.PageCount)} pages")">
+                <Value>
+                    @SqliteFormat.Bytes(o.FileBytes)
+                    @if (o.WalBytes is { } wal)
+                    {
+                        <small class="sql-muted sqlite-overview-wal">+ @SqliteFormat.Bytes(wal) -wal</small>
+                    }
+                </Value>
+                <ChildContent>
+                    @* Free pages are drawn inside the file bar, so the size reads as "reclaimable vs. real" (mockup 1a note). *@
+                    <div class="sql-bar" title="free pages, drawn inside the file">
+                        <span style="width: @Pct(100 - o.FreePercent)%"></span>
+                        <i style="width: @Pct(o.FreePercent)%"></i>
+                    </div>
+                </ChildContent>
+                <Caption>
+                    <span class="sqlite-overview-free">
+                        @if (o.FreelistCount > 0)
+                        {
+                            <text>@o.FreePercent.ToString("0", Inv)% free pages (@SqliteFormat.Bytes(o.FreeBytes)) — <span class="sql-mono">VACUUM</span> would reclaim them</text>
+                        }
+                        else
+                        {
+                            <text>no free pages</text>
+                        }
+                    </span>
+                    · last modified @o.LastModified.ToString("yyyy-MM-dd HH:mm:ss", Inv) UTC
+                </Caption>
+            </SqliteStatTile>
+
+            <SqliteStatTile Label="Journal" Class="sqlite-overview-journal" ValueClass="sqlite-overview-journal-mode">
+                <Value>@o.JournalMode</Value>
+                <Caption>
+                    synchronous <span class="sql-mono">@o.Synchronous</span>@(o.JournalMode == "WAL" ? $" · checkpoint every {SqliteFormat.Count(o.WalAutoCheckpoint)} pages" : "") · per-connection
+                </Caption>
+            </SqliteStatTile>
+
+            <SqliteStatTile Label="Page cache" Class="sqlite-overview-cache" ValueClass="sqlite-overview-cache-pages">
+                <Value>@SqliteFormat.Count(o.CachePages) p</Value>
+                <Caption>@SqliteFormat.Bytes(o.CacheBytes) · per-connection default</Caption>
+            </SqliteStatTile>
+        </div>
+
+        <div class="sql-body">
+            @* Integrity is a status strip, not a tile: it is either ok or the only thing that matters (mockup 1a note). *@
+            <div class="sql-strip sqlite-overview-integrity @IntegrityStripClass">
+                <span class="sql-mono">PRAGMA integrity_check</span>
+                <span class="sql-muted">→</span>
+                @if (_integrityRunning)
+                {
+                    <span class="sql-muted sqlite-overview-integrity-status">running…</span>
+                }
+                else if (_integrity is null)
+                {
+                    <span class="sql-muted sqlite-overview-integrity-status">never run</span>
+                }
+                else if (_integrity.IntegrityOk)
+                {
+                    <span class="sql-ok sqlite-overview-integrity-status">ok</span>
+                }
+                else
+                {
+                    <span class="sql-danger sqlite-overview-integrity-status">@ErrorCount(_integrity)</span>
+                }
+                @if (_integrity is { } last && !_integrityRunning)
+                {
+                    <span class="sql-muted sqlite-overview-integrity-meta">· started @last.RanAt.ToString("yyyy-MM-dd HH:mm", Inv) UTC, took @SqliteFormat.Duration(last.Duration) · foreign_key_check @last.ForeignKeyViolations violations</span>
+                }
+                <span class="sql-spacer"></span>
+                <button type="button" class="sql-btn sqlite-overview-run-integrity" disabled="@_integrityRunning" @onclick="RunIntegrityAsync">Run now</button>
+            </div>
+
+            @if (_integrity is { IntegrityOk: false } failed && !_integrityRunning)
+            {
+                <pre class="sql-error-list sqlite-overview-integrity-errors">@string.Join("\n", failed.Messages)</pre>
+                <div class="sql-footnote">
+                    Treat this file as suspect and copy it before changing anything. <span class="sql-mono">REINDEX</span> can fix
+                    index-only errors; page errors need <span class="sql-mono">.recover</span> — both arrive with write mode.
+                </div>
+            }
+
+            @if (_integrityError is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-overview-integrity-error">@_integrityError</MudAlert>
+            }
+
+            <div class="sql-cards">
+                <div class="sql-card sqlite-overview-sizes">
+                    <div class="sql-card-head">
+                        <span class="sql-card-title">@(_sizes is { SizesAvailable: false } ? "Largest tables" : "Size by table")</span>
+                        <span class="sql-spacer"></span>
+                        @if (_sizes is { } head)
+                        {
+                            <span class="sql-card-sub">@(head.SizesAvailable ? "dbstat" : "sqlite_stat1") · @head.TableCount tables, @head.IndexCount indexes</span>
+                        }
+                    </div>
+                    @if (_sizesError is not null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-overview-sizes-error">@_sizesError</MudAlert>
+                    }
+                    else if (_sizes is null)
+                    {
+                        <div class="sql-footnote">Reading sizes…</div>
+                    }
+                    else if (_sizes.Entries.Count == 0)
+                    {
+                        <div class="sql-footnote">No tables yet.</div>
+                    }
+                    else
+                    {
+                        var max = BarMax(_sizes);
+                        foreach (var entry in _sizes.Entries.Take(TopRows))
+                        {
+                            <div class="sql-size-row sqlite-overview-size-row">
+                                <span class="sql-mono sql-size-name">@entry.Name</span>
+                                <div class="sql-bar sql-bar-thin"><span style="width: @Pct(Share(_sizes, entry, max))%"></span></div>
+                                @if (_sizes.SizesAvailable)
+                                {
+                                    <span class="sql-num sql-size-bytes">@(entry.Bytes is { } bytes ? SqliteFormat.Bytes(bytes) : "—")</span>
+                                }
+                                <span class="sql-num sql-muted sql-size-rows">@RowsLabel(entry)</span>
+                            </div>
+                        }
+                        var rest = _sizes.Entries.Skip(TopRows).ToList();
+                        if (rest.Count > 0)
+                        {
+                            <div class="sql-size-row sql-muted sqlite-overview-size-more">
+                                <span class="sql-size-name">@rest.Count more</span>
+                                @if (_sizes.SizesAvailable)
+                                {
+                                    <span class="sql-num sql-size-bytes">@SqliteFormat.Bytes(rest.Sum(e => e.Bytes ?? 0))</span>
+                                }
+                            </div>
+                        }
+                        if (!_sizes.SizesAvailable)
+                        {
+                            <div class="sql-footnote sqlite-overview-no-dbstat">
+                                Sizes need <span class="sql-mono">dbstat</span>, which this SQLite build doesn't include — tables are ranked by
+                                <span class="sql-mono">sqlite_stat1</span> row estimates (≈). Run <span class="sql-mono">ANALYZE</span> to refresh them.
+                            </div>
+                        }
+                    }
+                </div>
+
+                <div class="sql-card sqlite-overview-settings">
+                    <div class="sql-card-head"><span class="sql-card-title">This console's connection</span></div>
+                    <dl class="sql-kv">
+                        <dt>busy_timeout</dt>
+                        <dd class="sql-mono sqlite-overview-busy">@SqliteFormat.Count(o.BusyTimeoutMs) ms</dd>
+                        <dt>foreign_keys</dt>
+                        <dd>per-connection · on for this console's connections</dd>
+                        <dt>mode</dt>
+                        <dd>read-only (<span class="sql-mono">mode=ro</span>)</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private const int TopRows = 4;
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    private readonly CancellationTokenSource _cts = new();
+    private ConnectionInfo? _connection;
+    private SqliteOverview? _overview;
+    private TableSizes? _sizes;
+    private string? _sizesError;
+    private IntegrityResult? _integrity;
+    private string? _integrityError;
+    private bool _integrityRunning;
+    private string? _error;
+    private bool _loading;
+    private DateTimeOffset? _loadedAt;
+
+    private string? IntegrityStripClass => _integrity switch
+    {
+        null => null,
+        { IntegrityOk: true } => "sql-strip-ok",
+        _ => "sql-strip-danger",
+    };
+
+    private async Task OnSelectionChangedAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        _sizes = null;
+        _sizesError = null;
+        _integrityError = null;
+        try
+        {
+            var overview = await GetOverview.HandleAsync(connection.Id, _cts.Token);
+            var integrity = await GetLastIntegrity.HandleAsync(connection.Id, _cts.Token);
+            if (!ReferenceEquals(connection, _connection))
+            {
+                return;
+            }
+
+            _integrity = integrity;
+            if (!overview.IsSuccess)
+            {
+                _overview = null;
+                _loadedAt = null;
+                _error = overview.Error;
+                return;
+            }
+
+            _overview = overview.Value;
+            _loadedAt = Clock.GetUtcNow();
+            _loading = false;
+            StateHasChanged();
+
+            // Sizes load separately so the tiles never wait on them (spec §5).
+            var sizes = await GetTableSizes.HandleAsync(connection.Id, _cts.Token);
+            if (!ReferenceEquals(connection, _connection))
+            {
+                return;
+            }
+
+            if (sizes.IsSuccess)
+            {
+                _sizes = sizes.Value;
+            }
+            else
+            {
+                _sizesError = sizes.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            // Page disposed mid-load.
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task RunIntegrityAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        _integrityRunning = true;
+        _integrityError = null;
+        try
+        {
+            var result = await RunIntegrityCheck.HandleAsync(new RunIntegrityCheckCommand(connection.Id, connection.Name), _cts.Token);
+            if (!ReferenceEquals(connection, _connection))
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _integrity = result.Value;
+            }
+            else
+            {
+                _integrityError = result.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            // Page disposed mid-check.
+        }
+        finally
+        {
+            _integrityRunning = false;
+        }
+    }
+
+    private static string ErrorCount(IntegrityResult result) =>
+        result.Messages.Count == 1 ? "1 error" : $"{result.Messages.Count} errors";
+
+    private static string Pct(double value) => Math.Clamp(value, 0, 100).ToString("0.#", Inv);
+
+    private static double BarMax(TableSizes sizes) =>
+        Math.Max(1, sizes.Entries.Max(e => (double)(sizes.SizesAvailable ? e.Bytes ?? 0 : e.EstimatedRows ?? 0)));
+
+    private static double Share(TableSizes sizes, TableSizeEntry entry, double max) =>
+        100.0 * (sizes.SizesAvailable ? entry.Bytes ?? 0 : entry.EstimatedRows ?? 0) / max;
+
+    private static string RowsLabel(TableSizeEntry entry) => entry.Type == SchemaObjectType.Index
+        ? "index"
+        : entry.EstimatedRows is { } rows ? $"{SqliteFormat.Approx(rows)} rows ≈" : "rows —";
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}
