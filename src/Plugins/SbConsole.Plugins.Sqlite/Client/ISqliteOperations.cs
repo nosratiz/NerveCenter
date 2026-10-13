@@ -25,4 +25,6 @@ public interface ISqliteOperations
     Task<RowPage> PreviewRowsAsync(string secret, string name, int limit, CancellationToken ct = default);
 
     Task<long> CountRowsAsync(string secret, string name, CancellationToken ct = default);
+
+    Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, CancellationToken ct = default);
 }
