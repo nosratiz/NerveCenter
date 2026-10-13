@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using SbConsole.Plugins.Sqlite.Client;
 using SbConsole.Plugins.Sqlite.Components;
 using SbConsole.Sdk;
 
@@ -147,5 +148,103 @@ public class SqliteConnectionPickerTests : SqlitePageTestBase
         var cut = Render<SqliteConnectionPicker>(p => p.Add(x => x.Loading, true));
 
         cut.FindAll(".sqlite-page-busy").Should().ContainSingle();
+    }
+
+    // ---- New database entry points (spec §13) ----
+
+    private readonly Guid _newId = Guid.NewGuid();
+
+    private void ArrangeCreation()
+    {
+        Operations.CreateDatabaseAsync(Arg.Any<NewDatabaseRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new NewDatabaseCreated("/sqlite/tasks.db", "/sqlite/tasks.db", "tasks.db", 3));
+        Creator.CreateAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                // From now on the provider lists the new connection too.
+                Connections.ListAsync("sqlite", Arg.Any<CancellationToken>()).Returns(
+                [
+                    new ConnectionInfo(ConnectionId, ConnectionName, "sqlite", ["prod"]),
+                    new ConnectionInfo(_newId, "sqlite-tasks", "sqlite", [], Summary: new Dictionary<string, string> { ["File"] = "tasks.db", ["Mode"] = "read-write" }),
+                ]);
+                return new ConnectionCreateResult.Created(_newId);
+            });
+    }
+
+    private static async Task CreateTasksAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        cut.Find(".sqlite-newdb-file").Input("tasks");
+        await cut.Find(".sqlite-newdb-submit").ClickAsync(new());
+        await SettleAsync(cut);
+    }
+
+    [Fact]
+    public async Task The_connection_menu_offers_New_database_which_opens_the_dialog()
+    {
+        var cut = RenderPickerWithPopovers([]);
+        cut.FindAll(".sqlite-newdb-dialog").Should().BeEmpty();
+
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        await SettleAsync(cut);
+        await cut.Find(".sqlite-new-database-option").ClickAsync(new());
+        await SettleAsync(cut);
+
+        cut.Find(".sqlite-newdb-dialog .sql-dialog-title").TextContent.Should().Be("New database");
+        await cut.Find(".sqlite-newdb-cancel").ClickAsync(new());
+        cut.FindAll(".sqlite-newdb-dialog").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task The_no_connections_state_offers_New_database()
+    {
+        Connections.ListAsync("sqlite", Arg.Any<CancellationToken>()).Returns(Array.Empty<ConnectionInfo>());
+        var cut = RenderPicker([]);
+
+        await cut.Find(".sqlite-new-database").ClickAsync(new());
+
+        cut.FindAll(".sqlite-newdb-dialog").Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Creating_from_the_Overview_page_lists_and_selects_the_new_connection_in_place()
+    {
+        ArrangeCreation();
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        navigation.NavigateTo($"/p/sqlite/overview?connectionId={ConnectionId}");
+        var published = new List<ConnectionInfo>();
+        var cut = RenderPickerWithPopovers(published);
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        await SettleAsync(cut);
+        await cut.Find(".sqlite-new-database-option").ClickAsync(new());
+        await SettleAsync(cut);
+
+        await CreateTasksAsync(cut);
+
+        published.Last().Id.Should().Be(_newId);
+        navigation.Uri.Should().EndWith($"/p/sqlite/overview?connectionId={_newId}");
+        cut.Find(".sqlite-selected-connection").TextContent.Should().Be("sqlite-tasks");
+        cut.FindAll(".sqlite-newdb-dialog").Should().BeEmpty();
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        await SettleAsync(cut);
+        cut.FindAll(".sqlite-connection-option").Select(o => o.TextContent).Should().Contain("sqlite-tasks");
+    }
+
+    [Fact]
+    public async Task Creating_from_another_page_opens_the_new_connections_Overview()
+    {
+        ArrangeCreation();
+        Connections.ListAsync("sqlite", Arg.Any<CancellationToken>()).Returns(Array.Empty<ConnectionInfo>());
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        navigation.NavigateTo("/p/sqlite/tables");
+        var cut = RenderWithPopovers(builder =>
+        {
+            builder.OpenComponent<SqliteConnectionPicker>(0);
+            builder.CloseComponent();
+        });
+        await cut.Find(".sqlite-new-database").ClickAsync(new());
+
+        await CreateTasksAsync(cut);
+
+        navigation.Uri.Should().EndWith($"/p/sqlite/overview?connectionId={_newId}");
     }
 }

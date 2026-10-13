@@ -43,8 +43,8 @@ public sealed class SqlitePlugin : IPlugin
 
     // Pages: Overview, Tables, Query, Backups (§11.9). Audited actions (§8, §11): integrity check,
     // table CSV export, query CSV export, write script, WAL checkpoint, backup create/verify/policy/
-    // prune/download/restore, table create/rename/drop, REINDEX, recover.
-    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 16);
+    // prune/download/restore, table create/rename/drop, REINDEX, recover, new database (§13).
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 17);
 
     internal static ConnectionTestResult NotInitialized => new(false, "SQLite plugin is not initialized.");
 

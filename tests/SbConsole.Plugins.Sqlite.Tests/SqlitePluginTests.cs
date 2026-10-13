@@ -26,12 +26,12 @@ public class SqlitePluginTests
     }
 
     [Fact]
-    public void Contribution_counts_four_pages_and_the_sixteen_audited_actions()
+    public void Contribution_counts_four_pages_and_the_seventeen_audited_actions()
     {
         var contribution = new SqlitePlugin().Contribution;
 
         contribution.PageCount.Should().Be(4);
-        contribution.ActionCount.Should().Be(16);
+        contribution.ActionCount.Should().Be(17);
     }
 
     [Fact]

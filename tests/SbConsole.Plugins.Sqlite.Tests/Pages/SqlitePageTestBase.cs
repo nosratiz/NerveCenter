@@ -7,6 +7,7 @@ using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Sqlite.Backups;
 using SbConsole.Plugins.Sqlite.Client;
+using SbConsole.Plugins.Sqlite.Databases;
 using SbConsole.Plugins.Sqlite.Overview;
 using SbConsole.Plugins.Sqlite.Query;
 using SbConsole.Plugins.Sqlite.Tables;
@@ -30,6 +31,9 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
     protected readonly InMemoryPluginStore Store = new();
     protected readonly FakeTimeProvider Time = new(new DateTimeOffset(2026, 10, 13, 9, 40, 51, TimeSpan.Zero));
     protected readonly Guid ConnectionId = Guid.NewGuid();
+    protected readonly IHostPathPolicy PathPolicy = Substitute.For<IHostPathPolicy>();
+    protected readonly IConnectionCreator Creator = Substitute.For<IConnectionCreator>();
+    protected const string SqliteRoot = "/sqlite";
 
     protected SqlitePageTestBase()
     {
@@ -80,6 +84,10 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new DownloadBackupCommandHandler(Operations, Connections, Audit, Store, NullLogger<DownloadBackupCommandHandler>.Instance));
         Services.AddSingleton(new RestoreBackupCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RestoreBackupCommandHandler>.Instance));
         Services.AddSingleton(new SaveBackupPolicyCommandHandler(Connections, Audit, Store, Time, NullLogger<SaveBackupPolicyCommandHandler>.Instance));
+        PathPolicy.AllowedRoots.Returns([SqliteRoot]);
+        Services.AddSingleton(PathPolicy);
+        Services.AddSingleton(new CreateDatabaseCommandHandler(Operations, Connections, Creator, Audit, NullLogger<CreateDatabaseCommandHandler>.Instance));
+        Services.AddSingleton(new FindBackupsDirQueryHandler(Operations, NullLogger<FindBackupsDirQueryHandler>.Instance));
         Services.AddSingleton(new ListSavedQueriesQueryHandler(Store));
         Services.AddSingleton(new SaveQueryCommandHandler(Store, Time, NullLogger<SaveQueryCommandHandler>.Instance));
         Services.AddSingleton(new DeleteSavedQueryCommandHandler(Store, NullLogger<DeleteSavedQueryCommandHandler>.Instance));

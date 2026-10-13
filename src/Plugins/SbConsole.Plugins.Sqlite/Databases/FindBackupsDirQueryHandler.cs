@@ -14,7 +14,8 @@ public sealed class FindBackupsDirQueryHandler(ISqliteOperations operations, ILo
     {
         try
         {
-            return await operations.FindBackupsDirAsync(folder, subFolder, ct);
+            var dir = await operations.FindBackupsDirAsync(folder, subFolder, ct);
+            return string.IsNullOrWhiteSpace(dir) ? null : dir;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {

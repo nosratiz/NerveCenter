@@ -1,4 +1,5 @@
 @using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Sqlite.Databases
 @inject IConnectionProvider Connections
 @inject NavigationManager Navigation
 
@@ -11,7 +12,8 @@
 }
 else if (_connections.Count == 0)
 {
-    <span class="sql-muted sqlite-no-connections">No SQLite connections yet — add one under Connections.</span>
+    <span class="sql-muted sqlite-no-connections">No SQLite connections yet — add one under Connections, or</span>
+    <button type="button" class="sql-btn sql-btn-primary sqlite-new-database" @onclick="OpenNewDatabase">+ New database…</button>
 }
 else
 {
@@ -31,6 +33,8 @@ else
             {
                 <MudMenuItem Class="sqlite-connection-option" OnClick="@(() => SelectAsync(connection))">@connection.Name</MudMenuItem>
             }
+            <MudDivider />
+            <MudMenuItem Class="sqlite-new-database-option" OnClick="OpenNewDatabase">+ New database…</MudMenuItem>
         </ChildContent>
     </MudMenu>
 
@@ -48,6 +52,11 @@ else
     }
 }
 
+@if (_newDatabaseOpen)
+{
+    <NewDatabaseDialog ExistingNames="@_connections.Select(c => c.Name).ToList()" Created="OnDatabaseCreatedAsync" Cancelled="CloseNewDatabase" />
+}
+
 @code {
     public const string Kind = "sqlite";
 
@@ -59,6 +68,7 @@ else
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private ConnectionInfo? _connection;
     private bool _loaded;
+    private bool _newDatabaseOpen;
 
     protected override async Task OnInitializedAsync()
     {
@@ -89,5 +99,28 @@ else
         }
 
         await SelectionChanged.InvokeAsync(connection);
+    }
+
+    private void OpenNewDatabase() => _newDatabaseOpen = true;
+
+    private void CloseNewDatabase() => _newDatabaseOpen = false;
+
+    /// <summary>
+    /// Spec §13 step 5: show the new file's Overview. The list is reloaded so the new connection is
+    /// listed; on the Overview page itself (same component instance, so no re-initialisation) it is
+    /// selected in place, anywhere else the Overview page opens with it in ?connectionId=.
+    /// </summary>
+    private async Task OnDatabaseCreatedAsync(DatabaseCreated created)
+    {
+        _newDatabaseOpen = false;
+        _connections = await Connections.ListAsync(Kind);
+        var onOverview = new Uri(Navigation.Uri).AbsolutePath.EndsWith(SqlitePlugin.OverviewHref, StringComparison.OrdinalIgnoreCase);
+        if (onOverview && _connections.FirstOrDefault(c => c.Id == created.ConnectionId) is { } connection)
+        {
+            await SelectAsync(connection);
+            return;
+        }
+
+        Navigation.NavigateTo($"{SqlitePlugin.OverviewHref}?connectionId={created.ConnectionId}");
     }
 }
