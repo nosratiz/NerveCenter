@@ -65,4 +65,19 @@ public class EfAuditScopeTests
         entry.Succeeded.Should().BeFalse();
         entry.Detail.Should().Be("confirmation mismatch");
     }
+
+    [Fact]
+    public async Task Falls_back_to_system_when_there_is_no_authentication_state()
+    {
+        // Outside a Blazor circuit (a hosted service's scope) the server provider throws.
+        using var testDb = new TestDb();
+        var provider = Substitute.For<AuthenticationStateProvider>();
+        provider.GetAuthenticationStateAsync().Returns<Task<AuthenticationState>>(_ => throw new InvalidOperationException("GetAuthenticationStateAsync was called before SetAuthenticationState."));
+        var scope = new EfAuditScope(new EfAuditWriter(testDb), new FakeTimeProvider(), provider);
+
+        await scope.RecordAsync("sqlite.backup.create", "sqlite-reports", ActionRisk.Safe, succeeded: true);
+
+        await using var db = testDb.CreateDbContext();
+        (await db.AuditEntries.SingleAsync()).Actor.Should().Be("system");
+    }
 }
