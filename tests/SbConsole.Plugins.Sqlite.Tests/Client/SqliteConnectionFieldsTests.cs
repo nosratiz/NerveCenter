@@ -65,7 +65,67 @@ public class SqliteConnectionFieldsTests : BunitContext, IAsyncLifetime
         cut.Find(".sqlite-conn-path input").Input("/data/a;b.db");
 
         emitted.Should().BeEmpty();
-        cut.Find(".sqlite-conn-path-error").TextContent.Should().Contain("can't contain ';'");
+        cut.Find(".sqlite-conn-path .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("can't contain ';'");
+        cut.Find(".sqlite-conn-path input").GetAttribute("aria-invalid").Should().Be("true");
+    }
+
+    [Fact]
+    public void A_fresh_empty_form_shows_no_errors()
+    {
+        var cut = RenderFields(null, out _);
+
+        cut.FindAll(".mud-input-error").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_good_path_then_a_bad_one_keeps_the_last_good_secret_and_shows_the_error()
+    {
+        var cut = RenderFields(null, out var emitted);
+        cut.Find(".sqlite-conn-path input").Input("/data/good.db");
+
+        cut.Find(".sqlite-conn-path input").Input("");
+        cut.Find(".sqlite-conn-path .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("A file path is required.");
+
+        cut.Find(".sqlite-conn-path input").Input("/data/good.db;");
+        cut.Find(".sqlite-conn-path .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("can't contain ';'");
+
+        SqliteConnectionSettings.Parse(emitted.Last()).Path.Should().Be("/data/good.db");
+        emitted.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void A_zero_statement_timeout_is_not_emitted_and_shows_the_error()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db").ToSecretString(), out var emitted);
+        cut.Find(".sqlite-conn-statement input").Input("45");
+        var countBefore = emitted.Count;
+
+        cut.Find(".sqlite-conn-statement input").Input("0");
+
+        emitted.Should().HaveCount(countBefore);
+        SqliteConnectionSettings.Parse(emitted.Last()).StatementTimeoutS.Should().Be(45);
+        cut.Find(".sqlite-conn-statement .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("Must be at least 1 s.");
+    }
+
+    [Fact]
+    public void A_zero_busy_timeout_shows_the_error()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db").ToSecretString(), out var emitted);
+
+        cut.Find(".sqlite-conn-busy input").Input("0");
+
+        emitted.Should().BeEmpty();
+        cut.Find(".sqlite-conn-busy .mud-input-helper-text.mud-input-error").TextContent.Should().Contain("Must be at least 1 ms.");
+    }
+
+    [Fact]
+    public void An_unparsable_initial_secret_renders_the_defaults_without_throwing()
+    {
+        var cut = RenderFields("garbage", out _);
+
+        cut.Find(".sqlite-conn-path input").GetAttribute("value").Should().BeNullOrEmpty();
+        cut.Find(".sqlite-conn-busy input").GetAttribute("value").Should().Be("5000");
+        cut.Find(".sqlite-conn-statement input").GetAttribute("value").Should().Be("30");
     }
 
     [Fact]

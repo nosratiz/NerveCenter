@@ -3,31 +3,42 @@
 @using MudBlazor
 
 <MudTextField T="string" Class="sqlite-conn-path" Label="File path" Value="_path" ValueChanged="OnPathChanged" Immediate="true"
+              Error="@(PathError is not null)" ErrorText="@PathError"
               HelperText="Path is resolved inside the SbConsole container — mount the volume there." />
-
-@if (_pathError is not null)
-{
-    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2 sqlite-conn-path-error">@_pathError</MudAlert>
-}
 
 <MudRadioGroup T="SqliteAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
     <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadOnly" Class="sqlite-conn-mode-readonly">Read-only</MudRadio>
     <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadWrite" Disabled="true" Class="sqlite-conn-mode-readwrite">Read-write — not available yet</MudRadio>
 </MudRadioGroup>
 
-<MudNumericField T="int" Class="mt-3 sqlite-conn-busy" Label="Busy timeout (ms)" Value="_busyTimeoutMs" ValueChanged="OnBusyTimeoutChanged" Min="1" Immediate="true" />
-<MudNumericField T="int" Class="mt-3 sqlite-conn-statement" Label="Statement timeout (s)" Value="_statementTimeoutS" ValueChanged="OnStatementTimeoutChanged" Min="1" Max="600" Immediate="true" />
+@* No Min/Max on the numeric fields: MudBlazor would silently clamp 0 up to Min and hide the validation
+   message; Parse has no upper bound either, so a stored larger value must stay editable. *@
+<MudNumericField T="int" Class="mt-3 sqlite-conn-busy" Label="Busy timeout (ms)" Value="_busyTimeoutMs" ValueChanged="OnBusyTimeoutChanged" Immediate="true"
+                 Error="@(BusyError is not null)" ErrorText="@BusyError" />
+<MudNumericField T="int" Class="mt-3 sqlite-conn-statement" Label="Statement timeout (s)" Value="_statementTimeoutS" ValueChanged="OnStatementTimeoutChanged" Immediate="true"
+                 Error="@(StatementError is not null)" ErrorText="@StatementError" />
 
 @code {
     [Parameter] public string? InitialSecret { get; set; }
     [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    // IsProd is part of the host contract for connection forms; unused here because this form has no credential fields.
     [Parameter] public bool IsProd { get; set; }
 
     private string _path = "";
     private SqliteAccessMode _mode = SqliteAccessMode.ReadOnly;
     private int _busyTimeoutMs = SqliteConnectionSettings.DefaultBusyTimeoutMs;
     private int _statementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS;
-    private string? _pathError;
+    private bool _pathTouched;
+    private bool _busyTouched;
+    private bool _statementTouched;
+
+    // Errors show only once the user has edited that field, so a fresh empty form isn't invalid on open.
+    private string? PathError => !_pathTouched ? null
+        : string.IsNullOrWhiteSpace(_path) ? "A file path is required."
+        : _path.Contains(';') ? "The path can't contain ';'."
+        : null;
+    private string? BusyError => _busyTouched && _busyTimeoutMs <= 0 ? "Must be at least 1 ms." : null;
+    private string? StatementError => _statementTouched && _statementTimeoutS <= 0 ? "Must be at least 1 s." : null;
 
     // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips
     // whatever this component last emitted back into InitialSecret on every parent render, and
@@ -55,6 +66,7 @@
 
     private Task OnPathChanged(string? value)
     {
+        _pathTouched = true;
         _path = value ?? "";
         return RaiseChangedAsync();
     }
@@ -67,12 +79,14 @@
 
     private Task OnBusyTimeoutChanged(int value)
     {
+        _busyTouched = true;
         _busyTimeoutMs = value;
         return RaiseChangedAsync();
     }
 
     private Task OnStatementTimeoutChanged(int value)
     {
+        _statementTouched = true;
         _statementTimeoutS = value;
         return RaiseChangedAsync();
     }
@@ -80,9 +94,8 @@
     private Task RaiseChangedAsync()
     {
         // Mid-typing states (empty path, a ';', a 0 timeout) can't be formatted: skip this keystroke's
-        // SecretChanged so the last good secret stays in effect -- throwing out of a Blazor event
+        // SecretChanged so the last good secret stays in effect (the field-level errors tell the user) -- throwing out of a Blazor event
         // handler would kill the circuit (same rule as RedisConnectionFields).
-        _pathError = _path.Contains(';') ? "The path can't contain ';'." : null;
         string secret;
         try
         {
