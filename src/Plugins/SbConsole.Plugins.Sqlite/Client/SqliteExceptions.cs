@@ -20,3 +20,6 @@ public sealed class SqliteScriptRefusedException(string reason) : Exception(reas
 
 /// <summary>A backup the plugin refuses or can't find (backups disabled, missing directory, bad file name, failed verify -- spec §11.7).</summary>
 public sealed class SqliteBackupException(string reason) : Exception(reason);
+
+/// <summary>A Create / Rename / Drop table request the plugin refuses before (or instead of) changing anything (spec §11.5).</summary>
+public sealed class SqliteDdlRefusedException(string reason) : Exception(reason);

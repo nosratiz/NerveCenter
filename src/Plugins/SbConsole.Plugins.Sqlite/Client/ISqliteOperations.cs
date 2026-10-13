@@ -73,4 +73,29 @@ public interface ISqliteOperations
 
     /// <summary>The live file's size (main file only); null when it doesn't exist.</summary>
     Task<long?> GetFileBytesAsync(string secret, CancellationToken ct = default);
+
+    // Tables page DDL (design spec §11.5). All need Mode=ReadWrite (SqliteReadOnlyConnectionException);
+    // names must be user tables in sqlite_schema (SqliteDdlRefusedException otherwise).
+
+    /// <summary>Exactly one CREATE TABLE statement, in a transaction on an attach-limited writable connection; returns the new table's name.</summary>
+    Task<string> CreateTableAsync(string secret, string ddl, CancellationToken ct = default);
+
+    Task RenameTableAsync(string secret, string oldName, string newName, CancellationToken ct = default);
+
+    /// <summary>Read-only: what the Drop dialog shows.</summary>
+    Task<DropImpact> GetDropImpactAsync(string secret, string name, CancellationToken ct = default);
+
+    /// <summary>DROP TABLE in a transaction; a RESTRICT / NO ACTION reference with rows makes it fail and roll back.</summary>
+    Task DropTableAsync(string secret, string name, CancellationToken ct = default);
+
+    // Corrupt state (design spec §11.6).
+
+    /// <summary>REINDEX, then a fresh integrity_check + foreign_key_check.</summary>
+    Task<IntegrityCheckOutcome> ReindexAsync(string secret, CancellationToken ct = default);
+
+    /// <summary>
+    /// Best-effort copy of every table, row by row, then indexes/views/triggers, into a new
+    /// `&lt;base&gt;-recovered-&lt;yyyyMMdd-HHmmss&gt;.db` inside BackupDir. The live file is only read.
+    /// </summary>
+    Task<SalvageOutcome> SalvageAsync(string secret, DateTimeOffset nowUtc, CancellationToken ct = default);
 }

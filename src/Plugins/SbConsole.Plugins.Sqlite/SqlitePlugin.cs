@@ -40,9 +40,10 @@ public sealed class SqlitePlugin : IPlugin
         new PluginNavItem("Query", QueryHref),
     ];
 
-    // Pages: Overview, Tables, Query. Audited actions: integrity check, CSV export (design spec §8);
-    // the phase 2/3 action count is settled with §11.9's contribution update.
-    public PluginContribution Contribution => new(PageCount: 3, ActionCount: 2);
+    // Pages: Overview, Tables, Query. Audited actions (§8, §11): integrity check, table CSV export,
+    // query CSV export, write script, WAL checkpoint, backup create/verify/policy/prune/download/
+    // restore, table create/rename/drop, REINDEX, recover. §11.9 settles the final page count.
+    public PluginContribution Contribution => new(PageCount: 3, ActionCount: 16);
 
     internal static ConnectionTestResult NotInitialized => new(false, "SQLite plugin is not initialized.");
 
