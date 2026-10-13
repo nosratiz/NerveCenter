@@ -179,7 +179,11 @@ Every `SqliteOperations` call:
    running statement; the raw interrupt does (SQLITE_INTERRUPT, code 9, in
    ~300 ms, connection still usable). An interrupt caused by the timeout
    becomes `SqliteStatementTimeoutException`; one caused by the caller's token
-   becomes `OperationCanceledException`.
+   becomes `OperationCanceledException`. An interrupt that fires while no
+   statement is running is lost, so `Run` also installs
+   `sqlite3_progress_handler` (every 1000 VM instructions; aborts when the
+   linked token is cancelled) and checks the token before running the work.
+   Both abort with SQLITE_INTERRUPT (code 9).
 
 `TestConnectionAsync` reports `ConnectionCheck` rows: "Path allowed",
 "File opened" (with SQLite version, size, journal mode), "Schema readable"
@@ -282,8 +286,9 @@ statement timeout, with a Cancel button wired to the page's token.
 **Export CSV — `ExportTableCsvCommandHandler`**, `ActionRisk.Safe`, audited as
 `sqlite.table.export` (data leaves the server). RFC 4180 quoting; BLOBs as
 base64. **Decided in planning:** the host has no plugin-endpoint seam, so
-the CSV is built server-side (hard cap 100,000 rows; the footer says when the
-cap truncated it) and handed to the browser through a `DotNetStreamReference`
+the CSV is built server-side (hard cap 100,000 rows or 50 MB, `CsvExport.MaxBytes`,
+whichever comes first, written into a `MemoryStream`; the footer and audit detail
+say which cap truncated it) and handed to the browser through a `DotNetStreamReference`
 and a tiny plugin JS module (`wwwroot/sqlite.js`, `downloadFromStream`), no
 new SDK seam.
 
@@ -315,7 +320,8 @@ SQLite.
 - `GetDashboardProblemsAsync` (`PluginDashboardProblem.Severity` only supports
   "Error" / "Warning"): Error "Integrity check failed" when the stored last
   result (§5) is not ok; Warning "N% free pages — VACUUM would reclaim X" when
-  `freelist_count / page_count ≥ 20%`. Links to `/p/sqlite/overview`.
+  `freelist_count / page_count ≥ 20%`; Warning "Foreign key violations" when
+  the stored integrity check found any. Links to `/p/sqlite/overview`.
 - No nav badges; no oldest-dead-letter (SDK defaults).
 - `docs/design.md`: dated section on the path-policy seam, fail-closed
   rationale, and the temp-file test exception (§9).
@@ -323,7 +329,7 @@ SQLite.
 **Local dev stack:** `docker/sqlite/seed.py` builds a ~50 MB demo
 `reports.db` (tenants, sessions, events with JSON `props`, event_props with an
 FK, an index on `events.ts`, a view, `ANALYZE` run so `sqlite_stat1` exists).
-Mounted read-only at `/sqlite` for the `app` profile with
+Mounted at `/sqlite` for the `app` profile with
 `SBC_SQLITE_ROOTS=/sqlite` — deliberately **not** `/data`, which holds
 SbConsole's own database and data-protection keys.
 Documented in `docker/README.md`.
@@ -357,3 +363,20 @@ TDD per task, gate `dotnet build -warnaserror` + `dotnet test`.
 Query runner, EXPLAIN, write mode, Rename/Drop/Create table, VACUUM, backups,
 growth history, Last backup tile, REINDEX/`.recover`, loading extensions,
 creating new database files.
+
+## Implementation notes (2026-10-13)
+
+- **Statement timeout** needs the progress handler as well as `sqlite3_interrupt` (§4.2).
+- **foreign_keys** is ON by default for Microsoft.Data.Sqlite / bundled `e_sqlite3`
+  connections, unlike the SQLite CLI; the UI copy reads "per-connection · on for this
+  console's connections". The seed script uses Python's `sqlite3` (off by default), so it
+  enables FKs before its cascading delete.
+- **CSV export** cap is 100,000 rows or 50 MB, whichever comes first (§6).
+- **Dashboard problems** gained a Warning "Foreign key violations" (§8 listed two).
+- **Connection form** shows field-level validation errors (empty path, `;` in the path,
+  timeouts below 1) instead of silently keeping the last good secret.
+- **Known limitation:** a hard link to SbConsole's own database placed under a root is not
+  detected (the policy compares resolved paths, not file identity); it needs write access
+  to both locations.
+- The demo file is ~35 MB, not 50 MB, and the compose volume is writable (SQLite needs to
+  create `-shm` beside a WAL file even for read-only connections).

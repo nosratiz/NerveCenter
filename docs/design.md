@@ -1471,3 +1471,49 @@ non-integer metric, and `PluginDashboardMetric.Count` is an `int`. There's also 
 plugin, and unchecked rows have no "Logs →" link because there's no logs page. The 1c
 note about when the last problem cleared needs problem history that the host doesn't
 keep.
+
+## 15. SQLite plugin (`SbConsole.Plugins.Sqlite`) (2026-10-13)
+
+Spec: `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-10-13-sqlite-plugin.md`. Phase 1 is a read-only Overview + Tables
+browser; write mode / Query (phase 2) and backups (phase 3) follow.
+
+- **First plugin that opens host files.** A SQLite connection is a server-side path, so the SDK
+  gained `IHostPathPolicy`, implemented in Core (`HostPathPolicy`) from `SBC_SQLITE_ROOTS`
+  (read by `BootstrapOptions`, still the only env reader). It is **fail-closed** (no roots → nothing
+  opens), resolves `..` and every symlink before a separator-aware root match, always refuses
+  SbConsole's own DB and its sidecars, and hands back the resolved path, which is the only path the
+  plugin opens. Core owns this rather than the plugin because only Core knows where its own DB is,
+  and a plugin shouldn't learn host env var names. **Known limitation:** a hard link to SbConsole's
+  own database placed under a root is not detected, because the policy compares resolved paths, not
+  file identity; creating one needs write access to both locations.
+- **`IPlugin.Initialize(IServiceProvider)`.** Plugins are constructed with `new()`, so instance hooks
+  (`TestConnectionAsync`, dashboard hooks) had no DI. The new optional hook runs once after
+  `app.Build()` (`PluginRegistry.InitializeAll`); the SQLite plugin resolves its operations there and
+  fails closed until then. Existing plugins are unaffected (default no-op).
+- **Statement timeout needs two mechanisms.** Verified against Microsoft.Data.Sqlite 10.0.12: a
+  cancellation token (or `SqliteCommand.Cancel()`) does not stop a running statement; the raw
+  `sqlite3_interrupt` does, but an interrupt that fires while no statement is running is lost. So
+  `Run` also installs `sqlite3_progress_handler` (every 1000 VM instructions; it aborts when the
+  linked token is cancelled) and checks the token before running the work. Both abort with
+  SQLITE_INTERRUPT (code 9).
+- **`foreign_keys` is ON by default** on Microsoft.Data.Sqlite / bundled `e_sqlite3` connections,
+  unlike the SQLite CLI, so the UI copy says "per-connection · on for this console's connections".
+  The demo seed script uses Python's `sqlite3`, where it is off by default, which is why it turns it
+  on before the cascading delete.
+- **`dbstat` is absent** from the bundled `e_sqlite3`, so size-by-table falls back to
+  `sqlite_stat1` row estimates; sizes appear automatically if a future build includes it.
+- **Testing exception.** `SqliteOperations` is tested against temp-file databases (no Docker, no
+  network) — the only honest way to test PRAGMA parsing, read-only mode and interrupts. Handlers and
+  pages still use a substituted `ISqliteOperations`, as every other plugin does.
+- **CSV export** is built server-side and handed to the browser through a `DotNetStreamReference`
+  and the plugin's `sqlite.js` module — the host has no plugin download endpoint, and this didn't
+  justify adding one. It is capped at 100,000 rows **or** 50 MB (`CsvExport.MaxBytes`), whichever
+  comes first, and written straight into a `MemoryStream`. The audit detail says which cap applied.
+- **Dashboard problems** are three: Error "Integrity check failed", Warning for high free-page
+  share, and Warning "Foreign key violations" when the stored integrity check found any.
+- **Connection form** shows field-level validation errors (empty path, `;` in the path, timeouts
+  below 1) instead of silently keeping the last good secret.
+- **Local dev stack.** `docker/sqlite/seed.py` builds a ~35 MB `reports.db`; the compose `sqlite`
+  profile runs it into the `sqlite-demo` volume, which the app container mounts at `/sqlite` with
+  `SBC_SQLITE_ROOTS=/sqlite` (not `/data`, which holds SbConsole's own database and keys).

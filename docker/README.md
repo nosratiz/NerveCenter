@@ -401,8 +401,28 @@ broker advertises to host clients, so the secret you paste into the app must use
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile sqlite --profile app down -v
 ```
 
 `-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's
 SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
+
+## SQLite
+
+SQLite is a file, not a server, so there's no broker container — just a one-shot seed that writes a
+~35 MB demo file shaped like the plugin mockups (tenants / sessions / events with JSON props, a
+WITHOUT ROWID table, two views, a trigger, `ANALYZE` stats and some free pages).
+
+- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. The file
+  lands in the `sqlite-demo` volume, mounted at `/sqlite`, and the app gets `SBC_SQLITE_ROOTS=/sqlite`.
+  Add a connection of kind *SQLite* with file path `/sqlite/reports.db`.
+- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo`, then set
+  `SBC_SQLITE_ROOTS` in `launchSettings.json` to the absolute path of `.sqlite-demo` and use
+  `<that path>/reports.db` as the connection's file path.
+
+`SBC_SQLITE_ROOTS` is fail-closed: unset means no SQLite connection can open anything. Paths are
+resolved (`..` collapsed, every symlink followed) before the check, and SbConsole's own database and
+its `-wal`/`-shm`/`-journal` files are always refused. Known limitations: the bundled SQLite has no
+`dbstat`, so the Overview ranks the largest tables by `sqlite_stat1` row estimates instead of bytes;
+and a *hard link* to SbConsole's own database placed under a root is not detected, because the policy
+compares resolved paths, not file identity (creating one needs write access to both locations).

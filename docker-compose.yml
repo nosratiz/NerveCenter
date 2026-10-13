@@ -284,6 +284,21 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------------------
+  # SQLite demo file (profile: sqlite). One-shot: builds reports.db in the sqlite-demo volume,
+  # which the app profile mounts at /sqlite with SBC_SQLITE_ROOTS=/sqlite. Deliberately not /data:
+  # that holds SbConsole's own database and data-protection keys.
+  # ---------------------------------------------------------------------------------------
+  sqlite-init:
+    image: python:3.12-alpine
+    container_name: nervecenter-sqlite-init
+    profiles: ["sqlite"]
+    command: ["python", "-I", "/seed.py", "/sqlite"]
+    volumes:
+      - ./docker/sqlite/seed.py:/seed.py:ro
+      - sqlite-demo:/sqlite
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------
   # SbConsole itself (profile: app), built from source. For when you want the "one shared
   # instance per team" deployment shape locally rather than `dotnet run`.
   # ---------------------------------------------------------------------------------------
@@ -313,10 +328,14 @@ services:
       SBC_DATA_KEY: ${SBC_DATA_KEY:-}
       SBC_ADMIN_PASSWORD: ${SBC_ADMIN_PASSWORD:-}
       SBC_API_KEY: ${SBC_API_KEY:-}
+      # Directories the SQLite plugin may open files under (fail-closed when unset).
+      SBC_SQLITE_ROOTS: /sqlite
     volumes:
       - sbconsole-data:/data
+      - sqlite-demo:/sqlite
 
 volumes:
   kafka-data:
   sqlserver-data:
   sbconsole-data:
+  sqlite-demo:
