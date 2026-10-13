@@ -9,4 +9,8 @@ namespace SbConsole.Plugins.Sqlite.Client;
 public interface ISqliteOperations
 {
     Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
+
+    Task<SqliteOverview> GetOverviewAsync(string secret, CancellationToken ct = default);
+
+    Task<TableSizes> GetTableSizesAsync(string secret, CancellationToken ct = default);
 }
