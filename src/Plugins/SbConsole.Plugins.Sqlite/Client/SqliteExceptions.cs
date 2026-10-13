@@ -23,3 +23,6 @@ public sealed class SqliteBackupException(string reason) : Exception(reason);
 
 /// <summary>A Create / Rename / Drop table request the plugin refuses before (or instead of) changing anything (spec §11.5).</summary>
 public sealed class SqliteDdlRefusedException(string reason) : Exception(reason);
+
+/// <summary>A New database request refused before anything touched the disk: folder, sub-folder, file name or an existing file (spec §13).</summary>
+public sealed class SqliteNewDatabaseRefusedException(string reason) : Exception(reason);

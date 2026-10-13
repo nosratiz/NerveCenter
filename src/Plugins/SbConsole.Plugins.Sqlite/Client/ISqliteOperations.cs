@@ -101,4 +101,21 @@ public interface ISqliteOperations
     /// `&lt;base&gt;-recovered-&lt;yyyyMMdd-HHmmss&gt;.db` inside BackupDir. The live file is only read.
     /// </summary>
     Task<SalvageOutcome> SalvageAsync(string secret, DateTimeOffset nowUtc, CancellationToken ct = default);
+
+    // New database (design spec §13). Not tied to a saved connection: the file doesn't exist yet.
+
+    /// <summary>
+    /// Validates the request (SqliteNewDatabaseRefusedException / SqliteScriptRefusedException before
+    /// anything touches the disk), creates the file exclusively on the policy-resolved path -- never
+    /// over an existing file, never creating a directory -- sets the journal mode and applies the
+    /// template in one transaction on an attach-limited connection. Any failure after the file exists
+    /// deletes it and its -wal/-shm/-journal siblings.
+    /// </summary>
+    Task<NewDatabaseCreated> CreateDatabaseAsync(NewDatabaseRequest request, CancellationToken ct = default);
+
+    /// <summary>Deletes a database this console just created (and its siblings) -- the handler's undo when saving the connection fails.</summary>
+    Task DeleteCreatedDatabaseAsync(string path, CancellationToken ct = default);
+
+    /// <summary>`&lt;folder&gt;[/&lt;sub-folder&gt;]/backups` when that directory exists and the policy allows it; otherwise null.</summary>
+    Task<string?> FindBackupsDirAsync(string folder, string? subFolder, CancellationToken ct = default);
 }

@@ -14,7 +14,8 @@ public static class FriendlySqliteError
     public static string From(Exception ex) => ex switch
     {
         SqlitePathRefusedException or SqliteStatementTimeoutException or SqliteObjectNotFoundException
-            or SqliteReadOnlyConnectionException or SqliteScriptRefusedException or SqliteBackupException or SqliteDdlRefusedException => ex.Message,
+            or SqliteReadOnlyConnectionException or SqliteScriptRefusedException or SqliteBackupException or SqliteDdlRefusedException
+            or SqliteNewDatabaseRefusedException => ex.Message,
         SqliteException { SqliteErrorCode: 5 or 6 } => Locked,                          // SQLITE_BUSY / SQLITE_LOCKED
         SqliteException { SqliteErrorCode: 8 } => "This connection is read-only.",      // SQLITE_READONLY
         SqliteException { SqliteErrorCode: 11 or 26 } =>                               // SQLITE_CORRUPT / SQLITE_NOTADB

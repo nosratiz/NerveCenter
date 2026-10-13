@@ -29,6 +29,7 @@ public class FriendlySqliteErrorTests
             .Should().Be("This connection is read-only — set Default mode to Read-write in Connections.");
         FriendlySqliteError.From(new SqliteScriptRefusedException("The script is empty.")).Should().Be("The script is empty.");
         FriendlySqliteError.From(new SqliteDdlRefusedException("Type a new name.")).Should().Be("Type a new name.");
+        FriendlySqliteError.From(new SqliteNewDatabaseRefusedException("Type a file name.")).Should().Be("Type a file name.");
     }
 
     [Fact]
