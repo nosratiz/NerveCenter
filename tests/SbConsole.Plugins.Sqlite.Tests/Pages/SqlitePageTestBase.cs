@@ -72,6 +72,13 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new DropTableCommandHandler(Operations, Connections, Audit, backup, NullLogger<DropTableCommandHandler>.Instance));
         Services.AddSingleton(new ReindexCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<ReindexCommandHandler>.Instance));
         Services.AddSingleton(new RecoverCommandHandler(Operations, Connections, Audit, Time, NullLogger<RecoverCommandHandler>.Instance));
+        Services.AddSingleton(new GetBackupsQueryHandler(Operations, Connections, Store, Time, NullLogger<GetBackupsQueryHandler>.Instance));
+        Services.AddSingleton(new GetGrowthQueryHandler(Operations, Connections, Store, Time, NullLogger<GetGrowthQueryHandler>.Instance));
+        Services.AddSingleton(new VerifyBackupCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<VerifyBackupCommandHandler>.Instance));
+        Services.AddSingleton(new PruneBackupsCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<PruneBackupsCommandHandler>.Instance));
+        Services.AddSingleton(new DownloadBackupCommandHandler(Operations, Connections, Audit, Store, NullLogger<DownloadBackupCommandHandler>.Instance));
+        Services.AddSingleton(new RestoreBackupCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RestoreBackupCommandHandler>.Instance));
+        Services.AddSingleton(new SaveBackupPolicyCommandHandler(Connections, Audit, Store, NullLogger<SaveBackupPolicyCommandHandler>.Instance));
         Services.AddSingleton(new ListSavedQueriesQueryHandler(Store));
         Services.AddSingleton(new SaveQueryCommandHandler(Store, Time, NullLogger<SaveQueryCommandHandler>.Instance));
         Services.AddSingleton(new DeleteSavedQueryCommandHandler(Store, NullLogger<DeleteSavedQueryCommandHandler>.Instance));

@@ -67,7 +67,7 @@
 
 /* ---- tiles ---- */
 .sql-tiles { display: grid; gap: 12px; padding: 16px 20px 0; }
-.sql-ov-tiles { grid-template-columns: 2fr 1fr 1fr; }
+.sql-ov-tiles { grid-template-columns: 2fr 1fr 1fr 1fr; }
 .sql-tile { background: var(--mud-palette-surface); border-radius: 8px; padding: 12px 16px; min-width: 0; }
 .sql-tile-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .sql-overline { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--sql-muted); }
@@ -97,7 +97,8 @@
     margin: 0; padding: 10px 14px; border-radius: 8px; font-family: var(--sql-mono); font-size: 12px;
     white-space: pre-wrap; background: color-mix(in srgb, var(--sql-danger) 8%, transparent);
 }
-.sql-cards { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.sql-cards { display: grid; grid-template-columns: 2fr 1fr; grid-auto-flow: row dense; gap: 12px; }
+.sql-card-wide { grid-column: 1 / -1; }
 .sql-card { background: var(--mud-palette-surface); border-radius: 8px; padding: 12px 16px; min-width: 0; }
 .sql-card-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .sql-card-title { font-weight: 500; }
@@ -160,6 +161,7 @@
     border-bottom-color: color-mix(in srgb, var(--sql-warn) 45%, transparent);
 }
 .sql-banner-warn { background: color-mix(in srgb, var(--sql-warn) 12%, transparent); }
+.sql-banner-info { background: color-mix(in srgb, var(--sql-accent) 10%, transparent); }
 .sql-body-tight { padding-bottom: 0; }
 .sql-seg { display: inline-flex; align-items: stretch; border: 1px solid var(--sql-line); border-radius: 6px; overflow: hidden; }
 .sql-seg-wrap { display: inline-flex; }
@@ -233,8 +235,32 @@
 .sql-ref-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .sql-notice { color: var(--sql-ok); font-size: 13px; }
 
+/* ---- Overview growth (mockup 1a) ---- */
+.sql-growth { display: flex; align-items: center; gap: 12px; }
+.sql-growth > .sql-num { flex: none; font-size: 13px; }
+.sql-spark { flex: 1 1 auto; min-width: 80px; height: 48px; overflow: visible; }
+.sql-spark polyline {
+    fill: none; stroke: var(--sql-accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+/* ---- Backups (mockups 1e / 1f) ---- */
+.sql-bk-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sql-tile-mono { font-size: 20px; }
+.sql-bk-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; align-items: start; }
+.sql-bk-split-single { grid-template-columns: minmax(0, 1fr); }
+.sql-row-click { cursor: pointer; }
+.sql-row-click:hover td { background: var(--sql-faint); }
+.sql-table tr.sql-is-selected td { background: color-mix(in srgb, var(--sql-accent) 12%, transparent); }
+.sql-badge-ok { color: var(--sql-ok); background: color-mix(in srgb, var(--sql-ok) 14%, transparent); }
+.sql-badge-failed { color: var(--sql-danger); background: color-mix(in srgb, var(--sql-danger) 14%, transparent); }
+.sql-badge-unverified { color: var(--sql-muted); background: var(--sql-faint); }
+.sql-input-short { width: 64px; text-align: center; }
+.sql-schedule-keep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.sql-actions-center { justify-content: center; }
+
 @media (max-width: 900px) {
-    .sql-ov-tiles, .sql-cards, .sql-split, .sql-query-editor-row { grid-template-columns: 1fr; }
+    .sql-ov-tiles, .sql-bk-tiles, .sql-cards, .sql-split, .sql-query-editor-row, .sql-bk-split { grid-template-columns: 1fr; }
     .sql-list { border-right: 0; border-bottom: 1px solid var(--sql-line); }
     .sql-header, .sql-tiles, .sql-body, .sql-detail { padding-left: 16px; padding-right: 16px; }
 }

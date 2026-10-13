@@ -1,7 +1,9 @@
 @* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Overview.razor -- mockups 1a / 1g, design spec §5, §11.6
-   (REINDEX and Recover into new file on a failed integrity check, read-write connections only). *@
+   (REINDEX and Recover into new file on a failed integrity check, read-write connections only) and
+   §11.8 (Last backup tile, Growth — 30 days card; both load after the tiles, like table sizes). *@
 @page "/p/sqlite/overview"
 @using System.Globalization
+@using SbConsole.Plugins.Sqlite.Backups
 @using SbConsole.Plugins.Sqlite.Client
 @using SbConsole.Plugins.Sqlite.Overview
 @inject GetOverviewQueryHandler GetOverview
@@ -10,6 +12,8 @@
 @inject GetLastIntegrityResultQueryHandler GetLastIntegrity
 @inject ReindexCommandHandler Reindex
 @inject RecoverCommandHandler Recover
+@inject GetBackupsQueryHandler GetBackups
+@inject GetGrowthQueryHandler GetGrowth
 @inject IConnectionProvider Connections
 @inject IConfirmationService Confirmation
 @inject TimeProvider Clock
@@ -95,6 +99,18 @@
             <SqliteStatTile Label="Page cache" Class="sqlite-overview-cache" ValueClass="sqlite-overview-cache-pages">
                 <Value>@SqliteFormat.Count(o.CachePages) p</Value>
                 <Caption>@SqliteFormat.Bytes(o.CacheBytes) · per-connection default</Caption>
+            </SqliteStatTile>
+
+            <SqliteStatTile Label="Last backup" Class="sqlite-overview-backup" ValueClass="sqlite-overview-backup-age">
+                <Value>@BackupAgeText</Value>
+                <Caption>
+                    <span class="sqlite-overview-backup-policy">@BackupPolicyText</span>
+                    @if (_backupsError is not null)
+                    {
+                        <span class="sql-warn sqlite-overview-backup-error" title="@_backupsError"> · unavailable</span>
+                    }
+                    · <a class="sql-link sqlite-overview-backup-now" href="@($"{SqlitePlugin.BackupsHref}?connectionId={_connection?.Id}")">@(_backups is { BackupDir: null } ? "How to enable →" : "Back up now →")</a>
+                </Caption>
             </SqliteStatTile>
         </div>
 
@@ -251,6 +267,51 @@
                     }
                 </div>
 
+                <div class="sql-card sql-card-wide sqlite-overview-growth">
+                    <div class="sql-card-head">
+                        <span class="sql-card-title">Growth — 30 days</span>
+                        <span class="sql-spacer"></span>
+                        @if (_growth?.Summary is { Collecting: false } growthHead)
+                        {
+                            <span class="sql-card-sub sqlite-overview-growth-delta">@SqliteFormat.SignedBytes(growthHead.DeltaBytes) · @RateText(growthHead.BytesPerDay)</span>
+                        }
+                    </div>
+                    @if (_growthError is not null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-overview-growth-error">@_growthError</MudAlert>
+                    }
+                    else if (_growth is null)
+                    {
+                        <div class="sql-footnote">Reading samples…</div>
+                    }
+                    else if (_growth.Summary is { Collecting: true } collecting)
+                    {
+                        <div class="sql-footnote sqlite-overview-growth-collecting">@(collecting.First is { } first
+                            ? $"collecting — first sample at {first.At.UtcDateTime.ToString("yyyy-MM-dd HH:mm", Inv)} UTC"
+                            : "collecting — no samples yet")</div>
+                    }
+                    else
+                    {
+                        var summary = _growth.Summary;
+                        <div class="sql-growth">
+                            <span class="sql-num sql-mono sql-muted sqlite-overview-growth-first">@SqliteFormat.Bytes(summary.First!.Bytes)</span>
+                            <svg class="sql-spark sqlite-overview-growth-spark" viewBox="0 0 @SparkWidth @SparkHeight" preserveAspectRatio="none" role="img"
+                                 aria-label="@($"File size over {SpanDays(summary)} days")">
+                                <polyline points="@SparkPoints(_growth.Samples)" />
+                            </svg>
+                            <span class="sql-num sql-mono sqlite-overview-growth-last">@SqliteFormat.Bytes(summary.Last!.Bytes)</span>
+                        </div>
+                        @if (summary.DeltaBytes > 0 && summary.DaysUntilFull is { } days && _growth.Volume is { } volume)
+                        {
+                            <div class="sql-footnote sqlite-overview-growth-volume">volume @SqliteFormat.Bytes(volume.TotalBytes) — ~@SqliteFormat.Count((long)Math.Round(days)) days at this rate</div>
+                        }
+                        <div class="sql-footnote">
+                            One file-size sample an hour (scheduler and Overview loads), kept 30 days. Deleting rows doesn't shrink the file —
+                            freed pages are reused; <span class="sql-mono">VACUUM</span> gives them back.
+                        </div>
+                    }
+                </div>
+
                 <div class="sql-card sqlite-overview-settings">
                     <div class="sql-card-head"><span class="sql-card-title">This console's connection</span></div>
                     <dl class="sql-kv">
@@ -291,6 +352,13 @@
     private string? _reindexNotice;
     private SalvageOutcome? _recovered;
     private string? _repairError;
+    private BackupsOverview? _backups;
+    private string? _backupsError;
+    private GrowthOverview? _growth;
+    private string? _growthError;
+
+    private const int SparkWidth = 300;
+    private const int SparkHeight = 48;
 
     private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
 
@@ -458,6 +526,10 @@
         _error = null;
         _sizes = null;
         _sizesError = null;
+        _backups = null;
+        _backupsError = null;
+        _growth = null;
+        _growthError = null;
         _integrityError = null;
         try
         {
@@ -482,21 +554,9 @@
             _loading = false;
             StateHasChanged();
 
-            // Sizes load separately so the tiles never wait on them (spec §5).
-            var sizes = await GetTableSizes.HandleAsync(connection.Id, _cts.Token);
-            if (generation != _loadGeneration)
-            {
-                return;
-            }
-
-            if (sizes.IsSuccess)
-            {
-                _sizes = sizes.Value;
-            }
-            else
-            {
-                _sizesError = sizes.Error;
-            }
+            // Sizes, backups and growth load separately, side by side, so the tiles never wait on
+            // them (spec §5, §11.8).
+            await Task.WhenAll(LoadSizesAsync(connection, generation), LoadBackupsAsync(connection, generation), LoadGrowthAsync(connection, generation));
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
         {
@@ -510,6 +570,107 @@
                 _loading = false;
             }
         }
+    }
+
+    private async Task LoadSizesAsync(ConnectionInfo connection, int generation)
+    {
+        var sizes = await GetTableSizes.HandleAsync(connection.Id, _cts.Token);
+        if (generation != _loadGeneration)
+        {
+            return;
+        }
+
+        if (sizes.IsSuccess)
+        {
+            _sizes = sizes.Value;
+        }
+        else
+        {
+            _sizesError = sizes.Error;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task LoadBackupsAsync(ConnectionInfo connection, int generation)
+    {
+        var backups = await GetBackups.HandleAsync(connection.Id, _cts.Token);
+        if (generation != _loadGeneration)
+        {
+            return;
+        }
+
+        if (backups.IsSuccess)
+        {
+            _backups = backups.Value;
+        }
+        else
+        {
+            _backupsError = backups.Error;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task LoadGrowthAsync(ConnectionInfo connection, int generation)
+    {
+        var growth = await GetGrowth.HandleAsync(connection.Id, _cts.Token);
+        if (generation != _loadGeneration)
+        {
+            return;
+        }
+
+        if (growth.IsSuccess)
+        {
+            _growth = growth.Value;
+        }
+        else
+        {
+            _growthError = growth.Error;
+        }
+
+        StateHasChanged();
+    }
+
+    private string BackupAgeText => _backups switch
+    {
+        null when _backupsError is not null => "—",
+        null => "…",
+        { BackupDir: null } => "off",
+        { Schedule.LastSuccess: { } last } => $"{SqliteFormat.Age(Clock.GetUtcNow() - last.TakenAt)} ago",
+        _ => "none yet",
+    };
+
+    private string BackupPolicyText => _backups switch
+    {
+        null => _backupsError is not null ? "backup history" : "reading history…",
+        { BackupDir: null } => "backups not enabled",
+        { PolicySaved: true, Policy: { Enabled: true } policy } => $"policy: daily {policy.DailyAtUtc} UTC",
+        _ => "no schedule",
+    };
+
+    private static string RateText(double? bytesPerDay) => bytesPerDay is { } rate
+        ? $"{SqliteFormat.SignedBytes((long)Math.Round(rate)).TrimStart('+')}/day"
+        : "";
+
+    private static string SpanDays(GrowthSummary summary) =>
+        Math.Max(1, Math.Round((summary.Last!.At - summary.First!.At).TotalDays)).ToString("0", Inv);
+
+    /// <summary>Samples (oldest first) as polyline points in the SparkWidth × SparkHeight box: x by time, y by size (min..max).</summary>
+    private static string SparkPoints(IReadOnlyList<GrowthSample> samples)
+    {
+        var ordered = samples.OrderBy(s => s.At).ToList();
+        var t0 = ordered[0].At;
+        var span = Math.Max(1, (ordered[^1].At - t0).TotalSeconds);
+        var min = ordered.Min(s => s.Bytes);
+        var range = Math.Max(1, ordered.Max(s => s.Bytes) - min);
+        const double pad = 2;
+        return string.Join(' ', ordered.Select(s =>
+        {
+            var x = (s.At - t0).TotalSeconds / span * SparkWidth;
+            var y = pad + ((1 - ((double)(s.Bytes - min) / range)) * (SparkHeight - (2 * pad)));
+            return $"{x.ToString("0.#", Inv)},{y.ToString("0.#", Inv)}";
+        }));
     }
 
     private async Task RunIntegrityAsync()

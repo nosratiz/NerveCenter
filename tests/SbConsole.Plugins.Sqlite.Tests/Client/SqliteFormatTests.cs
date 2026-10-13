@@ -34,4 +34,32 @@ public class SqliteFormatTests
     [InlineData(134_000, "2m 14s")]
     public void Duration_reads_like_the_mockup(int milliseconds, string expected) =>
         SqliteFormat.Duration(TimeSpan.FromMilliseconds(milliseconds)).Should().Be(expected);
+
+    [Theory]
+    [InlineData(0, "0 min")]
+    [InlineData(59, "59 min")]
+    [InlineData(60, "1h")]
+    [InlineData(31 * 60 + 20, "31h")]
+    [InlineData(47 * 60 + 59, "47h")]
+    [InlineData(48 * 60, "2d")]
+    [InlineData(10 * 24 * 60 + 600, "10d")]
+    public void Age_is_minutes_then_hours_then_days(int minutes, string expected) =>
+        SqliteFormat.Age(TimeSpan.FromMinutes(minutes)).Should().Be(expected);
+
+    [Fact]
+    public void Age_never_goes_negative() => SqliteFormat.Age(TimeSpan.FromMinutes(-5)).Should().Be("0 min");
+
+    [Theory]
+    [InlineData(0L, "0 B")]
+    [InlineData(325_058_560L, "+310 MB")]
+    [InlineData(-272_629_760L, "−260 MB")]
+    public void Signed_bytes_prefix_the_direction(long bytes, string expected) =>
+        SqliteFormat.SignedBytes(bytes).Should().Be(expected);
+
+    [Theory]
+    [InlineData(0L, "0")]
+    [InlineData(1_200_000L, "+1.2M")]
+    [InlineData(-4_118L, "−4,118")]
+    public void Signed_approx_prefixes_the_direction(long rows, string expected) =>
+        SqliteFormat.SignedApprox(rows).Should().Be(expected);
 }

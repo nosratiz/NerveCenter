@@ -19,18 +19,18 @@ public class SqlitePluginTests
     }
 
     [Fact]
-    public void Nav_items_are_overview_tables_then_query()
+    public void Nav_items_are_overview_tables_query_then_backups()
     {
-        new SqlitePlugin().NavItems.Select(n => n.Href).Should().Equal("/p/sqlite/overview", "/p/sqlite/tables", "/p/sqlite/query");
-        new SqlitePlugin().NavItems.Select(n => n.Title).Should().Equal("Overview", "Tables", "Query");
+        new SqlitePlugin().NavItems.Select(n => n.Href).Should().Equal("/p/sqlite/overview", "/p/sqlite/tables", "/p/sqlite/query", "/p/sqlite/backups");
+        new SqlitePlugin().NavItems.Select(n => n.Title).Should().Equal("Overview", "Tables", "Query", "Backups");
     }
 
     [Fact]
-    public void Contribution_counts_three_pages_and_the_sixteen_audited_actions()
+    public void Contribution_counts_four_pages_and_the_sixteen_audited_actions()
     {
         var contribution = new SqlitePlugin().Contribution;
 
-        contribution.PageCount.Should().Be(3);
+        contribution.PageCount.Should().Be(4);
         contribution.ActionCount.Should().Be(16);
     }
 

@@ -15,9 +15,9 @@ public sealed class SqlitePlugin : IPlugin
     public const string TablesHref = "/p/sqlite/tables";
     public const string QueryHref = "/p/sqlite/query";
 
-    // The Backups page (spec §11.7) comes in a later task; its nav item is added with it. Dashboard
-    // problems already link here. No GetNavBadgeAsync for it yet: the SDK hands that hook only
-    // (href, secret) -- no connection id or IPluginStore -- so backup history can't be read there.
+    // No GetNavBadgeAsync for Backups (spec §11.7 wanted "hours since the last backup"): the SDK
+    // hands that hook only (href, secret) -- no connection id or IPluginStore -- so backup history
+    // can't be read there. The dashboard's "Backup overdue" problem carries that signal instead.
     public const string BackupsHref = "/p/sqlite/backups";
 
     // Resolved in Initialize (IPlugin.Initialize): the host constructs plugins with new(), so the
@@ -38,12 +38,13 @@ public sealed class SqlitePlugin : IPlugin
         new PluginNavItem("Overview", OverviewHref),
         new PluginNavItem("Tables", TablesHref),
         new PluginNavItem("Query", QueryHref),
+        new PluginNavItem("Backups", BackupsHref),
     ];
 
-    // Pages: Overview, Tables, Query. Audited actions (§8, §11): integrity check, table CSV export,
-    // query CSV export, write script, WAL checkpoint, backup create/verify/policy/prune/download/
-    // restore, table create/rename/drop, REINDEX, recover. §11.9 settles the final page count.
-    public PluginContribution Contribution => new(PageCount: 3, ActionCount: 16);
+    // Pages: Overview, Tables, Query, Backups (§11.9). Audited actions (§8, §11): integrity check,
+    // table CSV export, query CSV export, write script, WAL checkpoint, backup create/verify/policy/
+    // prune/download/restore, table create/rename/drop, REINDEX, recover.
+    public PluginContribution Contribution => new(PageCount: 4, ActionCount: 16);
 
     internal static ConnectionTestResult NotInitialized => new(false, "SQLite plugin is not initialized.");
 

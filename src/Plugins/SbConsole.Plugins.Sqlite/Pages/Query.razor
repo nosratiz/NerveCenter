@@ -1,7 +1,9 @@
 @* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Query.razor -- mockups 1c (query) and 1d (write mode),
    design spec §11.3 / §11.4. Read-only by default; write mode is behind a switch, never runs a bare
    statement (dry run of the same text first), and on prod asks for the connection name twice: to
-   enter write mode and before running. *@
+   enter write mode and before running. ?backup=<file name> (Backups "Open read-only", §11.7) runs
+   Run / Explain / Export against that file in the connection's backup directory; write mode is
+   unavailable there. *@
 @page "/p/sqlite/query"
 @using System.Globalization
 @using System.Text
@@ -36,7 +38,7 @@
                 <span class="sql-seg" role="group" aria-label="Query mode">
                     <button type="button" class="sql-seg-opt sqlite-query-mode-read @(!_writeMode ? "sql-is-active" : null)"
                             aria-pressed="@(!_writeMode ? "true" : "false")" disabled="@_writing" @onclick="ExitWriteMode">Read-only</button>
-                    <span class="sql-seg-wrap sqlite-query-mode-write-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                    <span class="sql-seg-wrap sqlite-query-mode-write-wrap" title="@(CanWrite ? null : _backupFile is not null ? BackupReason : ReadOnlyReason)">
                         <button type="button" class="sql-seg-opt sqlite-query-mode-write @(_writeMode ? "sql-is-active" : null)"
                                 aria-pressed="@(_writeMode ? "true" : "false")" disabled="@(!CanWrite)" @onclick="EnterWriteModeAsync">Write</button>
                     </span>
@@ -84,6 +86,21 @@
                 {
                     <button type="button" class="sql-btn sqlite-query-retry" @onclick="RetryAsync">Retry</button>
                 }
+            </div>
+        </div>
+    }
+
+    @if (_backupFile is { } backupFile && _connection is not null)
+    {
+        <div class="sql-body sql-body-tight">
+            <div class="sql-banner sql-banner-info sqlite-query-backup-banner" role="status">
+                <span>
+                    Querying backup <span class="sql-mono sqlite-query-backup-file">@backupFile</span> (read-only) — not the live file.
+                    Write mode is unavailable here.
+                </span>
+                <span class="sql-spacer"></span>
+                <button type="button" class="sql-link sqlite-query-backup-exit" disabled="@Busy" @onclick="ExitBackup">Query the live file instead</button>
+                <a class="sql-link sqlite-query-backup-list" href="@($"{SqlitePlugin.BackupsHref}?connectionId={_connection.Id}")">Backups</a>
             </div>
         </div>
     }
@@ -411,6 +428,7 @@
     private const int ChartMaxRows = 50;
     private const int PreviewLength = 80;
     private const string ReadOnlyReason = "This connection is read-only — set Default mode to Read-write in Connections.";
+    private const string BackupReason = "Backups open read-only — query the live file to write.";
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     private static readonly JsonWriterOptions JsonOptions = new() { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
@@ -428,6 +446,9 @@
 
     private ConnectionInfo? _connection;
     private int? _statementTimeoutS;
+    // ?backup= (§11.7): a bare file name inside the backup directory of _backupConnectionId only.
+    private string? _backupFile;
+    private Guid? _backupConnectionId;
     private string _sql = "";
     private bool _writeMode;
     private string? _error;
@@ -468,7 +489,7 @@
 
     private bool Busy => _running || _explaining || _writing;
 
-    private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+    private bool CanWrite => _backupFile is null && _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
 
     private bool CanRunWrite => _writeMode && !_writing && _dryRun is not null && _dryRunSql == _sql;
 
@@ -480,6 +501,12 @@
         if (query.TryGetValue("sql", out var sql))
         {
             _sql = sql.ToString();
+        }
+
+        if (query.TryGetValue("backup", out var backup) && !string.IsNullOrWhiteSpace(backup.ToString()))
+        {
+            _backupFile = backup.ToString();
+            _backupConnectionId = query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id) ? id : null;
         }
 
         await ReloadSavedAsync();
@@ -494,6 +521,16 @@
         _connection = connection;
         _writeMode = false;
         _statementTimeoutS = null;
+        if (_backupFile is not null)
+        {
+            // The backup belongs to the connection it was opened from; any other selection is the live file.
+            _backupConnectionId ??= connection.Id;
+            if (_backupConnectionId != connection.Id)
+            {
+                DropBackupParameter();
+            }
+        }
+
         ClearError();
         ResetReadState();
         ResetWriteState();
@@ -517,6 +554,31 @@
         catch (FormatException)
         {
             // Unparsable secret: every action reports it properly; the meta just omits the timeout.
+        }
+    }
+
+    private void ExitBackup()
+    {
+        if (_backupFile is null || Busy)
+        {
+            return;
+        }
+
+        DropBackupParameter();
+        ClearError();
+        ResetReadState();
+        _plan = null;
+        _explainGeneration++;
+    }
+
+    private void DropBackupParameter()
+    {
+        _backupFile = null;
+        _backupConnectionId = null;
+        var uri = Navigation.GetUriWithQueryParameter("backup", (string?)null);
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
         }
     }
 
@@ -603,7 +665,7 @@
         ClearError();
         try
         {
-            var result = await RunQuery.HandleAsync(connection.Id, sql, limit, token);
+            var result = await RunQuery.HandleAsync(connection.Id, sql, limit, _backupFile, token);
             if (token.IsCancellationRequested || generation != _runGeneration)
             {
                 return;
@@ -664,7 +726,7 @@
         ClearError();
         try
         {
-            var plan = await ExplainQuery.HandleAsync(connection.Id, sql, token);
+            var plan = await ExplainQuery.HandleAsync(connection.Id, sql, _backupFile, token);
             if (token.IsCancellationRequested || generation != _explainGeneration)
             {
                 return;
@@ -705,7 +767,7 @@
         var token = _connectionCts.Token;
         try
         {
-            var result = await ExportCsv.HandleAsync(new ExportQueryCsvCommand(connection.Id, connection.Name, sql), token);
+            var result = await ExportCsv.HandleAsync(new ExportQueryCsvCommand(connection.Id, connection.Name, sql, _backupFile), token);
             if (token.IsCancellationRequested)
             {
                 return;
@@ -1001,9 +1063,10 @@
             return (connection.IsProd ? "write mode on a prod file" : "write mode") + " · every statement runs inside a transaction and is audited";
         }
 
+        var source = _backupFile is { } backup ? $"backup {backup} · " : "";
         return _statementTimeoutS is { } seconds
-            ? $"opened with mode=ro · statement timeout {seconds.ToString(Inv)} s"
-            : "opened with mode=ro";
+            ? $"{source}opened with mode=ro · statement timeout {seconds.ToString(Inv)} s"
+            : $"{source}opened with mode=ro";
     }
 
     private static string TotalText(QueryResult result) =>

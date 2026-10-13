@@ -43,4 +43,36 @@ public static class SqliteFormat
 
         return $"{(int)duration.TotalMinutes}m {duration.Seconds.ToString("00", Inv)}s";
     }
+
+    /// <summary>How long ago, for the backup tiles: "12 min", "31h" (under two days), "3d".</summary>
+    public static string Age(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+
+        if (age < TimeSpan.FromHours(1))
+        {
+            return $"{(int)age.TotalMinutes} min";
+        }
+
+        return age < TimeSpan.FromHours(48) ? $"{(int)age.TotalHours}h" : $"{(int)age.TotalDays}d";
+    }
+
+    /// <summary>A size delta: "+310 MB", "−260 MB" (U+2212), "0 B".</summary>
+    public static string SignedBytes(long delta) => delta switch
+    {
+        > 0 => "+" + Bytes(delta),
+        < 0 => "\u2212" + Bytes(delta == long.MinValue ? long.MaxValue : -delta),
+        _ => Bytes(0),
+    };
+
+    /// <summary>A rows ≈ delta: "+1.2M", "−4,118", "0".</summary>
+    public static string SignedApprox(long delta) => delta switch
+    {
+        > 0 => "+" + Approx(delta),
+        < 0 => "\u2212" + Approx(delta == long.MinValue ? long.MaxValue : -delta),
+        _ => "0",
+    };
 }
