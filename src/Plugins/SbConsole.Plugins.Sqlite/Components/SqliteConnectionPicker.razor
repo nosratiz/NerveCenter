@@ -7,7 +7,7 @@
    stay shareable, matching RedisConnectionDatabasePicker minus the database axis. *@
 @if (!_loaded)
 {
-    <MudProgressCircular Class="picker-loading" Size="Size.Small" Indeterminate="true" />
+    <MudProgressCircular Class="sqlite-picker-loading" Size="Size.Small" Indeterminate="true" />
 }
 else if (_connections.Count == 0)
 {
@@ -44,7 +44,7 @@ else
 
     @if (Loading)
     {
-        <MudProgressCircular Class="page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        <MudProgressCircular Class="sqlite-page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
     }
 }
 

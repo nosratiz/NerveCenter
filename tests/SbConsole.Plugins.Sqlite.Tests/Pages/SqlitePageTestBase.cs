@@ -40,6 +40,7 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         ]);
         Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns(Secret);
 
+        Services.AddKeyedSingleton<IPluginStore>(SqlitePlugin.PluginId, Store);
         Services.AddSingleton<TimeProvider>(Time);
         Services.AddSingleton(Connections);
         Services.AddSingleton(new GetOverviewQueryHandler(Operations, Connections, NullLogger<GetOverviewQueryHandler>.Instance));

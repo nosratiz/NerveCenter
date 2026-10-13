@@ -60,4 +60,92 @@ public class SqliteConnectionPickerTests : SqlitePageTestBase
         published.Should().BeEmpty();
         cut.Find(".sqlite-no-connections").TextContent.Should().Contain("No SQLite connections yet");
     }
+
+    private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderPickerWithPopovers(List<ConnectionInfo> published) =>
+        RenderWithPopovers(builder =>
+        {
+            builder.OpenComponent<SqliteConnectionPicker>(0);
+            builder.AddAttribute(1, nameof(SqliteConnectionPicker.SelectionChanged), EventCallback.Factory.Create<ConnectionInfo>(this, published.Add));
+            builder.CloseComponent();
+        });
+
+    private static async Task SelectSecondAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        await SettleAsync(cut);
+        await cut.FindAll(".sqlite-connection-option")[1].ClickAsync(new());
+    }
+
+    [Fact]
+    public async Task Selecting_another_connection_publishes_it_and_updates_the_url()
+    {
+        TwoConnections();
+        var published = new List<ConnectionInfo>();
+        var cut = RenderPickerWithPopovers(published);
+
+        await SelectSecondAsync(cut);
+
+        published.Last().Id.Should().Be(_secondId);
+        Services.GetRequiredService<NavigationManager>().Uri.Should().Contain($"connectionId={_secondId}");
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000001")]
+    public void An_unknown_or_invalid_connection_id_falls_back_to_the_first_connection(string value)
+    {
+        TwoConnections();
+        Services.GetRequiredService<NavigationManager>().NavigateTo($"/p/sqlite/overview?connectionId={value}");
+        var published = new List<ConnectionInfo>();
+
+        RenderPicker(published);
+
+        published.Should().ContainSingle().Which.Id.Should().Be(ConnectionId);
+    }
+
+    [Fact]
+    public async Task Other_query_parameters_survive_a_selection()
+    {
+        TwoConnections();
+        Services.GetRequiredService<NavigationManager>().NavigateTo($"/p/sqlite/tables?connectionId={ConnectionId}&table=events");
+        var cut = RenderPickerWithPopovers([]);
+
+        await SelectSecondAsync(cut);
+
+        var uri = Services.GetRequiredService<NavigationManager>().Uri;
+        uri.Should().Contain("table=events").And.Contain($"connectionId={_secondId}");
+    }
+
+    [Fact]
+    public void A_connection_without_a_file_summary_renders_no_file_chip()
+    {
+        Connections.ListAsync("sqlite", Arg.Any<CancellationToken>()).Returns(
+            [new ConnectionInfo(ConnectionId, ConnectionName, "sqlite", [])]);
+        var published = new List<ConnectionInfo>();
+
+        var cut = RenderPicker(published);
+
+        published.Should().ContainSingle();
+        cut.FindAll(".sqlite-file-chip").Should().BeEmpty();
+        cut.Find(".sqlite-selected-connection").TextContent.Should().Be(ConnectionName);
+    }
+
+    [Fact]
+    public void Re_rendering_does_not_publish_again()
+    {
+        var published = new List<ConnectionInfo>();
+        var cut = RenderPicker(published);
+
+        cut.Render();
+
+        published.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Shows_the_page_busy_spinner_while_the_page_is_loading()
+    {
+        var cut = Render<SqliteConnectionPicker>(p => p.Add(x => x.Loading, true));
+
+        cut.FindAll(".sqlite-page-busy").Should().ContainSingle();
+    }
 }
