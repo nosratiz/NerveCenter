@@ -271,4 +271,208 @@ public class TablesPageTests : SqlitePageTestBase
         cut.WaitForElement(".sqlite-tables-error");
         cut.Find(".sqlite-tables-error").TextContent.Should().Contain("The file is not a valid or healthy SQLite database.");
     }
+
+    // A stand-in for a running COUNT(*): only completes when told to, or when its token is cancelled.
+    private static async Task<long> HeldCountAsync(CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var registration = ct.Register(() => tcs.TrySetCanceled(ct));
+        return await tcs.Task;
+    }
+
+    private void SetupScratchOnly()
+    {
+        Operations.GetTableDetailAsync(SecretB, "scratch_only", Arg.Any<CancellationToken>()).Returns(new TableDetail(
+            "scratch_only", SchemaObjectType.Table, "CREATE TABLE scratch_only(id INTEGER)", false, null,
+            [new ColumnInfo("id", "INTEGER", true, null, 0, false, false)], [], []));
+        Operations.SampleColumnsAsync(SecretB, "scratch_only", ColumnSample.DefaultSampleRows, Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<ColumnSample>());
+    }
+
+    private IRenderedComponent<Bunit.Rendering.ContainerFragment> RenderWithPicker() =>
+        RenderWithPopovers(builder =>
+        {
+            builder.OpenComponent<SbConsole.Plugins.Sqlite.Pages.Tables>(0);
+            builder.CloseComponent();
+        });
+
+    private static async Task SelectSecondAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        cut.WaitForAssertion(() => cut.FindAll(".sqlite-connection-option").Should().HaveCount(2));
+        _ = cut.FindAll(".sqlite-connection-option")[1].ClickAsync(new());
+    }
+
+    [Fact]
+    public void Count_exactly_can_be_cancelled_and_offered_again()
+    {
+        Operations.CountRowsAsync(Secret, "events", Arg.Any<CancellationToken>()).Returns(ci => HeldCountAsync(ci.ArgAt<CancellationToken>(2)));
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-table-count").Click();
+        cut.WaitForElement(".sqlite-table-count-cancel").Click();
+
+        cut.WaitForAssertion(() => cut.FindAll(".sqlite-table-count").Should().HaveCount(1));
+        cut.Find(".sqlite-table-rows").TextContent.Should().Be("41.2M rows ≈");
+        cut.FindAll(".sqlite-table-count-cancel").Should().BeEmpty();
+        cut.FindAll(".sqlite-table-count-error").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_stale_count_on_the_previous_table_does_not_break_the_new_tables_cancel()
+    {
+        var staleCount = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.CountRowsAsync(Secret, "events", Arg.Any<CancellationToken>()).Returns(_ => staleCount.Task); // ignores its token
+        Operations.CountRowsAsync(Secret, "sessions", Arg.Any<CancellationToken>()).Returns(ci => HeldCountAsync(ci.ArgAt<CancellationToken>(2)));
+        var cut = RenderPage();
+        cut.Find(".sqlite-table-count").Click();
+        cut.WaitForElement(".sqlite-table-count-cancel");
+
+        cut.Find("[data-name='sessions']").Click();
+        cut.WaitForAssertion(() => cut.Find(".sqlite-table-name").TextContent.Should().Be("sessions"));
+        cut.Find(".sqlite-table-count").Click();
+        cut.WaitForElement(".sqlite-table-count-cancel");
+
+        staleCount.SetResult(41_204_117L); // events' count finishes late, after sessions' count started
+        await Task.Delay(100); // no observable signal for the stale continuation; it only mutates private state
+        cut.Find(".sqlite-table-count-cancel").Click();
+
+        cut.WaitForAssertion(() => cut.FindAll(".sqlite-table-count").Should().HaveCount(1));
+        cut.Find(".sqlite-table-rows").TextContent.Should().NotContain("41,204,117");
+    }
+
+    [Fact]
+    public void A_count_failure_shows_the_count_error()
+    {
+        Operations.CountRowsAsync(Secret, "events", Arg.Any<CancellationToken>())
+            .Returns<Task<long>>(_ => throw new SqliteException("file is not a database", 26));
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-table-count").Click();
+
+        cut.WaitForElement(".sqlite-table-count-error").TextContent.Should().Contain("The file is not a valid or healthy SQLite database.");
+        cut.FindAll(".sqlite-table-count").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void A_failed_export_shows_the_friendly_message_and_does_not_download()
+    {
+        Operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>())
+            .Returns<Task<CsvExport>>(_ => throw new SqliteException("file is not a database", 26));
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-table-export").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".sqlite-table-export-message").TextContent.Should().Contain("The file is not a valid or healthy SQLite database."));
+        JSInterop.Invocations.Where(i => i.Identifier == "downloadFromStream").Should().BeEmpty();
+        cut.Find(".sqlite-table-export").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_js_failure_shows_the_browser_message()
+    {
+        Operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>())
+            .Returns(new CsvExport("events.csv", Encoding.UTF8.GetBytes("id\r\n1\r\n"), 1, false));
+        var module = JSInterop.SetupModule("./_content/SbConsole.Plugins.Sqlite/sqlite.js");
+        module.SetupVoid("downloadFromStream", _ => true).SetException(new Microsoft.JSInterop.JSException("boom"));
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-table-export").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".sqlite-table-export-message").TextContent.Should().Be("The browser couldn't save the file."));
+    }
+
+    [Fact]
+    public async Task A_stale_export_neither_downloads_nor_writes_a_message_after_a_table_switch()
+    {
+        var release = new TaskCompletionSource<CsvExport>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>()).Returns(_ => release.Task);
+        var module = JSInterop.SetupModule("./_content/SbConsole.Plugins.Sqlite/sqlite.js");
+        module.SetupVoid("downloadFromStream", _ => true).SetVoidResult();
+        var cut = RenderPage();
+        cut.Find(".sqlite-table-export").Click();
+
+        cut.Find("[data-name='sessions']").Click();
+        cut.WaitForAssertion(() => cut.Find(".sqlite-table-name").TextContent.Should().Be("sessions"));
+        cut.Find(".sqlite-table-export").HasAttribute("disabled").Should().BeFalse("the export flag belongs to the table that started it");
+        release.SetResult(new CsvExport("events.csv", Encoding.UTF8.GetBytes("id\r\n1\r\n"), 1, false));
+        await Task.Delay(100);
+
+        JSInterop.Invocations.Where(i => i.Identifier == "downloadFromStream").Should().BeEmpty();
+        cut.FindAll(".sqlite-table-export-message").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_late_listing_for_the_previous_connection_never_shows_under_the_new_one()
+    {
+        TwoConnections();
+        SetupScratchOnly();
+        var lateA = new TaskCompletionSource<SchemaListing>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var aContinued = new TaskCompletionSource();
+        Operations.ListSchemaAsync(Secret, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            var listing = await lateA.Task;
+            aContinued.TrySetResult();
+            return listing;
+        });
+        var releaseB = new TaskCompletionSource<SchemaListing>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.ListSchemaAsync(SecretB, Arg.Any<CancellationToken>()).Returns(_ => releaseB.Task);
+        var cut = RenderWithPicker();
+        cut.WaitForElement(".sqlite-page-busy");
+
+        await SelectSecondAsync(cut);
+        cut.WaitForAssertion(() => cut.Find(".sqlite-connection-menu").TextContent.Should().Contain("sqlite-scratch"));
+
+        lateA.SetResult(Listing);
+        await aContinued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100); // let the handler's continuation and the page's stale check run
+
+        cut.FindAll(".sqlite-tables-row").Should().BeEmpty("A's tables must not show under B");
+        cut.FindAll(".sqlite-page-busy").Should().HaveCount(1, "the busy indicator follows B's load, which is still running");
+
+        releaseB.SetResult(new SchemaListing([new SchemaObject("scratch_only", SchemaObjectType.Table, "scratch_only", 3, null)], false));
+
+        cut.WaitForAssertion(() => cut.Find(".sqlite-table-name").TextContent.Should().Be("scratch_only"));
+        cut.FindAll(".sqlite-tables-row").Select(r => r.GetAttribute("data-name")).Should().Equal("scratch_only");
+        cut.FindAll(".sqlite-page-busy").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Switching_connections_clears_the_selection_and_the_error()
+    {
+        TwoConnections();
+        var releaseB = new TaskCompletionSource<SchemaListing>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.ListSchemaAsync(SecretB, Arg.Any<CancellationToken>()).Returns(_ => releaseB.Task);
+        var cut = RenderWithPicker();
+        cut.WaitForElement("[data-name='events']");
+        cut.FindAll(".sql-is-selected").Should().HaveCount(1);
+
+        await SelectSecondAsync(cut);
+
+        cut.WaitForAssertion(() => cut.FindAll(".sql-is-selected").Should().BeEmpty());
+        cut.FindAll(".sqlite-table-name").Should().BeEmpty();
+
+        releaseB.SetException(new SqliteException("file is not a database", 26));
+        cut.WaitForElement(".sqlite-tables-error");
+        await cut.Find(".sqlite-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        cut.WaitForAssertion(() => cut.FindAll(".sqlite-connection-option").Should().HaveCount(2));
+        _ = cut.FindAll(".sqlite-connection-option")[0].ClickAsync(new());
+
+        cut.WaitForAssertion(() => cut.FindAll(".sqlite-tables-error").Should().BeEmpty());
+        cut.WaitForElement("[data-name='events']");
+    }
+
+    [Fact]
+    public void The_tabs_and_list_expose_accessibility_state()
+    {
+        var cut = RenderPage();
+
+        cut.Find(".sqlite-tables-filter").GetAttribute("aria-label").Should().Be("Filter tables");
+        cut.Find("[data-name='events']").GetAttribute("aria-current").Should().Be("true");
+        cut.Find("[data-name='sessions']").HasAttribute("aria-current").Should().BeFalse();
+        cut.Find(".sql-tabs").GetAttribute("role").Should().Be("tablist");
+        cut.Find(".sqlite-tab-columns").GetAttribute("role").Should().Be("tab");
+        cut.Find(".sqlite-tab-columns").GetAttribute("aria-selected").Should().Be("true");
+        cut.Find(".sqlite-tab-ddl").GetAttribute("aria-selected").Should().Be("false");
+    }
 }
