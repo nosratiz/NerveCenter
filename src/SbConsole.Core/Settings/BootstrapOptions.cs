@@ -9,6 +9,12 @@ public sealed record BootstrapOptions(string DbPath, byte[] DataKey, string Admi
     /// </summary>
     public IReadOnlyList<string> SqliteRoots { get; init; } = [];
 
+    /// <summary>
+    /// Optional JSON file of demo connections to create at startup if missing (SBC_DEMO_CONNECTIONS).
+    /// Null means the feature is off. Demo/dev convenience only -- see docs/design.md §16.
+    /// </summary>
+    public string? DemoConnectionsFile { get; init; }
+
     public static BootstrapOptions FromEnvironment(Func<string, string?> getEnv)
     {
         string Require(string name) =>
@@ -37,6 +43,9 @@ public sealed record BootstrapOptions(string DbPath, byte[] DataKey, string Admi
             Bind: getEnv("SBC_BIND") ?? "http://localhost:5080")
         {
             SqliteRoots = ParseRoots(getEnv("SBC_SQLITE_ROOTS")),
+            DemoConnectionsFile = getEnv("SBC_DEMO_CONNECTIONS") is { } demo && !string.IsNullOrWhiteSpace(demo)
+                ? demo.Trim()
+                : null,
         };
     }
 
@@ -46,5 +55,5 @@ public sealed record BootstrapOptions(string DbPath, byte[] DataKey, string Admi
             : value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     public override string ToString() =>
-        $"BootstrapOptions {{ DbPath = {DbPath}, DataKey = [REDACTED], AdminPassword = [REDACTED], ApiKey = [REDACTED], Bind = {Bind}, SqliteRoots = [{string.Join(";", SqliteRoots)}] }}";
+        $"BootstrapOptions {{ DbPath = {DbPath}, DataKey = [REDACTED], AdminPassword = [REDACTED], ApiKey = [REDACTED], Bind = {Bind}, SqliteRoots = [{string.Join(";", SqliteRoots)}], DemoConnectionsFile = {DemoConnectionsFile ?? "(off)"} }}";
 }

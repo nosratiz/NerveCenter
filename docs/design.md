@@ -1604,3 +1604,40 @@ pages (Overview, Tables, Query, Backups) and 16 audited actions.
   run, plus recent rows it keeps), adds `reports` / `report_runs` (`ON DELETE CASCADE`), a 0-byte
   `new.db` for the empty state, and a world-writable `backups/` for `BackupDir`. Each piece is
   created only when missing; `--force` rebuilds the two files.
+
+## 16. Opt-in demo connections (`SBC_DEMO_CONNECTIONS`) (2026-10-13)
+
+Demo and dev stacks needed every sample connection typed into the Connections form by hand after
+each volume reset (the API has no create endpoint — only `/api/v1/health`). `SBC_DEMO_CONNECTIONS`
+names a JSON file of connections the host creates at startup:
+
+```json
+[{ "name": "sqlite-shop", "kind": "sqlite", "secret": "Path=/sqlite/shop.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30;BackupDir=/sqlite/backups", "tags": ["staging"] }]
+```
+
+- **Opt-in, read once, through `BootstrapOptions`.** It stays the only env reader
+  (`DemoConnectionsFile`; blank or unset = off). Generic across plugins: `kind` is any plugin's
+  `ConnectionKind`, `secret` is that plugin's secret string exactly as its form would produce it.
+- **Create-only, idempotent.** `SeedDemoConnectionsCommandHandler` (Core, `IScopedService`) never
+  updates or deletes: an entry whose name already exists is left alone even if its kind, secret or
+  tags differ, so a user's edits to a demo connection survive restarts and a deleted one comes back
+  on the next start (delete the entry from the file, or unset the variable, to stop that). Name
+  uniqueness is the existing unique index plus the create handler's `Conflict` result, so there is
+  no separate "does it exist" read to race.
+- **Same path as the Connections page.** Each entry goes through `CreateConnectionCommandHandler`,
+  so the secret is encrypted with the data key, the plugin's `GetConnectionSummary` is stored and a
+  `connection.create` audit row is written — actor `system`, as for other non-circuit work (§15's
+  scheduler). The handler checks the kind against the registered plugins first and skips (warning)
+  an unknown one, unlike a manual create which tolerates it; a demo file naming a plugin that isn't
+  compiled in is almost certainly a mistake.
+- **Never fatal.** A missing, unreadable or non-array file logs an error and creates nothing;
+  a malformed entry (missing name/kind/secret) or a failed create is logged and skipped; startup
+  continues either way. Demo data must not be able to take the app down.
+- **Where it hooks in.** A one-shot call in `Program.cs`, inside the existing startup scope right
+  after `MigrateAsync` (and after `PluginRegistry.InitializeAll`), before the app serves requests.
+  Not a hosted service: there is nothing to run later, ordering after migration is explicit in one
+  place, and the first page load already sees the connections.
+- **Not for production secrets.** The file is plain JSON on disk; the encrypted store only protects
+  the copy in SbConsole's database. Use it for local/demo brokers and files (the compose stack mounts
+  `docker/sqlite/demo-connections.json`, which holds file paths, not credentials) — real
+  credentials go through the Connections page.
