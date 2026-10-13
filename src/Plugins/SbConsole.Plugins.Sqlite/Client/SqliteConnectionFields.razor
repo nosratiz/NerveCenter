@@ -1,0 +1,98 @@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Client/SqliteConnectionFields.razor -- mockup 1f's connection
+   form: no host, port or credentials, just a file path and a mode (design spec §4.1). *@
+@using MudBlazor
+
+<MudTextField T="string" Class="sqlite-conn-path" Label="File path" Value="_path" ValueChanged="OnPathChanged" Immediate="true"
+              HelperText="Path is resolved inside the SbConsole container — mount the volume there." />
+
+@if (_pathError is not null)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2 sqlite-conn-path-error">@_pathError</MudAlert>
+}
+
+<MudRadioGroup T="SqliteAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
+    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadOnly" Class="sqlite-conn-mode-readonly">Read-only</MudRadio>
+    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadWrite" Disabled="true" Class="sqlite-conn-mode-readwrite">Read-write — not available yet</MudRadio>
+</MudRadioGroup>
+
+<MudNumericField T="int" Class="mt-3 sqlite-conn-busy" Label="Busy timeout (ms)" Value="_busyTimeoutMs" ValueChanged="OnBusyTimeoutChanged" Min="1" Immediate="true" />
+<MudNumericField T="int" Class="mt-3 sqlite-conn-statement" Label="Statement timeout (s)" Value="_statementTimeoutS" ValueChanged="OnStatementTimeoutChanged" Min="1" Max="600" Immediate="true" />
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    [Parameter] public bool IsProd { get; set; }
+
+    private string _path = "";
+    private SqliteAccessMode _mode = SqliteAccessMode.ReadOnly;
+    private int _busyTimeoutMs = SqliteConnectionSettings.DefaultBusyTimeoutMs;
+    private int _statementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS;
+    private string? _pathError;
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips
+    // whatever this component last emitted back into InitialSecret on every parent render, and
+    // re-parsing in OnParametersSet would fight in-progress typing.
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(InitialSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = SqliteConnectionSettings.Parse(InitialSecret);
+            _path = settings.Path;
+            _mode = settings.Mode;
+            _busyTimeoutMs = settings.BusyTimeoutMs;
+            _statementTimeoutS = settings.StatementTimeoutS;
+        }
+        catch (FormatException)
+        {
+            // Unparsable initial secret: keep the defaults so the form still renders.
+        }
+    }
+
+    private Task OnPathChanged(string? value)
+    {
+        _path = value ?? "";
+        return RaiseChangedAsync();
+    }
+
+    private Task OnModeChanged(SqliteAccessMode value)
+    {
+        _mode = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task OnBusyTimeoutChanged(int value)
+    {
+        _busyTimeoutMs = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task OnStatementTimeoutChanged(int value)
+    {
+        _statementTimeoutS = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task RaiseChangedAsync()
+    {
+        // Mid-typing states (empty path, a ';', a 0 timeout) can't be formatted: skip this keystroke's
+        // SecretChanged so the last good secret stays in effect -- throwing out of a Blazor event
+        // handler would kill the circuit (same rule as RedisConnectionFields).
+        _pathError = _path.Contains(';') ? "The path can't contain ';'." : null;
+        string secret;
+        try
+        {
+            secret = new SqliteConnectionSettings(_path.Trim(), _mode, _busyTimeoutMs, _statementTimeoutS).ToSecretString();
+        }
+        catch (ArgumentException)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SecretChanged.InvokeAsync(secret);
+    }
+}

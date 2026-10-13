@@ -69,4 +69,10 @@ public class SqlitePluginTests
 
         (await plugin.TestConnectionAsync("Path=/x.db")).Should().BeSameAs(expected);
     }
+
+    [Fact]
+    public void Connection_form_is_the_sqlite_fields_component()
+    {
+        new SqlitePlugin().ConnectionFormComponentType.Should().Be(typeof(SqliteConnectionFields));
+    }
 }

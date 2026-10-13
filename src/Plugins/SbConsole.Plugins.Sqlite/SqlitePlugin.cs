@@ -20,6 +20,7 @@ public sealed class SqlitePlugin : IPlugin
     public string Version => "0.1.0";
     public string ConnectionKind => "sqlite";
     public string ConnectionKindDisplayName => "SQLite";
+    public Type? ConnectionFormComponentType => typeof(SqliteConnectionFields);
 
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [
