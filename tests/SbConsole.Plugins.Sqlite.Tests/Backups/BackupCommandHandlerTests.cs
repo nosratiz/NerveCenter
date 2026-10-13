@@ -45,7 +45,7 @@ public class BackupCommandHandlerTests
 
     private RestoreBackupCommandHandler Restore() => new(_operations, _connections, _audit, _store, _time, NullLogger<RestoreBackupCommandHandler>.Instance);
 
-    private SaveBackupPolicyCommandHandler SavePolicy() => new(_connections, _audit, _store, NullLogger<SaveBackupPolicyCommandHandler>.Instance);
+    private SaveBackupPolicyCommandHandler SavePolicy() => new(_connections, _audit, _store, _time, NullLogger<SaveBackupPolicyCommandHandler>.Instance);
 
     private Task<IReadOnlyList<BackupRecord>> History() => BackupHistoryStore.ReadAsync(_store, _connectionId);
 
@@ -449,9 +449,40 @@ public class BackupCommandHandlerTests
         var result = await SavePolicy().HandleAsync(new SaveBackupPolicyCommand(_connectionId, Target, policy));
 
         result.IsSuccess.Should().BeTrue();
-        (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(policy);
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(policy with { EnabledSince = Now });
         await _audit.Received(1).RecordAsync("sqlite.backup.policy", Target, ActionRisk.Mutating, true,
             "daily 03:15 UTC · 5d · 4w · 3m", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Enabling_a_disabled_policy_stamps_enabled_since_with_now()
+    {
+        await BackupPolicyStore.WriteAsync(_store, _connectionId, new BackupPolicy(Enabled: false, EnabledSince: Utc(2026, 1, 1)));
+
+        await SavePolicy().HandleAsync(new SaveBackupPolicyCommand(_connectionId, Target, new BackupPolicy(Enabled: true, EnabledSince: Utc(2020, 1, 1))));
+
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId))!.EnabledSince.Should().Be(Now);
+    }
+
+    [Fact]
+    public async Task Saving_an_already_enabled_policy_keeps_enabled_since()
+    {
+        var since = Utc(2026, 10, 1, 9);
+        await BackupPolicyStore.WriteAsync(_store, _connectionId, new BackupPolicy(Enabled: true, EnabledSince: since));
+
+        await SavePolicy().HandleAsync(new SaveBackupPolicyCommand(_connectionId, Target, new BackupPolicy(Enabled: true, DailyAtUtc: "04:00")));
+
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(new BackupPolicy(Enabled: true, DailyAtUtc: "04:00", EnabledSince: since));
+    }
+
+    [Fact]
+    public async Task Disabling_a_policy_clears_enabled_since()
+    {
+        await BackupPolicyStore.WriteAsync(_store, _connectionId, new BackupPolicy(Enabled: true, EnabledSince: Utc(2026, 10, 1, 9)));
+
+        await SavePolicy().HandleAsync(new SaveBackupPolicyCommand(_connectionId, Target, new BackupPolicy(Enabled: false, EnabledSince: Utc(2026, 10, 1, 9))));
+
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId))!.EnabledSince.Should().BeNull();
     }
 
     [Fact]

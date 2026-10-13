@@ -78,7 +78,7 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new PruneBackupsCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<PruneBackupsCommandHandler>.Instance));
         Services.AddSingleton(new DownloadBackupCommandHandler(Operations, Connections, Audit, Store, NullLogger<DownloadBackupCommandHandler>.Instance));
         Services.AddSingleton(new RestoreBackupCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RestoreBackupCommandHandler>.Instance));
-        Services.AddSingleton(new SaveBackupPolicyCommandHandler(Connections, Audit, Store, NullLogger<SaveBackupPolicyCommandHandler>.Instance));
+        Services.AddSingleton(new SaveBackupPolicyCommandHandler(Connections, Audit, Store, Time, NullLogger<SaveBackupPolicyCommandHandler>.Instance));
         Services.AddSingleton(new ListSavedQueriesQueryHandler(Store));
         Services.AddSingleton(new SaveQueryCommandHandler(Store, Time, NullLogger<SaveQueryCommandHandler>.Instance));
         Services.AddSingleton(new DeleteSavedQueryCommandHandler(Store, NullLogger<DeleteSavedQueryCommandHandler>.Instance));

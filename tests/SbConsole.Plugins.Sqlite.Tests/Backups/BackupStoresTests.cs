@@ -80,7 +80,24 @@ public class BackupStoresTests
 
         (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(policy);
         _store.Values.Keys.Should().Equal($"backup-policy:{_connectionId}");
-        BackupPolicy.Default.Should().Be(new BackupPolicy(false, "02:00", 7, 4, 3));
+        BackupPolicy.Default.Should().Be(new BackupPolicy(false, "02:00", 7, 4, 3));    }
+
+    [Fact]
+    public async Task A_policy_stored_before_enabled_since_existed_still_reads()
+    {
+        _store.Values[BackupPolicyStore.Key(_connectionId)] = """{"Enabled":true,"DailyAtUtc":"02:00","KeepDaily":7,"KeepWeekly":4,"KeepMonthly":3}""";
+
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(new BackupPolicy(Enabled: true));
+    }
+
+    [Fact]
+    public async Task Enabled_since_round_trips()
+    {
+        var policy = new BackupPolicy(Enabled: true, EnabledSince: new DateTimeOffset(2026, 10, 13, 9, 40, 0, TimeSpan.Zero));
+
+        await BackupPolicyStore.WriteAsync(_store, _connectionId, policy);
+
+        (await BackupPolicyStore.ReadAsync(_store, _connectionId)).Should().Be(policy);
     }
 
     [Theory]

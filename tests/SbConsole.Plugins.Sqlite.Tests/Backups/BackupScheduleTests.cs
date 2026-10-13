@@ -82,6 +82,22 @@ public class BackupScheduleTests
     }
 
     [Fact]
+    public void Slots_before_the_policy_was_enabled_are_not_missed()
+    {
+        var now = Utc(2026, 10, 13, 12);
+
+        BackupSchedule.MissedSlots(Daily with { EnabledSince = Utc(2026, 10, 13, 11) }, [], now).Should().Be(0);
+        BackupSchedule.MissedSlots(Daily with { EnabledSince = Utc(2026, 10, 11, 1) }, [], now).Should().Be(3);
+        BackupSchedule.MissedSlots(Daily with { EnabledSince = Utc(2026, 10, 11, 2) }, [], now).Should().Be(3);
+    }
+
+    [Fact]
+    public void An_old_stored_policy_without_enabled_since_counts_all_seven_days()
+    {
+        BackupSchedule.MissedSlots(Daily with { EnabledSince = null }, [], Utc(2026, 10, 13, 12)).Should().Be(7);
+    }
+
+    [Fact]
     public void Hours_since_the_last_success_ignore_failures()
     {
         var now = Utc(2026, 10, 13, 12);

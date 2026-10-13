@@ -413,9 +413,9 @@ public class BackupsPageTests : SqlitePageTestBase
         cut.Find(".sqlite-schedule-save").Click();
 
         cut.WaitForAssertion(() => cut.FindAll(".sqlite-schedule-dialog").Should().BeEmpty());
-        (await BackupPolicyStore.ReadAsync(Store, ConnectionId)).Should().Be(new BackupPolicy(true, "03:30", 10, 2, 6));
+        (await BackupPolicyStore.ReadAsync(Store, ConnectionId)).Should().Be(new BackupPolicy(true, "03:30", 10, 2, 6, Time.GetUtcNow()));
         cut.Find(".sqlite-backups-retention-value").TextContent.Should().Be("10d · 2w · 6m");
-        cut.Find(".sqlite-backups-last").TextContent.Should().Contain("policy: daily 03:30 UTC");
+        cut.Find(".sqlite-backups-last").TextContent.Should().Contain("policy: daily 03:30 UTC").And.NotContain("missed");
         await Audit.Received(1).RecordAsync("sqlite.backup.policy", ConnectionName, ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 

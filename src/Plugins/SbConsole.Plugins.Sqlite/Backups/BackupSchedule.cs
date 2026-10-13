@@ -46,8 +46,9 @@ public static class BackupSchedule
     }
 
     /// <summary>
-    /// Slots in the last MissedSlotDays days (at least MissedGrace old) with no successful backup --
-    /// of any trigger -- in the 24 hours from the slot. 0 without an active policy.
+    /// Slots in the last MissedSlotDays days (at least MissedGrace old, and not before the policy's
+    /// EnabledSince when it has one) with no successful backup -- of any trigger -- in the 24 hours
+    /// from the slot. 0 without an active policy.
     /// </summary>
     public static int MissedSlots(BackupPolicy? policy, IReadOnlyList<BackupRecord> history, DateTimeOffset nowUtc)
     {
@@ -61,7 +62,7 @@ public static class BackupSchedule
         for (var i = 0; i < MissedSlotDays; i++)
         {
             var slot = today.AddDays(-i);
-            if (slot + MissedGrace > nowUtc)
+            if (slot + MissedGrace > nowUtc || slot < policy!.EnabledSince)
             {
                 continue;
             }

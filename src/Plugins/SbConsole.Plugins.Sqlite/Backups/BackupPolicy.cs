@@ -5,14 +5,17 @@ namespace SbConsole.Plugins.Sqlite.Backups;
 /// <summary>
 /// A connection's backup schedule and retention (design spec §11.7): one backup a day at
 /// DailyAtUtc ("HH:mm", UTC), grandfather-father-son retention over KeepDaily days, KeepWeekly ISO
-/// weeks and KeepMonthly months. Disabled by default.
+/// weeks and KeepMonthly months. Disabled by default. EnabledSince is when the schedule was last
+/// switched on (set by the save handler, null while disabled and in policies stored before it
+/// existed) so "missed N" doesn't count slots from before then.
 /// </summary>
 public sealed record BackupPolicy(
     bool Enabled = false,
     string DailyAtUtc = BackupPolicy.DefaultDailyAtUtc,
     int KeepDaily = 7,
     int KeepWeekly = 4,
-    int KeepMonthly = 3)
+    int KeepMonthly = 3,
+    DateTimeOffset? EnabledSince = null)
 {
     public const string DefaultDailyAtUtc = "02:00";
 

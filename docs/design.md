@@ -1570,7 +1570,10 @@ pages (Overview, Tables, Query, Backups) and 16 audited actions.
   minute off `TimeProvider`, with a public `TickAsync(now)` for tests. Per connection with a
   backup dir and an enabled policy, once today's `DailyAtUtc` slot has passed and no scheduled
   record exists at/after it: back up, verify, prune — the policy is the consent, so the scheduler
-  prunes without confirmation. There is no signed-in user in a background scope, so `EfAuditScope`
+  prunes without confirmation. The policy carries `EnabledSince` (stamped by the save handler when
+  it is switched on, cleared when switched off) so "missed N" never counts slots from before the
+  schedule existed; policies stored before the field read it as null and count all 7 days. There is
+  no signed-in user in a background scope, so `EfAuditScope`
   now records actor `system` there instead of throwing; the history record says `system` too.
 - **Growth sampling.** `growth:<connectionId>` holds file-size samples (≤ 1 per hour, 30-day
   retention) taken by the scheduler tick and by every Overview load — the only write a query
@@ -1593,8 +1596,6 @@ pages (Overview, Tables, Query, Backups) and 16 audited actions.
   - *Download streams through the circuit.* The file goes to the browser via
     `DotNetStreamReference` over the SignalR connection (no plugin download endpoint) — fine at demo
     sizes; the UI says so over 1 GB.
-  - *Missed-slot count can't know when the policy was enabled.* "missed N" counts the last 7 daily
-    slots without a successful backup, including days before the schedule was switched on.
   - *Schema "N objects differ"* needs the backup's per-object fingerprints, which only a fresh
     verify returns (history stores just the overall fingerprint), so the detail panel says
     "identical" / "differs" from history and counts objects after **Verify again**.

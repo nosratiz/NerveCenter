@@ -535,7 +535,9 @@ copied, tables failed. The live file is never modified. Prod → typed confirm f
   Tables, RowsApprox, SchemaFingerprint, VerifiedAt}`, newest first, capped at 200 records.
 - **Schedule…** (`SaveBackupPolicyCommandHandler`, Mutating, audited `sqlite.backup.policy`):
   per connection in `backup-policy:<connectionId>`: `{Enabled, DailyAtUtc ("HH:mm"), KeepDaily 7,
-  KeepWeekly 4, KeepMonthly 3}`.
+  KeepWeekly 4, KeepMonthly 3, EnabledSince}`. `EnabledSince` is set by the handler: now when the
+  policy goes from disabled/absent to enabled, kept while it stays enabled, cleared when disabled;
+  "missed N" ignores slots before it (policies stored without it count all 7 days).
 - **Scheduler** `SqliteBackupScheduler : BackgroundService` (hand-registered with
   `AddHostedService` in the plugin's `ConfigureServices`), ticks every minute (`TimeProvider`),
   public `TickAsync(now)` for tests. For each SQLite connection with a backup dir and an enabled
@@ -574,8 +576,8 @@ copied, tables failed. The live file is never modified. Prod → typed confirm f
   `SQLITE_FULL` (13, "disk is full") and prune would remove files, offer **Prune N and retry**.
   `FriendlySqliteError` maps 13 to "The disk or volume is full."
 - Header meta: "target <dir> · N kept · <total size>". Tiles: Last successful (age, policy,
-  missed slots in the last 7 days), Method (VACUUM INTO · online · compacts on the way out),
-  Verified (ok / total), Retention (`7d · 4w · 3m` · next prune removes N).
+  missed slots in the last 7 days since the policy was enabled), Method (VACUUM INTO · online ·
+  compacts on the way out), Verified (ok / total), Retention (`7d · 4w · 3m` · next prune removes N).
 - **Nav badge** on Backups: hours since the last successful backup when a policy is enabled and
   it is older than 26 h (`GetNavBadgeAsync`); none otherwise.
 
