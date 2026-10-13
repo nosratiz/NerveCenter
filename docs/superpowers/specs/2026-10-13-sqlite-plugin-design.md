@@ -519,8 +519,8 @@ copied, tables failed. The live file is never modified. Prod → typed confirm f
 
 - **Backup directory** is a new optional secret key `BackupDir=` ("Enable backups to" in the
   connection form). It must pass `IHostPathPolicy` like the file itself (so it lives under
-  `SBC_SQLITE_ROOTS`) and must not be the live file's own directory... it may be; files are named
-  `<base>-<yyyyMMdd-HHmmss>.db`. No backup dir → the Backups page explains how to enable it.
+  `SBC_SQLITE_ROOTS` — strictly inside a root: the policy refuses a root itself) and may be the
+  live file's own directory; files are named `<base>-<yyyyMMdd-HHmmss>.db`. No backup dir → the Backups page explains how to enable it.
 - **Back up now** (`RunBackupCommandHandler`, Safe, audited `sqlite.backup.create`, optional
   note): `VACUUM INTO @path` on a read-only, **not** attach-limited plugin-owned connection, under
   a 30-minute timeout (not the statement timeout). Then verify (below). History record stored

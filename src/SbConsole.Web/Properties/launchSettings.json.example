@@ -13,7 +13,7 @@
         "SBC_ADMIN_PASSWORD": "<dev admin password>",
         "SBC_API_KEY": "<dev api key>",
         "SBC_BIND": "http://localhost:5249",
-        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md>"
+        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md; its backups/ subfolder is the demo connections' BackupDir (Enable backups to)>"
       }
     },
     "https": {
@@ -28,7 +28,7 @@
         "SBC_ADMIN_PASSWORD": "<dev admin password>",
         "SBC_API_KEY": "<dev api key>",
         "SBC_BIND": "https://localhost:7018;http://localhost:5249",
-        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md>"
+        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md; its backups/ subfolder is the demo connections' BackupDir (Enable backups to)>"
       }
     }
   }

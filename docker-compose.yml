@@ -284,9 +284,11 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------------------
-  # SQLite demo file (profile: sqlite). One-shot: builds reports.db in the sqlite-demo volume,
+  # SQLite demo files (profile: sqlite). One-shot: builds reports.db, an empty new.db and a writable
+  # backups/ directory (the demo connections' BackupDir, /sqlite/backups) in the sqlite-demo volume,
   # which the app profile mounts at /sqlite with SBC_SQLITE_ROOTS=/sqlite. Deliberately not /data:
-  # that holds SbConsole's own database and data-protection keys.
+  # that holds SbConsole's own database and data-protection keys. Idempotent; rebuild with
+  #   docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite
   # ---------------------------------------------------------------------------------------
   sqlite-init:
     image: python:3.12-alpine

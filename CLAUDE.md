@@ -9,7 +9,7 @@ SbConsole: a team-hosted Blazor web app that acts as a **plugin host platform**.
 encrypted secrets, settings, audit log, plugin storage. Plugins provide domain features:
 `SbConsole.Plugins.ServiceBus` (Azure Service Bus), `SbConsole.Plugins.Kafka` (Apache Kafka),
 `SbConsole.Plugins.Aws` (AWS SQS/SNS), `SbConsole.Plugins.RabbitMq` (RabbitMQ), `SbConsole.Plugins.Redis` (Redis) and
-`SbConsole.Plugins.Sqlite` (SQLite files, read-only).
+`SbConsole.Plugins.Sqlite` (SQLite files: read-only browsing and queries, opt-in write mode, backups and restore).
 Full architecture and decision history: [docs/design.md](docs/design.md) — read it before making
 any non-trivial change; it documents *why* things are shaped the way they are, not just what
 exists.
@@ -41,7 +41,7 @@ Local dev stack (brokers the plugins talk to — see [docker/README.md](docker/R
 docker compose up -d                              # Kafka (KRaft, seeded topics) + Kafka UI
 docker compose --profile servicebus up -d         # + Azure Service Bus emulator (SQL Server-backed)
 docker compose --profile rabbitmq up -d           # + RabbitMQ 3.13 (management + shovel), seeded vhost /orders, AMQP on 5673
-docker compose --profile sqlite --profile app up -d --build   # + SQLite demo file at /sqlite (SBC_SQLITE_ROOTS)
+docker compose --profile sqlite --profile app up -d --build   # + SQLite demo files + backups/ at /sqlite (SBC_SQLITE_ROOTS)
 docker compose --profile app up -d --build        # SbConsole itself, containerized (needs .env, see .env.example)
 docker compose --profile servicebus --profile app down -v   # full reset, drops volumes
 ```

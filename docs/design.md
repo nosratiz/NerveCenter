@@ -1526,3 +1526,78 @@ browser; write mode / Query (phase 2) and backups (phase 3) follow.
 - **Local dev stack.** `docker/sqlite/seed.py` builds a ~35 MB `reports.db`; the compose `sqlite`
   profile runs it into the `sqlite-demo` volume, which the app container mounts at `/sqlite` with
   `SBC_SQLITE_ROOTS=/sqlite` (not `/data`, which holds SbConsole's own database and keys).
+
+### 15.1 SQLite phases 2 and 3 — Query, write mode, DDL, repair, backups (2026-10-13)
+
+Spec §11 of `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md`. The plugin now has four
+pages (Overview, Tables, Query, Backups) and 16 audited actions.
+
+- **ATTACH is impossible from user SQL.** Every connection that runs user-supplied SQL (Query,
+  write mode, Create table) sets `SQLITE_LIMIT_ATTACHED = 0` right after open. Without it,
+  `ATTACH '/any/file'` or `VACUUM INTO '/any/path'` would walk straight past `IHostPathPolicy`
+  (`VACUUM INTO` even works on a read-only connection — verified against the bundled
+  `e_sqlite3`). The script splitter also refuses `ATTACH`/`DETACH`/`VACUUM` and transaction control
+  up front, so the message is friendly rather than "too many attached databases". Plugin-owned
+  connections that need `VACUUM INTO` (backups, restore's pre-restore copy) skip the limit and never
+  run user SQL.
+- **Write-mode model.** Read-only is the default everywhere, including the Query page on a
+  read-write connection. Writing needs `Mode=ReadWrite` in the saved secret (re-read by the
+  operations; the page's switch is only a convenience), opens with `SqliteOpenMode.ReadWrite`
+  (never `ReadWriteCreate` — a missing file is never created), and on a prod-tagged connection
+  asks for the typed name twice: to enter write mode and before running.
+- **Dry run as the rollback.** "Run in transaction" is disabled until a dry run of the *same text*:
+  `BEGIN IMMEDIATE`, every statement, per-statement `changes()` and the `total_changes()` delta,
+  then always `ROLLBACK`. It is the real statement, so it works for any DML/DDL and resolves
+  trigger and FK-cascade rows (`total − direct`) that a `COUNT(*)` rewrite would miss; the cost
+  (the work is done twice) is stated in the UI. The dry run is a query: nothing durable changes,
+  so it writes no audit row. The run itself is one `BEGIN IMMEDIATE … COMMIT`; any error rolls back.
+- **Backup / restore model.** A backup is `VACUUM INTO <BackupDir>/<base>-<yyyyMMdd-HHmmss>.db` on
+  a read-only connection (writers keep going; the copy is compacted), then verified
+  (`integrity_check`, SHA-256, tables, rows ≈, schema fingerprint). `BackupDir` is per connection
+  ("Enable backups to"), passes the same path policy as the file — inside a root, never a root
+  itself, may be the live file's own directory — and is never created by the plugin. History lives
+  in `IPluginStore` (`backups:<connectionId>`, newest first, capped at 200) and keeps failed rows
+  too, because a failure nobody sees is the expensive kind. Restore needs a read-write connection
+  and a typed confirm on prod: verify the backup → `VACUUM INTO` a `<file>.pre-restore-<stamp>` copy
+  next to the live file → online backup API into the live file (writers blocked for the copy, WAL
+  handled by SQLite) → integrity check of the result. Retention is grandfather-father-son over
+  successful backups (newest per UTC day / ISO week / month; the newest success is always kept),
+  and only files named in the history, re-checked inside `BackupDir`, are ever deleted.
+- **Scheduler and the background actor.** `SqliteBackupScheduler` is a hand-registered
+  `BackgroundService` (the one thing in the plugin the markers can't register) ticking every
+  minute off `TimeProvider`, with a public `TickAsync(now)` for tests. Per connection with a
+  backup dir and an enabled policy, once today's `DailyAtUtc` slot has passed and no scheduled
+  record exists at/after it: back up, verify, prune — the policy is the consent, so the scheduler
+  prunes without confirmation. There is no signed-in user in a background scope, so `EfAuditScope`
+  now records actor `system` there instead of throwing; the history record says `system` too.
+- **Growth sampling.** `growth:<connectionId>` holds file-size samples (≤ 1 per hour, 30-day
+  retention) taken by the scheduler tick and by every Overview load — the only write a query
+  handler makes, to the plugin's own store, so it isn't audited. The Overview's "Growth — 30 days"
+  card shows first → last, delta, per-day rate, an inline SVG sparkline (stroke from the palette
+  via CSS) and "~N days at this rate" from `DriveInfo` of the file's volume. The Last backup tile
+  and the growth card load beside table sizes, after the tiles, so the tiles never wait.
+- **Query on a backup.** Backups "Open read-only" links to `/p/sqlite/query?backup=<file name>`;
+  Run / Explain / Export open that file inside the connection's `BackupDir` (bare names only,
+  policy-checked) and write mode is unavailable. No temporary host connection is created — the SDK
+  has no seam for one.
+- **Known limitations.**
+  - *No Backups nav badge.* §11.7 wanted "hours since the last successful backup"; the SDK's
+    `GetNavBadgeAsync` hook receives only `(href, secret)` — no connection id, no `IPluginStore` —
+    so the history can't be read there. The dashboard's "Backup overdue" / "Last backup failed"
+    problems carry the signal instead.
+  - *Salvage is best-effort, not `.recover`.* `sqlite3_recover` is a CLI extension that the bundled
+    build doesn't ship, so "Recover into new file" copies DDL and then rows one at a time, skipping
+    what errors, into a new file in `BackupDir`; it never touches the live file.
+  - *Download streams through the circuit.* The file goes to the browser via
+    `DotNetStreamReference` over the SignalR connection (no plugin download endpoint) — fine at demo
+    sizes; the UI says so over 1 GB.
+  - *Missed-slot count can't know when the policy was enabled.* "missed N" counts the last 7 daily
+    slots without a successful backup, including days before the schedule was switched on.
+  - *Schema "N objects differ"* needs the backup's per-object fingerprints, which only a fresh
+    verify returns (history stores just the overall fingerprint), so the detail panel says
+    "identical" / "differs" from history and counts objects after **Verify again**.
+- **Demo seed.** `docker/sqlite/seed.py` timestamps events from ~13 months ago up to the moment it
+  runs (so the mockup's 90-day retention `DELETE` always has old rows of the churned tenant to dry
+  run, plus recent rows it keeps), adds `reports` / `report_runs` (`ON DELETE CASCADE`), a 0-byte
+  `new.db` for the empty state, and a world-writable `backups/` for `BackupDir`. Each piece is
+  created only when missing; `--force` rebuilds the two files.

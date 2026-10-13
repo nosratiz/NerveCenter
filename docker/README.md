@@ -409,16 +409,52 @@ SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
 
 ## SQLite
 
-SQLite is a file, not a server, so there's no broker container — just a one-shot seed that writes a
-~35 MB demo file shaped like the plugin mockups (tenants / sessions / events with JSON props, a
-WITHOUT ROWID table, two views, a trigger, `ANALYZE` stats and some free pages).
+SQLite is a file, not a server, so there's no broker container — just a one-shot seed
+(`docker/sqlite/seed.py`) that writes, into one directory:
 
-- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. The file
+| File | What it is for |
+|---|---|
+| `reports.db` | ~35 MB demo file shaped like the plugin mockups: tenants / users / sessions / events with JSON props and unix-ms timestamps from ~13 months ago up to the moment the seed ran, a WITHOUT ROWID `event_props` table, `reports` / `report_runs` (`ON DELETE CASCADE`), two views, a trigger, `ANALYZE` stats and some free pages. Tenant `umbrella` is churned (last activity ~60 days before seeding), so the retention script below has rows to dry-run and cascades to show. |
+| `new.db` | A 0-byte file — SQLite opens it as an empty database (the Tables page's empty state, mockup 1g). |
+| `backups/` | World-writable directory for the connections' **Enable backups to** (Backups page). |
+
+The seed is idempotent: each piece is created only when missing. `--force` deletes and rebuilds
+`reports.db` and `new.db` (never `backups/`) — needed once if your volume predates the
+`reports` tables or the "up to now" timestamps.
+
+- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. Everything
   lands in the `sqlite-demo` volume, mounted at `/sqlite`, and the app gets `SBC_SQLITE_ROOTS=/sqlite`.
-  Add a connection of kind *SQLite* with file path `/sqlite/reports.db`.
-- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo`, then set
-  `SBC_SQLITE_ROOTS` in `launchSettings.json` to the absolute path of `.sqlite-demo` and use
-  `<that path>/reports.db` as the connection's file path.
+  Rebuild with `docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite`.
+- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo` (add `--force` to rebuild),
+  then set `SBC_SQLITE_ROOTS` in `launchSettings.json` to the absolute path of `.sqlite-demo` and use
+  `<that path>/…` below instead of `/sqlite/…`.
+
+Suggested connections (kind *SQLite*; paths as seen inside the container):
+
+| Name | File path | Default mode | Enable backups to | Tags |
+|---|---|---|---|---|
+| `sqlite-reports` | `/sqlite/reports.db` | Read-write | `/sqlite/backups` | `prod` |
+| `sqlite-new` | `/sqlite/new.db` | Read-write | — | |
+
+`sqlite-reports` with the `prod` tag exercises the typed confirmations (write mode, Run in
+transaction, Drop table, Prune, Restore). A retention dry run to paste into the Query page in
+write mode (it cascades into `event_props`):
+
+```sql
+DELETE FROM events
+WHERE ts < (strftime('%s','now','-90 days')*1000)
+  AND tenant_id IN (SELECT id FROM tenants WHERE status='churned');
+```
+
+**Backups.** `BackupDir` ("Enable backups to") must pass the same path policy as the file: it has
+to be *inside* an `SBC_SQLITE_ROOTS` root (a root itself is refused) and may be the live file's own
+directory; it must already exist and be writable by the app's user — the seed's `backups/` is.
+Copies are `VACUUM INTO` files named `<base>-<yyyyMMdd-HHmmss>.db`; a restore keeps the replaced
+file next to the live one as `<file>.pre-restore-<yyyyMMdd-HHmmss>` (in `/sqlite`, also writable).
+The daily schedule runs inside the app (a background service), so nothing is backed up while it is
+down; growth samples for the Overview's "Growth — 30 days" card accumulate the same way (at most
+one an hour), so a fresh install shows "collecting" for its first hour. Download streams the file
+through the browser session — fine at demo sizes; fetch multi-GB copies from the volume directly.
 
 `SBC_SQLITE_ROOTS` is fail-closed: unset means no SQLite connection can open anything. Paths are
 resolved (`..` collapsed, every symlink followed) before the check, and SbConsole's own database and
