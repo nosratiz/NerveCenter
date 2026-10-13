@@ -1,5 +1,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SbConsole.Sdk;
 using SQLitePCL;
 
@@ -10,8 +12,10 @@ namespace SbConsole.Plugins.Sqlite.Client;
 /// *resolved* path read-only with pooling off, set busy_timeout, run the work under the statement
 /// timeout, close. Design spec §4.2.
 /// </summary>
-public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy) : ISqliteOperations, ISingletonService
+public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger<SqliteOperations>? logger = null) : ISqliteOperations, ISingletonService
 {
+    private readonly ILogger<SqliteOperations> _logger = logger ?? NullLogger<SqliteOperations>.Instance;
+
     public async Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default)
     {
         SqliteConnectionSettings settings;
@@ -48,6 +52,7 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy) : ISqli
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _logger.LogError(ex, "SQLite connection test failed for {Path}", path.ResolvedPath);
             var message = FriendlySqliteError.From(ex);
             checks.Add(new ConnectionCheck("File opened", ConnectionCheckStatus.Failed, message));
             return new ConnectionTestResult(false, message, null, checks);
@@ -74,12 +79,27 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy) : ISqli
 
         // Verified 2026-10-13 (Microsoft.Data.Sqlite 10.0.12): a token passed to the provider, or
         // SqliteCommand.Cancel(), does NOT stop a running statement. sqlite3_interrupt does, with
-        // SQLITE_INTERRUPT. Disposing the registration waits for an in-flight callback, so the
-        // handle is never interrupted after the connection is gone.
+        // SQLITE_INTERRUPT. But an interrupt that lands while no statement is running is cleared when
+        // the next statement starts, and a linked token fires only once, so the interrupt alone can be
+        // lost (cancel during Open/PRAGMA, or a timeout between two statements of `work`). Two
+        // backstops: a progress handler that aborts every statement while the token is cancelled
+        // (also SQLITE_INTERRUPT), and a token check before `work` starts.
+        // Disposing the registration waits for an in-flight callback, so the handle is never
+        // interrupted after the connection is gone. The progress handler is not cleared explicitly: it
+        // only runs while a statement executes on this connection, which can't happen after `Run`
+        // returns, and it is released when the connection is disposed. IsCancelled tolerates `linked`
+        // being disposed first (using-declarations unwind in reverse order).
+        raw.sqlite3_progress_handler(connection.Handle, 1000, _ => IsCancelled(linked) ? 1 : 0, null);
         using (linked.Token.Register(() => raw.sqlite3_interrupt(connection.Handle)))
         {
             try
             {
+                if (linked.IsCancellationRequested)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    throw new SqliteStatementTimeoutException(settings.StatementTimeoutS, null);
+                }
+
                 return work(connection);
             }
             catch (SqliteException ex) when (ex.SqliteErrorCode == raw.SQLITE_INTERRUPT)
@@ -87,6 +107,18 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy) : ISqli
                 ct.ThrowIfCancellationRequested();
                 throw new SqliteStatementTimeoutException(settings.StatementTimeoutS, ex);
             }
+        }
+    }
+
+    private static bool IsCancelled(CancellationTokenSource source)
+    {
+        try
+        {
+            return source.IsCancellationRequested;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
         }
     }
 

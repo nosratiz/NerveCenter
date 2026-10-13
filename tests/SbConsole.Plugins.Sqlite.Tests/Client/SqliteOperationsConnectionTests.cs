@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using SbConsole.Plugins.Sqlite.Client;
 using SbConsole.Sdk;
@@ -109,6 +110,57 @@ public sealed class SqliteOperationsConnectionTests : IDisposable
         var act = () => operations.RunAsync(_db.Secret(), c => SqliteSql.Long(c, Forever), cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Cancellation_that_lands_before_the_work_starts_still_stops_the_work()
+    {
+        var operations = _db.Operations();
+        using var cts = new CancellationTokenSource();
+        var stopwatch = Stopwatch.StartNew();
+
+        // The interrupt fires while the connection is idle (SQLite clears it when the next statement
+        // starts); the progress handler + pre-work check must still stop the statement.
+        var act = () => operations.RunAsync(_db.Secret(), c =>
+        {
+            cts.Cancel();
+            return SqliteSql.Long(c, Forever);
+        }, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task A_timeout_that_fires_between_two_statements_still_stops_the_second_one()
+    {
+        var operations = _db.Operations();
+        var stopwatch = Stopwatch.StartNew();
+
+        var act = () => operations.RunAsync(_db.Secret(statementTimeoutS: 1), c =>
+        {
+            SqliteSql.Long(c, "SELECT 1");
+            Thread.Sleep(1500); // the timeout interrupts an idle connection here
+            return SqliteSql.Long(c, Forever);
+        }, CancellationToken.None);
+
+        await act.Should().ThrowAsync<SqliteStatementTimeoutException>();
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task A_failed_connection_test_logs_the_full_exception()
+    {
+        var logger = Substitute.For<ILogger<SqliteOperations>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var missing = System.IO.Path.Combine(_db.Directory, "missing.db");
+        var operations = new SqliteOperations(TempDatabase.AllowingPolicy(), logger);
+
+        await operations.TestConnectionAsync(new SqliteConnectionSettings(missing).ToSecretString());
+
+        logger.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILogger.Log)
+            && (LogLevel)c.GetArguments()[0]! == LogLevel.Error
+            && c.GetArguments()[3] is SqliteException).Should().Be(1);
     }
 
     [Fact]

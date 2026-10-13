@@ -4,7 +4,7 @@ namespace SbConsole.Plugins.Sqlite.Client;
 public sealed class SqlitePathRefusedException(string reason) : Exception(reason);
 
 /// <summary>The statement ran past the connection's StatementTimeoutS and was interrupted.</summary>
-public sealed class SqliteStatementTimeoutException(int seconds, Exception inner)
+public sealed class SqliteStatementTimeoutException(int seconds, Exception? inner = null)
     : Exception($"Statement exceeded the {seconds} s statement timeout.", inner);
 
 /// <summary>A table/view name that isn't (or is no longer) in sqlite_schema.</summary>
