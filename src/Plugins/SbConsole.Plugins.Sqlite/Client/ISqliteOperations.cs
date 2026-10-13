@@ -19,4 +19,10 @@ public interface ISqliteOperations
     Task<SchemaListing> ListSchemaAsync(string secret, CancellationToken ct = default);
 
     Task<TableDetail> GetTableDetailAsync(string secret, string name, CancellationToken ct = default);
+
+    Task<IReadOnlyList<ColumnSample>> SampleColumnsAsync(string secret, string name, int sampleRows, CancellationToken ct = default);
+
+    Task<RowPage> PreviewRowsAsync(string secret, string name, int limit, CancellationToken ct = default);
+
+    Task<long> CountRowsAsync(string secret, string name, CancellationToken ct = default);
 }
