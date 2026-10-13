@@ -1,5 +1,7 @@
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.Sqlite.Client;
+using SbConsole.Plugins.Sqlite.Overview;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Sqlite;
@@ -61,4 +63,52 @@ public sealed class SqlitePlugin : IPlugin
 
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
+
+    internal const double FreePagesProblemPercent = 20.0;
+
+    // One per connection, so the host's same-label summing reads as "N databases" (design spec §8).
+    public Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginDashboardMetric>>([new PluginDashboardMetric("Databases", 1)]);
+
+    public Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
+        Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
+        _operations is null
+            ? Task.FromResult<IReadOnlyList<PluginDashboardProblem>>([])
+            : ComputeProblemsAsync(_operations, connectionId, connectionString, store, ct);
+
+    /// <summary>
+    /// Error when the last stored integrity check failed; Warning for FK violations it found, and
+    /// for a file that's at least FreePagesProblemPercent free pages. An unreadable file throws --
+    /// the host already reports unreachable connections on its own.
+    /// </summary>
+    internal static async Task<IReadOnlyList<PluginDashboardProblem>> ComputeProblemsAsync(
+        ISqliteOperations operations, Guid connectionId, string secret, IPluginStore store, CancellationToken ct)
+    {
+        var problems = new List<PluginDashboardProblem>();
+        var integrity = await IntegrityResultStore.ReadAsync(store, connectionId, ct);
+        if (integrity is { IntegrityOk: false })
+        {
+            var n = integrity.Messages.Count;
+            problems.Add(new PluginDashboardProblem("Error", "Integrity check failed",
+                $"{n} {(n == 1 ? "problem" : "problems")} found by the check started {integrity.RanAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC",
+                OverviewHref));
+        }
+
+        if (integrity is { ForeignKeyViolations: > 0 })
+        {
+            var v = integrity.ForeignKeyViolations;
+            problems.Add(new PluginDashboardProblem("Warning", "Foreign key violations",
+                v == 1 ? "1 row violates a foreign key" : $"{SqliteFormat.Count(v)} rows violate a foreign key", OverviewHref));
+        }
+
+        var overview = await operations.GetOverviewAsync(secret, ct);
+        if (overview.PageCount > 0 && overview.FreePercent >= FreePagesProblemPercent)
+        {
+            problems.Add(new PluginDashboardProblem("Warning",
+                $"{overview.FreePercent.ToString("0", CultureInfo.InvariantCulture)}% free pages",
+                $"VACUUM would reclaim {SqliteFormat.Bytes(overview.FreeBytes)}", OverviewHref));
+        }
+
+        return problems;
+    }
 }
