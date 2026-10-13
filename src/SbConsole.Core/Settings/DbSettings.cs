@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using SbConsole.Core.Data;
 using SbConsole.Core.Data.Entities;
+using SbConsole.Sdk;
 
 namespace SbConsole.Core.Settings;
 
-public sealed class DbSettings(IDbContextFactory<SbcDbContext> dbFactory) : ISettings
+public sealed class DbSettings(IDbContextFactory<SbcDbContext> dbFactory) : ISettings, ISingletonService
 {
     public async Task<string?> GetAsync(string key, CancellationToken ct = default)
     {

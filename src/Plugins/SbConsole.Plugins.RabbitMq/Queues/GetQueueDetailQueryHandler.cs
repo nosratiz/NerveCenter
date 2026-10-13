@@ -11,7 +11,7 @@ public sealed record QueueDetailSnapshot(QueueDetails Detail, IReadOnlyList<Queu
 /// Succeeds with a null snapshot when the queue itself doesn't exist (a 404 from the queue read
 /// specifically); a 404 from any of the topology reads is an ordinary failure.
 /// </summary>
-public sealed class GetQueueDetailQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<GetQueueDetailQueryHandler> logger)
+public sealed class GetQueueDetailQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<GetQueueDetailQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<QueueDetailSnapshot?>> HandleAsync(Guid connectionId, string vhost, string queue, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync<QueueDetailSnapshot?>(connections, logger, connectionId, "Loading queue detail", async secret =>

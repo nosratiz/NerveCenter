@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Rules;
 
-public sealed class ListSubscriptionRulesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListSubscriptionRulesQueryHandler> logger)
+public sealed class ListSubscriptionRulesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListSubscriptionRulesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<RuleSummary>>> HandleAsync(Guid connectionId, string topicName, string subscriptionName, CancellationToken ct = default)
     {

@@ -13,7 +13,7 @@ public sealed record DeadLetterOverviewEntry(Guid ConnectionId, string Connectio
 /// the whole point is "show me everything, best effort" -- a connection whose secret is missing or
 /// whose Azure call throws is skipped and logged, never fatal to the rest of the page.
 /// </summary>
-public sealed class ListDeadLetterOverviewQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListDeadLetterOverviewQueryHandler> logger)
+public sealed class ListDeadLetterOverviewQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<ListDeadLetterOverviewQueryHandler> logger) : IScopedService
 {
     public async Task<IReadOnlyList<DeadLetterOverviewEntry>> HandleAsync(CancellationToken ct = default)
     {

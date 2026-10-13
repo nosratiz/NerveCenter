@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record AddSortedSetMemberCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Member, double Score);
 
 public sealed class AddSortedSetMemberCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddSortedSetMemberCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddSortedSetMemberCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(AddSortedSetMemberCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

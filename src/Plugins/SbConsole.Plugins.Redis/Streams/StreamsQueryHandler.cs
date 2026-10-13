@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Redis.Streams;
 
 /// <summary>The Streams page's single read-side handler -- same shape as KeysQueryHandler (design spec §9): one method per read shape, all thin HandlerRunner.QueryAsync wrappers, never auditing (queries never write).</summary>
 public sealed class StreamsQueryHandler(
-    IRedisOperations operations, IConnectionProvider connections, ILogger<StreamsQueryHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, ILogger<StreamsQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<StreamScanPage>> ScanAsync(Guid connectionId, ScanStreamsRequest request, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.stream.scan",

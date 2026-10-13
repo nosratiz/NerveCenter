@@ -17,7 +17,7 @@ public sealed record AuditQuery(
 
 public sealed record AuditPage(IReadOnlyList<AuditEntry> Entries, int TotalCount);
 
-public sealed class ListAuditEntriesQueryHandler(IDbContextFactory<SbcDbContext> dbFactory)
+public sealed class ListAuditEntriesQueryHandler(IDbContextFactory<SbcDbContext> dbFactory) : IScopedService
 {
     public async Task<AuditPage> HandleAsync(AuditQuery query, CancellationToken ct = default)
     {

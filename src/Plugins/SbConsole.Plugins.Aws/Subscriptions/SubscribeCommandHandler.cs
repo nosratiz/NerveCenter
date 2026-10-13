@@ -8,7 +8,7 @@ public sealed record SubscribeCommand(Guid ConnectionId, string ConnectionName, 
 
 /// <summary>Also used for "Resend" on a pending subscription -- calling this again with the same
 /// topic/protocol/endpoint is the only mechanism AWS exposes for redelivering a confirmation.</summary>
-public sealed class SubscribeCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SubscribeCommandHandler> logger)
+public sealed class SubscribeCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SubscribeCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<string>> HandleAsync(SubscribeCommand cmd, CancellationToken ct = default)
     {

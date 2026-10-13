@@ -17,7 +17,7 @@ public sealed class CreateConnectionCommandHandler(
     ISecretProtector protector,
     IAuditWriter audit,
     TimeProvider clock,
-    IEnumerable<IPlugin> plugins)
+    IEnumerable<IPlugin> plugins) : IScopedService
 {
     public async Task<Result<Guid>> HandleAsync(CreateConnectionCommand cmd, CancellationToken ct = default)
     {

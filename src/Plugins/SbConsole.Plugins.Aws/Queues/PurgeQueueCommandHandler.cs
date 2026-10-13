@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Queues;
 
 public sealed record PurgeQueueCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName);
 
-public sealed class PurgeQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeQueueCommandHandler> logger)
+public sealed class PurgeQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PurgeQueueCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(PurgeQueueCommand cmd, CancellationToken ct = default)
     {

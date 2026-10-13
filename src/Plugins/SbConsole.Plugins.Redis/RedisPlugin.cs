@@ -11,6 +11,7 @@ public sealed class RedisPlugin : IPlugin
 {
     public string Id => "redis";
     public string DisplayName => "Redis";
+    public string? Monogram => "RD";
     public string Version => "0.1.0";
     public string ConnectionKind => "redis";
     public string ConnectionKindDisplayName => "Redis";
@@ -55,38 +56,7 @@ public sealed class RedisPlugin : IPlugin
 
     public void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<IRedisOperations, RedisOperations>();
-        services.AddScoped<Overview.GetOverviewQueryHandler>();
-        services.AddScoped<Overview.GetMemoryByPrefixQueryHandler>();
-        services.AddScoped<Overview.GetSlowLogQueryHandler>();
-        services.AddScoped<Keys.KeysQueryHandler>();
-        services.AddScoped<Keys.DeleteKeyCommandHandler>();
-        services.AddScoped<Keys.RenameKeyCommandHandler>();
-        services.AddScoped<Keys.SetTtlCommandHandler>();
-        services.AddScoped<Keys.DeleteByPatternCommandHandler>();
-        services.AddScoped<Keys.SetStringCommandHandler>();
-        services.AddScoped<Keys.SetHashFieldCommandHandler>();
-        services.AddScoped<Keys.DeleteHashFieldCommandHandler>();
-        services.AddScoped<Keys.PushListCommandHandler>();
-        services.AddScoped<Keys.TrimListCommandHandler>();
-        services.AddScoped<Keys.AddSortedSetMemberCommandHandler>();
-        services.AddScoped<Keys.IncrementSortedSetScoreCommandHandler>();
-        services.AddScoped<Keys.AddSetMemberCommandHandler>();
-        services.AddScoped<Keys.RemoveSetMemberCommandHandler>();
-        services.AddScoped<Keys.RevealHashFieldCommandHandler>();
-        services.AddScoped<Streams.StreamsQueryHandler>();
-        services.AddScoped<Streams.AddStreamEntryCommandHandler>();
-        services.AddScoped<Streams.TrimStreamCommandHandler>();
-        services.AddScoped<Streams.AcknowledgeStreamEntriesCommandHandler>();
-        services.AddScoped<Streams.ClaimStreamEntriesCommandHandler>();
-        services.AddScoped<Streams.DeleteStreamEntriesCommandHandler>();
-        services.AddScoped<Streams.DeleteStreamConsumerCommandHandler>();
-        services.AddScoped<Keys.FlushDatabaseCommandHandler>();
-        services.AddScoped<Acl.AclQueryHandler>();
-        services.AddScoped<PubSub.PubSubQueryHandler>();
-        services.AddScoped<PubSub.SubscribeToChannelCommandHandler>();
-        services.AddScoped<PubSub.PublishMessageCommandHandler>();
-        // A new handler must be added here or its page fails to render at runtime.
+        services.AddMarkedServices(typeof(RedisPlugin).Assembly);
     }
 
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>

@@ -5,7 +5,7 @@ using SbConsole.Sdk;
 namespace SbConsole.Plugins.Redis.Overview;
 
 public sealed class GetMemoryByPrefixQueryHandler(
-    IRedisOperations operations, IConnectionProvider connections, ILogger<GetMemoryByPrefixQueryHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, ILogger<GetMemoryByPrefixQueryHandler> logger) : IScopedService
 {
     private const char Delimiter = ':';
     private const int SampleSize = 5000;

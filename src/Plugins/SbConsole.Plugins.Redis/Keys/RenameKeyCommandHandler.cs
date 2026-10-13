@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record RenameKeyCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string NewKey);
 
 public sealed class RenameKeyCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RenameKeyCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RenameKeyCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(RenameKeyCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

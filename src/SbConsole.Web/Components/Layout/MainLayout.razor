@@ -6,25 +6,13 @@
     <MudDialogProvider />
     <MudSnackbarProvider />
 
-    <MudLayout>
-        <MudAppBar Elevation="0">
-            <MudIconButton Class="drawer-toggle" Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" OnClick="ToggleDrawer" />
-            <MudText Typo="Typo.h6" Class="ml-2">SbConsole</MudText>
-        </MudAppBar>
-        <MudDrawer Variant="DrawerVariant.Mini" Open="_drawerOpen" OpenChanged="@(open => _drawerOpen = open)" Elevation="0">
-            <NavMenu />
-        </MudDrawer>
-        <MudMainContent Class="page-content">
+    @* A plain flex shell rather than MudLayout/MudAppBar/MudDrawer: the icon-rail navigation
+       (mockup "SbConsole Navigation" 1a) carries the logo and its own collapse toggle, so there is
+       no top app bar, and NavMenu owns both of its columns' widths. *@
+    <div class="app-shell">
+        <NavMenu />
+        <main class="page-content">
             @Body
-        </MudMainContent>
-    </MudLayout>
+        </main>
+    </div>
 </ThemedRoot>
-
-@code {
-    // Mini variant (not the default Responsive/Temporary one): closing it shrinks the drawer to
-    // an icon-only rail rather than hiding it entirely, so navigation is always reachable while
-    // giving the user back the horizontal space when they want it -- a toggle, not a hide/show.
-    private bool _drawerOpen = true;
-
-    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
-}

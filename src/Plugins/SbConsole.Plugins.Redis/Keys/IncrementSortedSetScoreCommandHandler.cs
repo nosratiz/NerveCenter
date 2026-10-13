@@ -9,7 +9,7 @@ public sealed record IncrementSortedSetScoreCommand(Guid ConnectionId, string Co
 
 /// <summary>Non-standard shape: the caller needs the new score back, so this writes its own audit row instead of using HandlerRunner.CommandAsync's no-return-value Func.</summary>
 public sealed class IncrementSortedSetScoreCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<IncrementSortedSetScoreCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<IncrementSortedSetScoreCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<double>> HandleAsync(IncrementSortedSetScoreCommand cmd, CancellationToken ct = default)
     {

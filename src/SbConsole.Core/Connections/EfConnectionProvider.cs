@@ -7,7 +7,7 @@ namespace SbConsole.Core.Connections;
 
 public sealed class EfConnectionProvider(
     IDbContextFactory<SbcDbContext> dbFactory,
-    ISecretProtector protector) : IConnectionProvider
+    ISecretProtector protector) : IConnectionProvider, ISingletonService
 {
     public async Task<IReadOnlyList<ConnectionInfo>> ListAsync(string kind, CancellationToken ct = default)
     {

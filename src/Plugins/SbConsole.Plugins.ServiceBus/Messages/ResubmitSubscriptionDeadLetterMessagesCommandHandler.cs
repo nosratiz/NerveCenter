@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Messages;
 
 public sealed record ResubmitSubscriptionDeadLetterMessagesCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, IReadOnlyList<long> SequenceNumbers);
 
-public sealed class ResubmitSubscriptionDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ResubmitSubscriptionDeadLetterMessagesCommandHandler> logger)
+public sealed class ResubmitSubscriptionDeadLetterMessagesCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ResubmitSubscriptionDeadLetterMessagesCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<int>> HandleAsync(ResubmitSubscriptionDeadLetterMessagesCommand cmd, CancellationToken ct = default)
     {

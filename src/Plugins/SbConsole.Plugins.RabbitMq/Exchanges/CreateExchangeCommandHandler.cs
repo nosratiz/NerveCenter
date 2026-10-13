@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Exchanges;
 
 public sealed record CreateExchangeCommand(Guid ConnectionId, string ConnectionName, string Vhost, CreateExchangeRequest Request);
 
-public sealed class CreateExchangeCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateExchangeCommandHandler> logger)
+public sealed class CreateExchangeCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateExchangeCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(CreateExchangeCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Exchanges;
 
 public sealed record DeleteExchangeCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Exchange);
 
-public sealed class DeleteExchangeCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteExchangeCommandHandler> logger)
+public sealed class DeleteExchangeCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteExchangeCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteExchangeCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

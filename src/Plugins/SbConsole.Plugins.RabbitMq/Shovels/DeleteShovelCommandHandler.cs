@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Shovels;
 
 public sealed record DeleteShovelCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Name);
 
-public sealed class DeleteShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteShovelCommandHandler> logger)
+public sealed class DeleteShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteShovelCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteShovelCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

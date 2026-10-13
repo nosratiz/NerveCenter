@@ -1,7 +1,6 @@
-/* .page-content's rules live in wwwroot/app.css, not here: MudMainContent doesn't forward the
-   Blazor CSS-isolation scope attribute onto its own rendered root element, so a scoped rule in
-   this file would target [class="mud-main-content page-content"][b-xxxxx] and silently never
-   match the real (unscoped) element. */
+/* .page-content and the nav shell's rules live in wwwroot/app.css, not here: most of the nav's
+   elements are rendered by child components (NavLink, MudIcon) that don't carry this file's
+   CSS-isolation scope attribute. */
 
 #blazor-error-ui {
     color-scheme: light only;

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Queues;
 
 public sealed record CreateQueueCommand(Guid ConnectionId, string ConnectionName, CreateQueueRequest Request);
 
-public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger)
+public sealed class CreateQueueCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateQueueCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<string>> HandleAsync(CreateQueueCommand cmd, CancellationToken ct = default)
     {

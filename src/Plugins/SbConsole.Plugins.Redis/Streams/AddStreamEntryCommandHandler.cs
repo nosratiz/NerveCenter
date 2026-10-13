@@ -12,7 +12,7 @@ public sealed record AddStreamEntryCommand(Guid ConnectionId, string ConnectionN
 /// AuditQuietlyAsync flow instead of HandlerRunner.CommandAsync.
 /// </summary>
 public sealed class AddStreamEntryCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddStreamEntryCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddStreamEntryCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<string>> HandleAsync(AddStreamEntryCommand cmd, CancellationToken ct = default)
     {

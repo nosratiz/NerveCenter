@@ -11,7 +11,7 @@ namespace SbConsole.Plugins.RabbitMq.Client;
 /// InvalidOperationException before any network traffic. Stateless and thread-safe; registered as
 /// a singleton.
 /// </summary>
-public sealed class RabbitOperations : IRabbitOperations
+public sealed class RabbitOperations : IRabbitOperations, ISingletonService
 {
     private readonly ManagementApiClient _management;
     private readonly AmqpClient _amqp;

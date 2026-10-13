@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Core.Audit;
 using SbConsole.Core.Connections;
 using SbConsole.Core.Plugins;
+using SbConsole.Web.Plugins;
 
 namespace SbConsole.Web.Tests;
 
@@ -101,6 +102,38 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         sp.GetRequiredService<UpdateConnectionCommandHandler>();
         sp.GetRequiredService<ListAuditEntriesQueryHandler>();
         sp.GetRequiredService<ListPluginsQueryHandler>();
+    }
+
+    /// <summary>
+    /// Registration is by lifetime marker (IScopedService etc.) rather than a hand-written line per
+    /// handler, so the failure mode moves from "forgot the AddScoped line" to "forgot the marker".
+    /// This sweeps every *QueryHandler / *CommandHandler in Core and in every registered plugin
+    /// assembly and resolves each from the real container, so either mistake fails here.
+    /// </summary>
+    [Fact]
+    public void Every_handler_in_core_and_every_plugin_resolves_from_the_real_root_service_provider()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        var assemblies = sp.GetRequiredService<PluginRegistry>().Plugins
+            .Select(p => p.GetType().Assembly)
+            .Append(typeof(CreateConnectionCommandHandler).Assembly)
+            .Distinct()
+            .ToList();
+        assemblies.Should().HaveCountGreaterThan(5, "Core plus the five compiled-in plugins");
+
+        var handlerTypes = assemblies.SelectMany(a => a.GetTypes())
+            .Where(t => t is { IsPublic: true, IsClass: true, IsAbstract: false }
+                && (t.Name.EndsWith("QueryHandler", StringComparison.Ordinal) || t.Name.EndsWith("CommandHandler", StringComparison.Ordinal)))
+            .ToList();
+
+        handlerTypes.Should().HaveCountGreaterThan(100);
+        foreach (var type in handlerTypes)
+        {
+            sp.GetService(type).Should().NotBeNull($"{type.FullName} must be registered (is it missing IScopedService?)");
+        }
     }
 
     /// <summary>

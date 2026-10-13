@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Topics;
 
 public sealed record DeleteTopicCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string TopicName);
 
-public sealed class DeleteTopicCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteTopicCommandHandler> logger)
+public sealed class DeleteTopicCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteTopicCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteTopicCommand cmd, CancellationToken ct = default)
     {

@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record AddSetMemberCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Member);
 
 public sealed class AddSetMemberCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddSetMemberCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddSetMemberCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(AddSetMemberCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kafka.Messages;
 
-public sealed class PeekMessagesQueryHandler(IKafkaOperations operations, IConnectionProvider connections, ILogger<PeekMessagesQueryHandler> logger)
+public sealed class PeekMessagesQueryHandler(IKafkaOperations operations, IConnectionProvider connections, ILogger<PeekMessagesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<PeekResult>> HandleAsync(
         Guid connectionId, string topicName, int partition, PeekStart start, long? offset, int maxMessages = 32, CancellationToken ct = default)

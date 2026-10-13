@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Messages;
 
 public sealed record ReleaseMessageCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName, string ReceiptHandle);
 
-public sealed class ReleaseMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReleaseMessageCommandHandler> logger)
+public sealed class ReleaseMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReleaseMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(ReleaseMessageCommand cmd, CancellationToken ct = default)
     {

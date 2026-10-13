@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Topics;
 
 public sealed record PublishCommand(Guid ConnectionId, string ConnectionName, string TopicName, string TopicArn, SnsPublishRequest Request);
 
-public sealed class PublishCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishCommandHandler> logger)
+public sealed class PublishCommandHandler(ISnsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(PublishCommand cmd, CancellationToken ct = default)
     {

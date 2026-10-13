@@ -5,7 +5,7 @@ using StackExchange.Redis;
 
 namespace SbConsole.Plugins.Redis.Client;
 
-public sealed class RedisOperations : IRedisOperations
+public sealed class RedisOperations : IRedisOperations, ISingletonService
 {
     // UNLINK in batches of 500 (design spec §5) -- non-blocking on large values, unlike DEL.
     private const int DeleteByPatternBatchSize = 500;

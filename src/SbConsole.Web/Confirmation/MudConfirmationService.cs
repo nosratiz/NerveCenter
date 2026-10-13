@@ -5,7 +5,7 @@ using SbConsole.Web.Components.Shared;
 
 namespace SbConsole.Web.Confirmation;
 
-public sealed class MudConfirmationService(IDialogService dialogService, ISettings settings) : IConfirmationService
+public sealed class MudConfirmationService(IDialogService dialogService, ISettings settings) : IConfirmationService, IScopedService
 {
     public async Task<bool> ConfirmAsync(string verb, string target, bool isProd, int? count = null, CancellationToken ct = default)
     {

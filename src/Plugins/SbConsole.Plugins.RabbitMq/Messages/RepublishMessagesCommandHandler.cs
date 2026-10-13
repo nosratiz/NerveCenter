@@ -14,7 +14,7 @@ public sealed record RepublishResult(int Routed, int Unroutable);
 /// exception, and writes ONE audit row for the batch (a per-message row would bury the log).
 /// Label says which UI action it was ("requeue" or "republish").
 /// </summary>
-public sealed class RepublishMessagesCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RepublishMessagesCommandHandler> logger)
+public sealed class RepublishMessagesCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<RepublishMessagesCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<RepublishResult>> HandleAsync(RepublishMessagesCommand cmd, CancellationToken ct = default)
     {

@@ -8,7 +8,7 @@ public sealed record StartRedriveCommand(
     Guid ConnectionId, string ConnectionName, string SourceQueueArn, string SourceQueueName,
     string DestinationQueueArn, int? MaxMessagesPerSecond);
 
-public sealed class StartRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<StartRedriveCommandHandler> logger)
+public sealed class StartRedriveCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<StartRedriveCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(StartRedriveCommand cmd, CancellationToken ct = default)
     {

@@ -13,6 +13,7 @@ public sealed class AwsPlugin : IPlugin
 {
     public string Id => "aws";
     public string DisplayName => "AWS SQS/SNS";
+    public string? Monogram => "AW";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [
@@ -42,35 +43,7 @@ public sealed class AwsPlugin : IPlugin
     // MediatR). A new handler must be added here or its page fails to render at runtime.
     public void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<ISqsOperations, SqsOperations>();
-        services.AddSingleton<ISnsOperations, SnsOperations>();
-        services.AddScoped<ListQueuesQueryHandler>();
-        services.AddScoped<GetQueueDetailQueryHandler>();
-        services.AddScoped<ListQueueSnsSubscriptionsQueryHandler>();
-        services.AddScoped<ListTopicsQueryHandler>();
-        services.AddScoped<CreateTopicCommandHandler>();
-        services.AddScoped<DeleteTopicCommandHandler>();
-        services.AddScoped<ListSubscriptionsQueryHandler>();
-        services.AddScoped<SubscribeCommandHandler>();
-        services.AddScoped<UnsubscribeCommandHandler>();
-        services.AddScoped<SetFilterPolicyCommandHandler>();
-        services.AddScoped<PublishCommandHandler>();
-        services.AddScoped<GetSubscriptionFilterPoliciesQueryHandler>();
-        services.AddScoped<GetTopicDeliveryFailureCountQueryHandler>();
-        services.AddScoped<GetTopicDeliveryLogsQueryHandler>();
-        services.AddScoped<GetTopicAttributesQueryHandler>();
-        services.AddScoped<GetConnectionEchoQueryHandler>();
-        services.AddScoped<Queues.DeleteQueueCommandHandler>();
-        services.AddScoped<Queues.CreateQueueCommandHandler>();
-        services.AddScoped<Queues.PurgeQueueCommandHandler>();
-        services.AddScoped<Messages.ReceiveMessagesCommandHandler>();
-        services.AddScoped<Messages.DeleteMessageCommandHandler>();
-        services.AddScoped<Messages.ReleaseMessageCommandHandler>();
-        services.AddScoped<Messages.SendMessageCommandHandler>();
-        services.AddScoped<Messages.MoveMessageToSourceCommandHandler>();
-        services.AddScoped<Redrive.StartRedriveCommandHandler>();
-        services.AddScoped<Redrive.ListRedriveTasksQueryHandler>();
-        services.AddScoped<Redrive.CancelRedriveCommandHandler>();
+        services.AddMarkedServices(typeof(AwsPlugin).Assembly);
     }
 
     // Plugins are constructed via a parameterless new() (AddSbConsolePlugin<TPlugin>()'s `new()`

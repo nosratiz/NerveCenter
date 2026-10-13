@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Aws.Messages;
 
 public sealed record SendMessageCommand(Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName, SendMessageRequest Request);
 
-public sealed class SendMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SendMessageCommandHandler> logger)
+public sealed class SendMessageCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SendMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(SendMessageCommand cmd, CancellationToken ct = default)
     {

@@ -406,4 +406,51 @@ public class WallboardTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("Couldn't check 1 connection(s)");
     }
+
+    [Fact]
+    public async Task Snapshot_loader_checks_connections_concurrently_so_one_slow_broker_does_not_serialize_the_rest()
+    {
+        // Same idea as HomeTests' concurrency test: each connection's metrics call only completes
+        // once the OTHER's has started, so a sequential loop deadlocks and the 5s WaitAsync fails.
+        Guid a, b;
+        await using (var db = _testDb.CreateDbContext())
+        {
+            var ca = new Connection { Name = "sb-a", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            var cb = new Connection { Name = "sb-b", Kind = "azure-servicebus", SecretCiphertext = [1] };
+            db.Connections.AddRange(ca, cb);
+            await db.SaveChangesAsync();
+            (a, b) = (ca.Id, cb.Id);
+        }
+
+        _connectionProvider.GetSecretAsync(a, Arg.Any<CancellationToken>()).Returns("secret-a");
+        _connectionProvider.GetSecretAsync(b, Arg.Any<CancellationToken>()).Returns("secret-b");
+
+        var aStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns("azure-servicebus");
+        plugin.ConnectionKind.Returns("azure-servicebus");
+        plugin.GetDashboardMetricsAsync("secret-a", Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            aStarted.TrySetResult();
+            await bStarted.Task;
+            return (IReadOnlyList<PluginDashboardMetric>)[new("Dead-lettered", 1)];
+        });
+        plugin.GetDashboardMetricsAsync("secret-b", Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            bStarted.TrySetResult();
+            await aStarted.Task;
+            return (IReadOnlyList<PluginDashboardMetric>)[new("Dead-lettered", 2)];
+        });
+        plugin.GetResourceMetricsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginResourceMetric>());
+        _plugins = [plugin];
+
+        var snapshot = await Services.GetRequiredService<WallboardSnapshotLoader>().LoadAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        snapshot.UncheckedConnections.Should().BeEmpty();
+        snapshot.DeadLetterTotal.Should().Be(3);
+        snapshot.NamespaceBacklog.Select(n => n.Connection.Name).Should().Equal("sb-b", "sb-a");
+    }
 }

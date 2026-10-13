@@ -8,7 +8,7 @@ public sealed record FlushDatabaseCommand(Guid ConnectionId, string ConnectionNa
 
 /// <summary>FLUSHDB -- Destructive: wipes every key in the selected database (design spec §12/§14, deferred from phase 1).</summary>
 public sealed class FlushDatabaseCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<FlushDatabaseCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<FlushDatabaseCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(FlushDatabaseCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -5,7 +5,7 @@ using SbConsole.Sdk;
 namespace SbConsole.Plugins.Aws.Subscriptions;
 
 /// <summary>SNS subscriptions (any topic) delivering to the given queue ARN -- the queue detail page's SNS panel.</summary>
-public sealed class ListQueueSnsSubscriptionsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListQueueSnsSubscriptionsQueryHandler> logger)
+public sealed class ListQueueSnsSubscriptionsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListQueueSnsSubscriptionsQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<EndpointSubscriptions>> HandleAsync(Guid connectionId, string queueArn, CancellationToken ct = default)
     {

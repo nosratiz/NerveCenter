@@ -33,20 +33,22 @@ public class KafkaPluginTests
         result.ErrorMessage.Should().NotBeNullOrWhiteSpace();
     }
 
-    // No real-broker smoke test for GetDashboardProblemsAsync (unlike TestConnectionAsync above):
-    // verified empirically that Confluent.Kafka's ADMIN ASYNC API family (IAdminClient.
-    // ListConsumerGroupsAsync/DescribeConsumerGroupsAsync/ListConsumerGroupOffsetsAsync -- what
-    // ConfluentKafkaOperations.ListConsumerGroupsAsync, Task 2, calls under the hood) crashes the
-    // process outright (SIGABRT/SIGSEGV on IAdminClient.Dispose or shortly after) on this
-    // environment (macOS arm64, .NET 10, Confluent.Kafka 2.15.1), regardless of whether the call
-    // succeeds or fails and regardless of the target address -- reproduced in a bare Confluent.Kafka
-    // console app with zero SbConsole code involved, so this is a native-library/platform issue, not
-    // something fixable here. TestConnectionAsync is unaffected because it only calls the
-    // synchronous IAdminClient.GetMetadata. This also matches ServiceBusPlugin's own test suite,
-    // which likewise has no real-broker smoke test for its GetDashboardProblemsAsync override --
-    // only GetDashboardProblemsAsync's pure selection logic (HasHighLag below) needs unit coverage;
-    // the thin ListConsumerGroupsAsync-then-Where/Select composition around it mirrors
-    // GetDashboardMetricsAsync above, which likewise has no dedicated test.
+    // Regression test for a whole-process crash: ConfluentKafkaOperations.ListConsumerGroupsAsync
+    // used to call IAdminClient.ListConsumerGroupsAsync, which SIGSEGV/SIGABRTs the process on
+    // macOS arm64 / .NET 10 / Confluent.Kafka 2.15.1 (reproduced in a bare console app with zero
+    // SbConsole code). The nav badge and the Dashboard call it on every render, so one stopped Kafka
+    // broker took the entire console down. It now uses the synchronous IAdminClient.ListGroups, so an
+    // unreachable cluster must surface as an ordinary exception the host can catch -- if this test
+    // regresses, the test host itself crashes rather than failing politely.
+    [Fact]
+    public async Task Consumer_group_badge_against_an_unreachable_cluster_throws_instead_of_crashing_the_process()
+    {
+        var plugin = new KafkaPlugin();
+
+        var act = () => plugin.GetNavBadgeAsync("/p/kafka/consumer-groups", "bootstrap.servers=127.0.0.1:1");
+
+        await act.Should().ThrowAsync<Confluent.Kafka.KafkaException>();
+    }
 
     [Fact]
     public async Task GetNavBadgeAsync_returns_null_for_an_unrelated_nav_href()

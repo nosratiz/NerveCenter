@@ -12,7 +12,7 @@ public sealed record PublishMessageCommand(Guid ConnectionId, string ConnectionN
 /// for the snackbar, not just success/failure.
 /// </summary>
 public sealed class PublishMessageCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishMessageCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<PublishMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<long>> HandleAsync(PublishMessageCommand cmd, CancellationToken ct = default)
     {

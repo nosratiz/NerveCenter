@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.RabbitMq.Messages;
 public sealed record ConsumeMessagesCommand(Guid ConnectionId, string ConnectionName, string Vhost, string Queue, int Count);
 
 /// <summary>basic.get + ack: every message read is removed from the queue. Destructive and audited.</summary>
-public sealed class ConsumeMessagesCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ConsumeMessagesCommandHandler> logger)
+public sealed class ConsumeMessagesCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ConsumeMessagesCommandHandler> logger) : IScopedService
 {
     private const string Action = "rabbitmq.message.consume";
 

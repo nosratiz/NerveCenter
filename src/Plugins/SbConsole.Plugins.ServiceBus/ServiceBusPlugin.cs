@@ -8,6 +8,7 @@ public sealed class ServiceBusPlugin : IPlugin
 {
     public string Id => "azure-servicebus";
     public string DisplayName => "Azure Service Bus";
+    public string? Monogram => "SB";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [
@@ -27,27 +28,7 @@ public sealed class ServiceBusPlugin : IPlugin
 
     public void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<IServiceBusOperations, AzureServiceBusOperations>();
-        services.AddScoped<Queues.ListQueuesQueryHandler>();
-        services.AddScoped<Queues.CreateQueueCommandHandler>();
-        services.AddScoped<Queues.DeleteQueueCommandHandler>();
-        services.AddScoped<Messages.PeekMessagesQueryHandler>();
-        services.AddScoped<Messages.SendMessageCommandHandler>();
-        services.AddScoped<Messages.ResubmitDeadLetterMessagesCommandHandler>();
-        services.AddScoped<Messages.PurgeDeadLetterMessagesCommandHandler>();
-        services.AddScoped<Topics.ListTopicsQueryHandler>();
-        services.AddScoped<Topics.CreateTopicCommandHandler>();
-        services.AddScoped<Topics.DeleteTopicCommandHandler>();
-        services.AddScoped<Subscriptions.CreateSubscriptionCommandHandler>();
-        services.AddScoped<Subscriptions.DeleteSubscriptionCommandHandler>();
-        services.AddScoped<Messages.PeekSubscriptionMessagesQueryHandler>();
-        services.AddScoped<Messages.ResubmitSubscriptionDeadLetterMessagesCommandHandler>();
-        services.AddScoped<Messages.PurgeSubscriptionDeadLetterMessagesCommandHandler>();
-        services.AddScoped<DeadLetter.ListDeadLetterOverviewQueryHandler>();
-        services.AddScoped<Rules.ListSubscriptionRulesQueryHandler>();
-        services.AddScoped<Rules.CreateRuleCommandHandler>();
-        services.AddScoped<Rules.DeleteRuleCommandHandler>();
-        services.AddScoped<Rules.EditRuleCommandHandler>();
+        services.AddMarkedServices(typeof(ServiceBusPlugin).Assembly);
     }
 
     private const string DeadLetterNavHref = "/p/azure-servicebus/dead-letter";

@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record SetTtlCommand(Guid ConnectionId, string ConnectionName, SetTtlRequest Request);
 
 public sealed class SetTtlCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetTtlCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetTtlCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(SetTtlCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

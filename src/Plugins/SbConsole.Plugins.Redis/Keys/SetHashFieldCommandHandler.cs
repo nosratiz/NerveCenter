@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.Redis.Keys;
 public sealed record SetHashFieldCommand(Guid ConnectionId, string ConnectionName, int Database, string Key, string Field, string Value);
 
 public sealed class SetHashFieldCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetHashFieldCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SetHashFieldCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(SetHashFieldCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

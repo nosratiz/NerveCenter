@@ -17,7 +17,7 @@ public sealed class UpdateConnectionCommandHandler(
     ISecretProtector protector,
     IAuditWriter audit,
     TimeProvider clock,
-    IEnumerable<IPlugin> plugins)
+    IEnumerable<IPlugin> plugins) : IScopedService
 {
     public async Task<Result> HandleAsync(UpdateConnectionCommand cmd, CancellationToken ct = default)
     {

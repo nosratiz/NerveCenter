@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Aws.Topics;
 /// Read-only query (no audit row): recent SNS delivery-status log events for a topic, from
 /// CloudWatch Logs. Backs TopicDetail's Delivery logs tab.
 /// </summary>
-public sealed class GetTopicDeliveryLogsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetTopicDeliveryLogsQueryHandler> logger)
+public sealed class GetTopicDeliveryLogsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<GetTopicDeliveryLogsQueryHandler> logger) : IScopedService
 {
     public const int DefaultLimit = 200;
 

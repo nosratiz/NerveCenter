@@ -8,7 +8,7 @@ public sealed record EditRuleCommand(
     Guid ConnectionId, string ConnectionName, bool IsProd,
     string TopicName, string SubscriptionName, string OriginalName, CreateRuleRequest NewRule);
 
-public sealed class EditRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<EditRuleCommandHandler> logger)
+public sealed class EditRuleCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<EditRuleCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(EditRuleCommand cmd, CancellationToken ct = default)
     {

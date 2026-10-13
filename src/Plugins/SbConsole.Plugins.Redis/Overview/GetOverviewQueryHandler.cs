@@ -5,7 +5,7 @@ using SbConsole.Sdk;
 namespace SbConsole.Plugins.Redis.Overview;
 
 public sealed class GetOverviewQueryHandler(
-    IRedisOperations operations, IConnectionProvider connections, ILogger<GetOverviewQueryHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, ILogger<GetOverviewQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<ServerOverview>> HandleAsync(Guid connectionId, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "redis.overview.get",

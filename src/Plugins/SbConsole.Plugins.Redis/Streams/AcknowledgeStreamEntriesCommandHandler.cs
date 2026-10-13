@@ -9,7 +9,7 @@ public sealed record AcknowledgeStreamEntriesCommand(Guid ConnectionId, string C
 
 /// <summary>XACK -- Mutating: removes entries from the PEL, doesn't delete data (design spec §6a).</summary>
 public sealed class AcknowledgeStreamEntriesCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AcknowledgeStreamEntriesCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AcknowledgeStreamEntriesCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(AcknowledgeStreamEntriesCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

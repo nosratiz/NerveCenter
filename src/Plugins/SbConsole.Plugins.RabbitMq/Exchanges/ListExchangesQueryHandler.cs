@@ -7,7 +7,7 @@ namespace SbConsole.Plugins.RabbitMq.Exchanges;
 /// <summary>Exchanges plus the vhost's bindings (for counts) and queues (default-exchange count, DLX flags).</summary>
 public sealed record ExchangesSnapshot(IReadOnlyList<ExchangeSummary> Exchanges, IReadOnlyList<BindingInfo> Bindings, IReadOnlyList<QueueSummary> Queues);
 
-public sealed class ListExchangesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListExchangesQueryHandler> logger)
+public sealed class ListExchangesQueryHandler(IRabbitOperations operations, IConnectionProvider connections, ILogger<ListExchangesQueryHandler> logger) : IScopedService
 {
     public Task<PluginResult<ExchangesSnapshot>> HandleAsync(Guid connectionId, string vhost, CancellationToken ct = default) =>
         HandlerRunner.QueryAsync(connections, logger, connectionId, "Listing exchanges", async secret =>

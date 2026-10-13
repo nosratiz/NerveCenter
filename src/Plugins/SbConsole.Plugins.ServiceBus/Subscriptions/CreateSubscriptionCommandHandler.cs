@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Subscriptions;
 
 public sealed record CreateSubscriptionCommand(Guid ConnectionId, string ConnectionName, string TopicName, string SubscriptionName, int MaxDeliveryCount);
 
-public sealed class CreateSubscriptionCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateSubscriptionCommandHandler> logger)
+public sealed class CreateSubscriptionCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateSubscriptionCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(CreateSubscriptionCommand cmd, CancellationToken ct = default)
     {

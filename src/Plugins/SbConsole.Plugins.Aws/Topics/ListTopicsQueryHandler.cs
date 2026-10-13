@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Topics;
 
-public sealed class ListTopicsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListTopicsQueryHandler> logger)
+public sealed class ListTopicsQueryHandler(ISnsOperations operations, IConnectionProvider connections, ILogger<ListTopicsQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<TopicSummary>>> HandleAsync(Guid connectionId, CancellationToken ct = default)
     {

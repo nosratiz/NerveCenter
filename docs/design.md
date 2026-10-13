@@ -1354,3 +1354,120 @@ test-connection flow via `ConnectionEditor.razor` and the two-pane layout
 - Service Bus and Kafka adopting `ConnectionFormComponentType` or enriched
   `ConnectionTestResult` Checks (today they use the default empty form and simple
   text results). AWS stands alone as the first adopter while the shape proves out.
+
+## 12. Marker-based DI registration (2026-09-29)
+
+Every handler and service used to be registered by a hand-written line — ~130 of them
+across `Program.cs` and the five plugins' `ConfigureServices`. Forgetting one compiled fine
+and failed only at runtime, as an HTTP 500 when a page injected it (the original
+`ProgramDiRegistrationTests` bug). The Redis plugin even carried a comment warning
+about it.
+
+**Shape.** `SbConsole.Sdk` now ships three empty lifetime markers —
+`IScopedService`, `ISingletonService`, `ITransientService` — and
+`IServiceCollection.AddMarkedServices(Assembly)`, which reflects over the assembly and
+registers every concrete, non-generic class that implements exactly one marker. They
+live in the Sdk (not Core) because plugins may reference only the Sdk.
+
+**What a marked class is registered as.** Its "service interfaces" are every interface
+it implements except the markers and framework (`System.*` / `Microsoft.*`) interfaces:
+- none (every query/command handler) → registered as the class itself;
+- exactly one (e.g. `EfAuditWriter : IAuditWriter`) → registered as that interface only,
+  with `ImplementationType` set, so the descriptor is identical to the old hand-written one;
+- several → the class is registered once and each interface forwards to it, so a
+  singleton or scoped instance isn't silently duplicated per interface.
+
+A class implementing two markers throws at startup instead of picking one arbitrarily.
+
+**Where it's called.** `Program.cs` scans Core and Web. Each plugin's `ConfigureServices`
+is now one line, `services.AddMarkedServices(typeof(XxxPlugin).Assembly)`. It stays in
+the plugin, not in the host's `AddSbConsolePlugin<T>()`, so the plugin still owns what it
+registers and plugin unit tests that call `ConfigureServices` directly keep working
+unchanged.
+
+**Still registered by hand**, because they need an instance or a factory:
+`AesGcmSecretProtector` (built from the bootstrap key), `TimeProvider.System`, the
+keyed per-plugin `IPluginStore`, `PluginRegistry`, the plugins themselves, and the
+`MetricsCollectorService` hosted service.
+
+**Guard.** `ProgramDiRegistrationTests` now resolves every public `*QueryHandler` /
+`*CommandHandler` in Core and in every registered plugin assembly from the real
+`Program.cs` container. A class missing its marker fails there, not in production.
+
+## 13. Navigation: icon rail + contextual drawer (2026-09-30)
+
+**Why.** The flat sidebar listed every plugin's pages under its own section. With five
+plugins that was 20+ rows plus the console's own items, and it scrolled. Of the three
+options in the "SbConsole Navigation" mockup (1a icon rail, 1b plugin switcher, 1c
+connection-first), 1a was picked. It keeps the current routing and the plugin-as-a-unit
+model, and the rail only ever grows by one icon per plugin.
+
+**Shape.** `MainLayout` is now a plain flex shell, with no `MudAppBar` or `MudDrawer`.
+`NavMenu` renders two columns:
+- **Rail (56px):** logo, Dashboard / Connections / Audit, one monogram per plugin, then
+  `+` (Plugins). Settings and the drawer toggle sit at the bottom.
+- **Drawer (196px):** only the selected plugin's name, version and pages (with badges),
+  then its saved connections with a last-test status dot.
+
+**Which plugin the drawer shows.** It's the plugin owning the current URL (`/p/{Id}/...`).
+On a host page it keeps whichever plugin it showed last, so the drawer doesn't blank out,
+and it falls back to the first registered plugin. A badge on a plugin the drawer isn't
+showing surfaces as a dot on that plugin's rail icon.
+
+**SDK.** `IPlugin.Monogram` (optional, default null) is the rail's two-letter mark. When
+it's null the host uses the first two letters of `DisplayName`. That's the same
+default-member pattern as the other optional plugin hooks, so existing plugins need no
+change.
+
+**Loading order.** `RefreshBadgesAsync` lists every plugin's connections first, one local
+DB read each, and renders before making the badge calls. Those calls reach out to each
+broker and can take seconds when one is unreachable.
+
+**Deferred from the mockup.** The ⌘K search box needs a command palette that doesn't
+exist yet. A connection row links to `/connections` rather than switching the page's
+connection, because the plugin list pages pick their connection internally and don't read
+a `connectionId` query parameter.
+
+## 14. Dashboard: fleet-first layout (2026-09-30)
+
+**Why.** The Dashboard summed same-label metrics across every plugin into one row of
+tiles. So "Topics" was Service Bus + Kafka added together, and Redis contributed nothing
+(a percentage can't be summed). The header still read `q · t/sub · dlq`, as if only
+Service Bus existed. Problems rendered as a flat stack of alert boxes. Of the two options
+in the "SbConsole Dashboard" mockup (1a fleet-first, 1b triage-first), 1a was picked, with
+its 1c all-clear and 1d checking states.
+
+**Shape.** `Home.razor` has three regions under a 48px header. The header shows
+`N connections · P plugins · K need attention`.
+- **Fleet:** one card per registered plugin. Each card shows the plugin's monogram and
+  name, and its metrics with labels verbatim, summed only across *that plugin's*
+  connections. It also has one status dot per connection (ok / warn / bad / unchecked /
+  pending) and a problem-count pill colored by the worst severity. The card links to the
+  plugin's first page.
+- **Needs attention:** one dense triage table sorted unreachable → plugin error → plugin
+  warning → unchecked. Each row carries the plugin monogram and the connection name. An
+  unreachable connection has Retry/Edit in its row. A connection that couldn't be checked
+  gets its own row naming it, replacing the old anonymous "couldn't check N connection(s)"
+  alert. An unreachable connection is listed once, even when its plugin check also fails.
+  Severity filter chips (All / Errors / Warnings / Unchecked) narrow the list. With nothing
+  to report there's one quiet all-clear row, not a green banner.
+- **Side column:** `WallboardWidget` restyled as a condensed "Backlog" card (stats, 1h
+  sparkline with the outage rule, growth summary), then recent Activity.
+
+The namespace chips are gone; the fleet cards' dots carry that information.
+
+**Progressive checks (1d).** Checks still run concurrently. Each result is now rendered as
+soon as it lands. Still-running connections show as pending rows ("checking 3 of 12…"),
+so one slow broker no longer blanks the page behind a progress bar. A load generation
+counter drops results from a load that a Refresh or Retry has superseded.
+
+**SDK.** No contract change: `GetDashboardMetricsAsync` / `GetDashboardProblemsAsync` are
+untouched, and only their doc comments changed to describe per-plugin display. The
+monogram fallback moved from `NavMenu` to a shared `PluginMonogram.Of`, so the rail, the
+fleet cards and the triage rows agree on it.
+
+**Deferred from the mockup.** Redis still reports no dashboard metrics. Memory % needs a
+non-integer metric, and `PluginDashboardMetric.Count` is an `int`. There's also no SQLite
+plugin, and unchecked rows have no "Logs →" link because there's no logs page. The 1c
+note about when the last problem cleared needs problem history that the host doesn't
+keep.

@@ -8,7 +8,7 @@ public sealed record ReceiveMessagesCommand(
     Guid ConnectionId, string ConnectionName, string QueueUrl, string QueueName,
     int MaxMessages, int? VisibilityTimeoutSeconds, int WaitTimeSeconds);
 
-public sealed class ReceiveMessagesCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReceiveMessagesCommandHandler> logger)
+public sealed class ReceiveMessagesCommandHandler(ISqsOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ReceiveMessagesCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<ReceivedMessage>>> HandleAsync(ReceiveMessagesCommand cmd, CancellationToken ct = default)
     {

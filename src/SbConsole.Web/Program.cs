@@ -49,20 +49,12 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddDbContextFactory<SbcDbContext>(o => o.UseSqlite($"Data Source={bootstrap.DbPath}"));
 builder.Services.AddSingleton<ISecretProtector>(new AesGcmSecretProtector(bootstrap.DataKey));
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ISettings, DbSettings>();
-builder.Services.AddSingleton<IAuditWriter, EfAuditWriter>();
-builder.Services.AddScoped<IAuditScope, EfAuditScope>();
-builder.Services.AddSingleton<IPluginStoreFactory, EfPluginStoreFactory>();
-builder.Services.AddSingleton<IConnectionProvider, EfConnectionProvider>();
-builder.Services.AddScoped<CreateConnectionCommandHandler>();
-builder.Services.AddScoped<ListConnectionsQueryHandler>();
-builder.Services.AddScoped<DeleteConnectionCommandHandler>();
-builder.Services.AddScoped<UpdateConnectionCommandHandler>();
-builder.Services.AddScoped<TestConnectionCommandHandler>();
-builder.Services.AddScoped<ListAuditEntriesQueryHandler>();
-builder.Services.AddScoped<ListPluginsQueryHandler>();
-builder.Services.AddScoped<IConfirmationService, MudConfirmationService>();
-builder.Services.AddScoped<SbConsole.Web.Wallboard.WallboardSnapshotLoader>();
+
+// Handlers and services opt in with a lifetime marker (IScopedService / ISingletonService /
+// ITransientService) -- see MarkedServiceCollectionExtensions. Only what needs a factory or an
+// instance (above) is registered by hand.
+builder.Services.AddMarkedServices(typeof(SbcDbContext).Assembly);
+builder.Services.AddMarkedServices(typeof(Program).Assembly);
 
 // Plugins (compile-time registration; see docs/design.md §2)
 builder.Services.AddSingleton(sp => new PluginRegistry(sp.GetServices<IPlugin>()));

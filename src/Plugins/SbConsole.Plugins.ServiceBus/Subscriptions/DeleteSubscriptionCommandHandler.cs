@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.ServiceBus.Subscriptions;
 
 public sealed record DeleteSubscriptionCommand(Guid ConnectionId, string ConnectionName, bool IsProd, string TopicName, string SubscriptionName);
 
-public sealed class DeleteSubscriptionCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteSubscriptionCommandHandler> logger)
+public sealed class DeleteSubscriptionCommandHandler(IServiceBusOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteSubscriptionCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(DeleteSubscriptionCommand cmd, CancellationToken ct = default)
     {

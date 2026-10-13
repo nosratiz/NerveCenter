@@ -5,6 +5,7 @@ using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using CreateTopicRequest_ = Amazon.SimpleNotificationService.Model.CreateTopicRequest;
 using SubscribeRequest_ = Amazon.SimpleNotificationService.Model.SubscribeRequest;
+using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Aws.Client;
 
@@ -13,7 +14,7 @@ namespace SbConsole.Plugins.Aws.Client;
 /// exactly: a fresh client per call, built from the parsed secret, with ServiceURL/UseHttp
 /// forwarded from the shared config so a custom LocalStack endpoint redirects SNS too.
 /// </summary>
-public sealed class SnsOperations : ISnsOperations
+public sealed class SnsOperations : ISnsOperations, ISingletonService
 {
     internal static AmazonSimpleNotificationServiceClient BuildSnsClient(string secret)
     {

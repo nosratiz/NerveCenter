@@ -1,5 +1,6 @@
 using Bunit;
 using FluentAssertions;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor.Services;
 using NSubstitute;
@@ -117,5 +118,149 @@ public class NavMenuTests : BunitContext
         await act.Should().NotThrowAsync();
         cut.Render();
         cut.FindAll(".nav-badge").Should().BeEmpty();
+    }
+
+    private IPlugin AddPlugin(string id, string displayName, string? monogram, params PluginNavItem[] items)
+    {
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns(id);
+        plugin.DisplayName.Returns(displayName);
+        plugin.Version.Returns("0.1.3");
+        plugin.Monogram.Returns(monogram);
+        plugin.ConnectionKind.Returns(id);
+        plugin.NavItems.Returns(items.ToList());
+        return plugin;
+    }
+
+    private IConnectionProvider RegisterTwoPlugins(out IPlugin alpha, out IPlugin beta)
+    {
+        Services.AddMudServices();
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        alpha = AddPlugin("alpha", "Alpha Bus", "AB", new PluginNavItem("Queues", "/p/alpha/queues"));
+        beta = AddPlugin("beta", "Beta", null, new PluginNavItem("Keys", "/p/beta/keys"));
+        Services.AddSingleton(new PluginRegistry([alpha, beta]));
+        var connections = Substitute.For<IConnectionProvider>();
+        connections.ListAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new List<ConnectionInfo>());
+        Services.AddSingleton(connections);
+        return connections;
+    }
+
+    [Fact]
+    public void The_rail_shows_one_monogram_icon_per_plugin_falling_back_to_the_display_name()
+    {
+        RegisterTwoPlugins(out _, out _);
+
+        var cut = Render<NavMenu>();
+
+        var rail = cut.FindAll(".nav-rail-plugin");
+        rail.Select(e => e.TextContent.Trim()).Should().Equal("AB", "BE");
+        rail[0].GetAttribute("title").Should().Be("Alpha Bus");
+    }
+
+    [Fact]
+    public void The_drawer_shows_only_the_plugin_owning_the_current_url()
+    {
+        RegisterTwoPlugins(out _, out _);
+        Services.GetRequiredService<NavigationManager>().NavigateTo("/p/beta/keys");
+
+        var cut = Render<NavMenu>();
+
+        cut.Find(".nav-drawer-title").TextContent.Should().Be("Beta");
+        cut.Find(".nav-drawer").InnerHtml.Should().Contain("/p/beta/keys").And.NotContain("/p/alpha/queues");
+        cut.Find(".nav-rail-plugin.active").GetAttribute("title").Should().Be("Beta");
+    }
+
+    [Fact]
+    public void Navigating_to_another_plugins_page_switches_the_drawer()
+    {
+        RegisterTwoPlugins(out _, out _);
+        var cut = Render<NavMenu>();
+        cut.Find(".nav-drawer-title").TextContent.Should().Be("Alpha Bus");
+
+        cut.InvokeAsync(() => Services.GetRequiredService<NavigationManager>().NavigateTo("/p/beta/keys"));
+
+        cut.WaitForAssertion(() => cut.Find(".nav-drawer-title").TextContent.Should().Be("Beta"));
+    }
+
+    [Fact]
+    public void A_host_page_keeps_the_last_selected_plugin_in_the_drawer()
+    {
+        RegisterTwoPlugins(out _, out _);
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo("/p/beta/keys");
+        var cut = Render<NavMenu>();
+
+        cut.InvokeAsync(() => nav.NavigateTo("/audit"));
+
+        cut.WaitForAssertion(() => cut.Find(".nav-drawer-title").TextContent.Should().Be("Beta"));
+        cut.FindAll(".nav-rail-plugin.active").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_badge_on_a_plugin_not_shown_in_the_drawer_still_surfaces_as_a_rail_dot()
+    {
+        var connections = RegisterTwoPlugins(out _, out var beta);
+        var connectionId = Guid.NewGuid();
+        connections.ListAsync("beta", Arg.Any<CancellationToken>())
+            .Returns(new List<ConnectionInfo> { new(connectionId, "beta-conn", "beta", []) });
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("secret");
+        beta.GetNavBadgeAsync("/p/beta/keys", "secret", Arg.Any<CancellationToken>()).Returns(3);
+
+        var cut = Render<NavMenu>();
+        await cut.InvokeAsync(() => cut.Instance.RefreshBadgesAsync());
+        cut.Render();
+
+        cut.Find(".nav-drawer-title").TextContent.Should().Be("Alpha Bus");
+        cut.Find(".nav-rail-plugin[title='Beta'] .nav-rail-dot").Should().NotBeNull();
+        cut.FindAll(".nav-rail-plugin[title='Alpha Bus'] .nav-rail-dot").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task The_drawer_lists_the_active_plugins_connections_with_their_test_status()
+    {
+        var connections = RegisterTwoPlugins(out _, out _);
+        connections.ListAsync("alpha", Arg.Any<CancellationToken>()).Returns(new List<ConnectionInfo>
+        {
+            new(Guid.NewGuid(), "alpha-prod", "alpha", [], LastTestSucceeded: true),
+            new(Guid.NewGuid(), "alpha-local", "alpha", []),
+        });
+
+        var cut = Render<NavMenu>();
+        await cut.InvokeAsync(() => cut.Instance.RefreshBadgesAsync());
+        cut.Render();
+
+        var rows = cut.FindAll(".nav-connection");
+        rows.Select(r => r.TextContent.Trim()).Should().Equal("alpha-prod", "alpha-local");
+        rows[0].QuerySelector(".nav-status-dot")!.ClassList.Should().Contain("ok");
+        rows[1].QuerySelector(".nav-status-dot")!.ClassList.Should().Contain("unknown");
+    }
+
+    [Fact]
+    public void The_drawer_collapses_to_leave_just_the_rail()
+    {
+        RegisterTwoPlugins(out _, out _);
+        var cut = Render<NavMenu>();
+
+        cut.Find(".nav-drawer-toggle").Click();
+
+        cut.FindAll(".nav-drawer").Should().BeEmpty();
+        cut.FindAll(".nav-rail-plugin").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void Connections_are_listed_without_waiting_on_slow_badge_calls()
+    {
+        var connections = RegisterTwoPlugins(out var alpha, out _);
+        var connectionId = Guid.NewGuid();
+        var listed = new TaskCompletionSource<IReadOnlyList<ConnectionInfo>>();
+        connections.ListAsync("alpha", Arg.Any<CancellationToken>()).Returns(listed.Task);
+        connections.GetSecretAsync(connectionId, Arg.Any<CancellationToken>()).Returns("secret");
+        alpha.GetNavBadgeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<int?>().Task); // an unreachable broker: never answers
+
+        var cut = Render<NavMenu>();
+        listed.SetResult([new(connectionId, "alpha-prod", "alpha", [])]); // the DB read finishes after first render
+
+        cut.WaitForAssertion(() => cut.FindAll(".nav-connection").Select(r => r.TextContent.Trim()).Should().Equal("alpha-prod"));
     }
 }

@@ -9,7 +9,7 @@ public sealed record DeleteStreamConsumerCommand(Guid ConnectionId, string Conne
 
 /// <summary>XGROUP DELCONSUMER -- Destructive: any entries still pending on the consumer leave the PEL with it, so the page offers "claim to a live consumer" first (mockup 1d).</summary>
 public sealed class DeleteStreamConsumerCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteStreamConsumerCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<DeleteStreamConsumerCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(DeleteStreamConsumerCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

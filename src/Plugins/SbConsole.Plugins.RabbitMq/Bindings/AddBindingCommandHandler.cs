@@ -9,7 +9,7 @@ public sealed record AddBindingCommand(
     IReadOnlyDictionary<string, object?>? Arguments = null,
     BindingDestinationType DestinationType = BindingDestinationType.Queue);
 
-public sealed class AddBindingCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddBindingCommandHandler> logger)
+public sealed class AddBindingCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<AddBindingCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(AddBindingCommand cmd, CancellationToken ct = default)
     {

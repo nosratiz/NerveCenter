@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.RabbitMq.Shovels;
 
 public sealed record CreateShovelCommand(Guid ConnectionId, string ConnectionName, string Vhost, CreateShovelRequest Request);
 
-public sealed class CreateShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateShovelCommandHandler> logger)
+public sealed class CreateShovelCommandHandler(IRabbitOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<CreateShovelCommandHandler> logger) : IScopedService
 {
     public Task<PluginResult> HandleAsync(CreateShovelCommand cmd, CancellationToken ct = default) =>
         HandlerRunner.CommandAsync(connections, audit, logger, cmd.ConnectionId,

@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Kafka.Messages;
 
 public sealed record ProduceMessageCommand(Guid ConnectionId, string ConnectionName, string TopicName, string? Key, string Value, int? Partition);
 
-public sealed class ProduceMessageCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ProduceMessageCommandHandler> logger)
+public sealed class ProduceMessageCommandHandler(IKafkaOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<ProduceMessageCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult> HandleAsync(ProduceMessageCommand cmd, CancellationToken ct = default)
     {

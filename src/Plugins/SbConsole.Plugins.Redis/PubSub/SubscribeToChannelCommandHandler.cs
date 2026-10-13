@@ -17,7 +17,7 @@ namespace SbConsole.Plugins.Redis.PubSub;
 /// success/failure HandlerRunner.CommandAsync can express.
 /// </summary>
 public sealed class SubscribeToChannelCommandHandler(
-    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SubscribeToChannelCommandHandler> logger)
+    IRedisOperations operations, IConnectionProvider connections, IAuditScope audit, ILogger<SubscribeToChannelCommandHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IAsyncDisposable>> HandleAsync(
         Guid connectionId, string connectionName, string channelOrPattern, bool isPattern, Func<PubSubMessage, Task> onMessage, CancellationToken ct = default)

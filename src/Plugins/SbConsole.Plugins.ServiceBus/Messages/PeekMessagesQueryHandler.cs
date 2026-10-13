@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.ServiceBus.Messages;
 
-public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<PeekMessagesQueryHandler> logger)
+public sealed class PeekMessagesQueryHandler(IServiceBusOperations operations, IConnectionProvider connections, ILogger<PeekMessagesQueryHandler> logger) : IScopedService
 {
     public async Task<PluginResult<IReadOnlyList<PeekedMessage>>> HandleAsync(
         Guid connectionId, string queueName, bool fromDeadLetter,
