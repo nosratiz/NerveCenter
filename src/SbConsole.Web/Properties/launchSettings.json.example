@@ -12,7 +12,8 @@
         "SBC_DB_PATH": "sbconsole.dev.db",
         "SBC_ADMIN_PASSWORD": "<dev admin password>",
         "SBC_API_KEY": "<dev api key>",
-        "SBC_BIND": "http://localhost:5249"
+        "SBC_BIND": "http://localhost:5249",
+        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md>"
       }
     },
     "https": {
@@ -26,7 +27,8 @@
         "SBC_DB_PATH": "sbconsole.dev.db",
         "SBC_ADMIN_PASSWORD": "<dev admin password>",
         "SBC_API_KEY": "<dev api key>",
-        "SBC_BIND": "https://localhost:7018;http://localhost:5249"
+        "SBC_BIND": "https://localhost:7018;http://localhost:5249",
+        "SBC_SQLITE_ROOTS": "<absolute dir(s) holding SQLite files, ';'-separated -- e.g. the .sqlite-demo dir from docker/README.md>"
       }
     }
   }
