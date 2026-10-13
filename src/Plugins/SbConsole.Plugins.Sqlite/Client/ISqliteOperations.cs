@@ -1,0 +1,12 @@
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.Sqlite.Client;
+
+/// <summary>
+/// The thin wrapper every SQLite page and handler goes through (CLAUDE.md "every plugin operation
+/// goes through a thin wrapper interface"), so handler/page tests substitute it directly.
+/// </summary>
+public interface ISqliteOperations
+{
+    Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default);
+}

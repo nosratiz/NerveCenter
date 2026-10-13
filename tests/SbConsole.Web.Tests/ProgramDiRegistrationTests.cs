@@ -182,6 +182,19 @@ public sealed class ProgramDiRegistrationTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Sqlite_plugin_is_initialized_by_the_real_program_and_fails_closed_without_roots()
+    {
+        Environment.SetEnvironmentVariable("SBC_SQLITE_ROOTS", null);
+        using var factory = new WebApplicationFactory<Program>();
+
+        var plugin = factory.Services.GetRequiredService<PluginRegistry>().Find("sqlite");
+        var result = await plugin!.TestConnectionAsync("Path=/nowhere/reports.db");
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("SBC_SQLITE_ROOTS");
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

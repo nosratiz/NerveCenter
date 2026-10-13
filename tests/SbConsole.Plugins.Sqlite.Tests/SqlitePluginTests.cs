@@ -1,5 +1,7 @@
 using FluentAssertions;
+using NSubstitute;
 using SbConsole.Plugins.Sqlite.Client;
+using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Sqlite.Tests;
 
@@ -54,5 +56,17 @@ public class SqlitePluginTests
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("SQLite plugin is not initialized.");
+    }
+
+    [Fact]
+    public async Task Test_connection_delegates_to_the_operations_once_initialized()
+    {
+        var operations = Substitute.For<ISqliteOperations>();
+        var expected = new ConnectionTestResult(true, Identity: "SQLite 3.53.3 · 4 KB · DELETE");
+        operations.TestConnectionAsync("Path=/x.db", Arg.Any<CancellationToken>()).Returns(expected);
+        var plugin = new SqlitePlugin();
+        plugin.InitializeForTesting(operations);
+
+        (await plugin.TestConnectionAsync("Path=/x.db")).Should().BeSameAs(expected);
     }
 }

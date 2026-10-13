@@ -10,6 +10,10 @@ public sealed class SqlitePlugin : IPlugin
     public const string OverviewHref = "/p/sqlite/overview";
     public const string TablesHref = "/p/sqlite/tables";
 
+    // Resolved in Initialize (IPlugin.Initialize): the host constructs plugins with new(), so the
+    // instance hooks below have no DI of their own. Until then they fail closed.
+    private ISqliteOperations? _operations;
+
     public string Id => PluginId;
     public string DisplayName => "SQLite";
     public string? Monogram => "SQ";
@@ -49,6 +53,11 @@ public sealed class SqlitePlugin : IPlugin
     public void ConfigureServices(IServiceCollection services) =>
         services.AddMarkedServices(typeof(SqlitePlugin).Assembly);
 
+    public void Initialize(IServiceProvider services) =>
+        _operations = services.GetRequiredService<ISqliteOperations>();
+
+    internal void InitializeForTesting(ISqliteOperations operations) => _operations = operations;
+
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
-        Task.FromResult(NotInitialized);
+        _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
 }
