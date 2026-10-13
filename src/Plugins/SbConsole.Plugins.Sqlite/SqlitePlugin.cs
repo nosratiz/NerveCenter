@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
+using SbConsole.Plugins.Sqlite.Backups;
 using SbConsole.Plugins.Sqlite.Client;
 using SbConsole.Plugins.Sqlite.Overview;
 using SbConsole.Sdk;
@@ -9,6 +10,7 @@ namespace SbConsole.Plugins.Sqlite;
 public sealed class SqlitePlugin : IPlugin
 {
     public const string PluginId = "sqlite";
+    public const string Kind = "sqlite";
     public const string OverviewHref = "/p/sqlite/overview";
     public const string TablesHref = "/p/sqlite/tables";
     public const string QueryHref = "/p/sqlite/query";
@@ -21,7 +23,7 @@ public sealed class SqlitePlugin : IPlugin
     public string DisplayName => "SQLite";
     public string? Monogram => "SQ";
     public string Version => "0.1.0";
-    public string ConnectionKind => "sqlite";
+    public string ConnectionKind => Kind;
     public string ConnectionKindDisplayName => "SQLite";
     public Type? ConnectionFormComponentType => typeof(SqliteConnectionFields);
 
@@ -56,8 +58,12 @@ public sealed class SqlitePlugin : IPlugin
         }
     }
 
-    public void ConfigureServices(IServiceCollection services) =>
+    public void ConfigureServices(IServiceCollection services)
+    {
         services.AddMarkedServices(typeof(SqlitePlugin).Assembly);
+        // Scheduled backups + growth samples (spec §11.7, §11.8); hosted services can't use the markers.
+        services.AddHostedService<SqliteBackupScheduler>();
+    }
 
     public void Initialize(IServiceProvider services) =>
         _operations = services.GetRequiredService<ISqliteOperations>();
