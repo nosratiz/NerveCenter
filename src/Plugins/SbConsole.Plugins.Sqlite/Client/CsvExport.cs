@@ -7,4 +7,5 @@ namespace SbConsole.Plugins.Sqlite.Client;
 public sealed record CsvExport(string FileName, byte[] Content, int RowCount, bool Truncated)
 {
     public const int MaxRows = 100_000;
+    public const long MaxBytes = 50L * 1024 * 1024;
 }

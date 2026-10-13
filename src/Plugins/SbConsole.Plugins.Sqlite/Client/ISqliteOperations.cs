@@ -26,5 +26,5 @@ public interface ISqliteOperations
 
     Task<long> CountRowsAsync(string secret, string name, CancellationToken ct = default);
 
-    Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, CancellationToken ct = default);
+    Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, long maxBytes, CancellationToken ct = default);
 }

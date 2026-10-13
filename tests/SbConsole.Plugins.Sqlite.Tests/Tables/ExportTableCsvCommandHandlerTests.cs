@@ -23,27 +23,40 @@ public class ExportTableCsvCommandHandlerTests
     {
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns(Secret);
         var export = new CsvExport("events.csv", [1, 2], 100_000, Truncated: true);
-        _operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, Arg.Any<CancellationToken>()).Returns(export);
+        _operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>()).Returns(export);
 
         var result = await Handler().HandleAsync(new ExportTableCsvCommand(_connectionId, "sqlite-reports", "events"));
 
         result.Value.Should().BeSameAs(export);
         await _audit.Received(1).RecordAsync("sqlite.table.export", "sqlite-reports/events", ActionRisk.Safe, true,
-            "100,000 rows (truncated at 100,000)", Arg.Any<CancellationToken>());
+            "100,000 rows (truncated at 100,000 rows)", Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_failed_export_is_audited_as_failed()
     {
         _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns(Secret);
-        _operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, Arg.Any<CancellationToken>())
+        _operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>())
             .Returns<Task<CsvExport>>(_ => throw new SqliteObjectNotFoundException("events"));
 
         var result = await Handler().HandleAsync(new ExportTableCsvCommand(_connectionId, "sqlite-reports", "events"));
 
         result.IsSuccess.Should().BeFalse();
         await _audit.Received(1).RecordAsync("sqlite.table.export", "sqlite-reports/events", ActionRisk.Safe, false,
-            Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            "No table or view named 'events' — it may have been dropped since the page loaded.", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_byte_capped_export_says_so_in_the_audit_detail()
+    {
+        _connections.GetSecretAsync(_connectionId, Arg.Any<CancellationToken>()).Returns(Secret);
+        var export = new CsvExport("events.csv", [1, 2], 1_234, Truncated: true);
+        _operations.ExportCsvAsync(Secret, "events", CsvExport.MaxRows, CsvExport.MaxBytes, Arg.Any<CancellationToken>()).Returns(export);
+
+        await Handler().HandleAsync(new ExportTableCsvCommand(_connectionId, "sqlite-reports", "events"));
+
+        await _audit.Received(1).RecordAsync("sqlite.table.export", "sqlite-reports/events", ActionRisk.Safe, true,
+            "1,234 rows (truncated at 50 MB)", Arg.Any<CancellationToken>());
     }
 
     [Fact]

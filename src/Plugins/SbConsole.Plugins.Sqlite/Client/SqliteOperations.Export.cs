@@ -6,7 +6,7 @@ namespace SbConsole.Plugins.Sqlite.Client;
 
 public sealed partial class SqliteOperations
 {
-    public Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, CancellationToken ct = default) =>
+    public Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, long maxBytes, CancellationToken ct = default) =>
         RunAsync(secret, c =>
         {
             maxRows = Math.Max(0, maxRows);
@@ -16,8 +16,12 @@ public sealed partial class SqliteOperations
             command.CommandText = $"SELECT * FROM {SqliteSql.QuoteIdentifier(obj.Name)} LIMIT {((long)maxRows + 1).ToString(CultureInfo.InvariantCulture)}";
             using var reader = command.ExecuteReader();
 
-            var csv = new StringBuilder();
-            csv.Append(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(reader.GetName))).Append("\r\n");
+            // One buffer: rows go straight into the MemoryStream (UTF-8, no BOM) instead of StringBuilder -> string -> byte[].
+            using var stream = new MemoryStream();
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true);
+            writer.Write(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)));
+            writer.Write("\r\n");
+            writer.Flush();
             var count = 0;
             var truncated = false;
             while (reader.Read())
@@ -28,11 +32,22 @@ public sealed partial class SqliteOperations
                     break;
                 }
 
-                csv.Append(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(i => CsvValue(reader, i)))).Append("\r\n");
+                var before = stream.Length;
+                writer.Write(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(i => CsvValue(reader, i))));
+                writer.Write("\r\n");
+                writer.Flush();
+                if (stream.Length > maxBytes)
+                {
+                    // This row would push past the cap: drop it.
+                    stream.SetLength(before);
+                    truncated = true;
+                    break;
+                }
+
                 count++;
             }
 
-            return new CsvExport($"{SafeFileName(obj.Name)}.csv", Encoding.UTF8.GetBytes(csv.ToString()), count, truncated);
+            return new CsvExport($"{SafeFileName(obj.Name)}.csv", stream.ToArray(), count, truncated);
         }, ct);
 
     private static string? CsvValue(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal)

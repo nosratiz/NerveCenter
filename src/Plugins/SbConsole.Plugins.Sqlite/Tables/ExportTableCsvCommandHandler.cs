@@ -24,7 +24,7 @@ public sealed class ExportTableCsvCommandHandler(
         CsvExport export;
         try
         {
-            export = await operations.ExportCsvAsync(secret, cmd.Table, CsvExport.MaxRows, ct);
+            export = await operations.ExportCsvAsync(secret, cmd.Table, CsvExport.MaxRows, CsvExport.MaxBytes, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -35,7 +35,11 @@ public sealed class ExportTableCsvCommandHandler(
         }
 
         var detail = $"{SqliteFormat.Count(export.RowCount)} rows"
-            + (export.Truncated ? $" (truncated at {SqliteFormat.Count(CsvExport.MaxRows)})" : "");
+            + (export.Truncated
+                ? export.RowCount >= CsvExport.MaxRows
+                    ? $" (truncated at {SqliteFormat.Count(CsvExport.MaxRows)} rows)"
+                    : $" (truncated at {SqliteFormat.Bytes(CsvExport.MaxBytes)})"
+                : "");
         await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Safe, succeeded: true, detail);
         return PluginResult<CsvExport>.Ok(export);
     }
