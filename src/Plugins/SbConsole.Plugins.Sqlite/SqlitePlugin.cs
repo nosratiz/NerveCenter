@@ -15,9 +15,15 @@ public sealed class SqlitePlugin : IPlugin
     public const string TablesHref = "/p/sqlite/tables";
     public const string QueryHref = "/p/sqlite/query";
 
+    // The Backups page (spec §11.7) comes in a later task; its nav item is added with it. Dashboard
+    // problems already link here. No GetNavBadgeAsync for it yet: the SDK hands that hook only
+    // (href, secret) -- no connection id or IPluginStore -- so backup history can't be read there.
+    public const string BackupsHref = "/p/sqlite/backups";
+
     // Resolved in Initialize (IPlugin.Initialize): the host constructs plugins with new(), so the
     // instance hooks below have no DI of their own. Until then they fail closed.
     private ISqliteOperations? _operations;
+    private TimeProvider _clock = TimeProvider.System;
 
     public string Id => PluginId;
     public string DisplayName => "SQLite";
@@ -65,10 +71,17 @@ public sealed class SqlitePlugin : IPlugin
         services.AddHostedService<SqliteBackupScheduler>();
     }
 
-    public void Initialize(IServiceProvider services) =>
+    public void Initialize(IServiceProvider services)
+    {
         _operations = services.GetRequiredService<ISqliteOperations>();
+        _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
+    }
 
-    internal void InitializeForTesting(ISqliteOperations operations) => _operations = operations;
+    internal void InitializeForTesting(ISqliteOperations operations, TimeProvider? clock = null)
+    {
+        _operations = operations;
+        _clock = clock ?? TimeProvider.System;
+    }
 
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
@@ -83,15 +96,17 @@ public sealed class SqlitePlugin : IPlugin
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
         _operations is null
             ? Task.FromResult<IReadOnlyList<PluginDashboardProblem>>([])
-            : ComputeProblemsAsync(_operations, connectionId, connectionString, store, ct);
+            : ComputeProblemsAsync(_operations, connectionId, connectionString, store, _clock.GetUtcNow(), ct);
 
     /// <summary>
-    /// Error when the last stored integrity check failed; Warning for FK violations it found, and
-    /// for a file that's at least FreePagesProblemPercent free pages. An unreadable file throws --
-    /// the host already reports unreachable connections on its own.
+    /// Error when the last stored integrity check failed; Warning for FK violations it found, for a
+    /// newest backup record that failed, for an enabled backup policy whose newest success is older
+    /// than BackupSchedule.OverdueHours (or missing), and for a file that's at least
+    /// FreePagesProblemPercent free pages. An unreadable file throws -- the host already reports
+    /// unreachable connections on its own.
     /// </summary>
     internal static async Task<IReadOnlyList<PluginDashboardProblem>> ComputeProblemsAsync(
-        ISqliteOperations operations, Guid connectionId, string secret, IPluginStore store, CancellationToken ct)
+        ISqliteOperations operations, Guid connectionId, string secret, IPluginStore store, DateTimeOffset now, CancellationToken ct)
     {
         var problems = new List<PluginDashboardProblem>();
         var integrity = await IntegrityResultStore.ReadAsync(store, connectionId, ct);
@@ -108,6 +123,22 @@ public sealed class SqlitePlugin : IPlugin
             var v = integrity.ForeignKeyViolations;
             problems.Add(new PluginDashboardProblem("Warning", "Foreign key violations",
                 v == 1 ? "1 row violates a foreign key" : $"{SqliteFormat.Count(v)} rows violate a foreign key", OverviewHref));
+        }
+
+        var history = await BackupHistoryStore.ReadAsync(store, connectionId, ct);
+        if (history.MaxBy(r => r.TakenAt) is { Succeeded: false } failed)
+        {
+            problems.Add(new PluginDashboardProblem("Warning", "Last backup failed",
+                $"{failed.Error ?? "Unknown error"} ({failed.TakenAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC)", BackupsHref));
+        }
+
+        var policy = await BackupPolicyStore.ReadAsync(store, connectionId, ct);
+        if (BackupSchedule.IsOverdue(policy, history, now))
+        {
+            var hours = BackupSchedule.HoursSinceLastSuccess(history, now);
+            problems.Add(new PluginDashboardProblem("Warning", "Backup overdue",
+                hours is { } h ? $"Last successful backup {h.ToString("0", CultureInfo.InvariantCulture)} h ago" : "No successful backup yet",
+                BackupsHref));
         }
 
         var overview = await operations.GetOverviewAsync(secret, ct);
