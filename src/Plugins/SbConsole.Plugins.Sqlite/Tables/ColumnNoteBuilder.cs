@@ -51,7 +51,7 @@ public static class ColumnNoteBuilder
                 list.Add($"JSON in {percent}% of sampled rows");
             }
 
-            if (sample.IntegerCount > 0 && sample.IntegerCount == sample.NonNullCount && sample.EpochMsCount == sample.IntegerCount)
+            if (sample.LooksLikeUnixMs)
             {
                 list.Add(UnixMsNote);
             }

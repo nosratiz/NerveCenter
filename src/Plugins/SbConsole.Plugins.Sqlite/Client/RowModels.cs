@@ -30,4 +30,12 @@ public sealed record ColumnSample(
     public const int DefaultSampleRows = 1000;
     public const long EpochMsMin = 946_684_800_000;
     public const long EpochMsMax = 4_102_444_800_000;
+
+    /// <summary>The "unix ms?" rule, shared with the Query page's date hint: every non-NULL value is an INTEGER in range.</summary>
+    public bool LooksLikeUnixMs => LooksLikeUnixMsValues(NonNullCount, IntegerCount, EpochMsCount);
+
+    public static bool LooksLikeUnixMsValues(int nonNullCount, int integerCount, int epochMsCount) =>
+        integerCount > 0 && integerCount == nonNullCount && epochMsCount == integerCount;
+
+    public static bool InEpochMsRange(long value) => value is >= EpochMsMin and <= EpochMsMax;
 }

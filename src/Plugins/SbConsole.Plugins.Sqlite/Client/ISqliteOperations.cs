@@ -27,4 +27,21 @@ public interface ISqliteOperations
     Task<long> CountRowsAsync(string secret, string name, CancellationToken ct = default);
 
     Task<CsvExport> ExportCsvAsync(string secret, string name, int maxRows, long maxBytes, CancellationToken ct = default);
+
+    // Phase 2 (design spec §11.3-§11.4). Every sql is a user script: SqliteScript.Parse refuses it
+    // (SqliteScriptRefusedException) before anything opens, and it runs on an attach-limited connection.
+
+    Task<QueryResult> RunQueryAsync(string secret, string sql, int limit, CancellationToken ct = default);
+
+    Task<ExplainPlan> ExplainQueryAsync(string secret, string sql, CancellationToken ct = default);
+
+    Task<CsvExport> ExportQueryCsvAsync(string secret, string sql, int maxRows, long maxBytes, CancellationToken ct = default);
+
+    /// <summary>Writable; always rolls back. Throws SqliteReadOnlyConnectionException unless the secret's Mode is ReadWrite.</summary>
+    Task<WriteScriptResult> DryRunWriteAsync(string secret, string sql, CancellationToken ct = default);
+
+    /// <summary>Writable; one transaction, committed only if every statement succeeds.</summary>
+    Task<WriteScriptResult> RunWriteAsync(string secret, string sql, CancellationToken ct = default);
+
+    Task<WalCheckpointResult> CheckpointWalAsync(string secret, CancellationToken ct = default);
 }
