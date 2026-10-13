@@ -13,6 +13,7 @@ public sealed class RabbitMqPlugin : IPlugin
 {
     public string Id => "rabbitmq";
     public string DisplayName => "RabbitMQ";
+    public string? Monogram => "RQ";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [

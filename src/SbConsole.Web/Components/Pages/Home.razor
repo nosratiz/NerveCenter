@@ -1,4 +1,5 @@
 @page "/"
+@using System.Globalization
 @using Microsoft.AspNetCore.Components.Authorization
 @using SbConsole.Core.Audit
 @using SbConsole.Core.Connections
@@ -16,147 +17,396 @@
 @inject ILogger<Home> Logger
 @inject ISnackbar Snackbar
 
+@* Mockup "SbConsole Dashboard" 1a (fleet-first), with its 1c all-clear and 1d per-connection
+   checking states: a card per plugin with that plugin's own metrics (never summed across plugins),
+   one dense triage list sorted error → warning → unchecked, and backlog + activity on the right.
+   The plugin hooks are unchanged -- only how the host lays out what they return. *@
 <PageTitle>Dashboard</PageTitle>
-<div class="d-flex align-center gap-4 mb-4 flex-wrap">
-    <MudText Typo="Typo.h4">Dashboard</MudText>
-    <MudText Typo="Typo.body2" Class="mud-text-secondary">@HeaderSummary</MudText>
-    <MudSpacer />
-    <MudLink Href="/wallboard" Class="open-wallboard">Wallboard →</MudLink>
-    <MudText Typo="Typo.caption" Class="mud-text-secondary">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</MudText>
-    <MudButton Class="refresh-dashboard" OnClick="RefreshAsync">Refresh</MudButton>
-</div>
-@if (_loading)
-{
-    <MudProgressLinear Indeterminate="true" Class="mb-4" />
-}
+<div class="dash">
+    <header class="dash-head">
+        <h1 class="dash-title">Dashboard</h1>
+        <span class="dash-summary">@HeaderSummary</span>
+        <div class="dash-head-right">
+            <span class="dash-refreshed">refreshed @_refreshedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+            <MudButton Class="refresh-dashboard" Variant="Variant.Outlined" Size="Size.Small" Disabled="@_loading" OnClick="RefreshAsync">Refresh</MudButton>
+            <MudLink Href="/wallboard" Class="open-wallboard">Wallboard →</MudLink>
+        </div>
+    </header>
 
-<WallboardWidget />
-
-<div class="d-flex flex-wrap gap-4 mb-4">
-    @foreach (var tile in Tiles)
-    {
-        <MudPaper Class="dashboard-tile pa-4" Style="min-width:160px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">@tile.Label.ToUpperInvariant()</MudText>
-            <MudText Typo="Typo.h4" Color="@(tile.Alert ? Color.Error : Color.Default)">@tile.Value</MudText>
-        </MudPaper>
-    }
-</div>
-
-<div class="d-flex gap-4 flex-wrap">
-    <div class="flex-grow-1" style="flex-basis:60%;min-width:320px">
-        <MudText Typo="Typo.h6" Class="mb-2">Needs attention</MudText>
-        @if (_unreachable.Count == 0 && _pluginProblems.Count == 0 && _uncheckedConnections.Count == 0)
+    <div class="dash-main">
+        @if (Registry.Plugins.Count > 0)
         {
-            <MudAlert Severity="Severity.Success" Class="mb-4">All clear — nothing needs attention.</MudAlert>
-        }
-        else
-        {
-            @foreach (var connection in _unreachable)
-            {
-                <MudAlert Severity="Severity.Error" Class="mb-2">
-                    <b>@connection.Name</b> unreachable since @connection.LastTestedAt?.ToLocalTime() — @connection.LastTestError
-                    <MudButton Class="retry-connection" Style="margin-left:16px" Disabled="@(_retryingConnectionId == connection.Id)" OnClick="@(() => RetryAsync(connection))">Retry</MudButton>
-                    @if (_retryingConnectionId == connection.Id)
-                    {
-                        <MudProgressCircular Class="retry-connection-busy" Color="Color.Error" Size="Size.Small" Indeterminate="true" />
-                    }
-                    <MudLink Href="/connections" Class="ml-4">Edit connection</MudLink>
-                </MudAlert>
-            }
-            @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity == "Error"))
-            {
-                <MudAlert Severity="Severity.Error" Class="mb-2 plugin-problem">
-                    <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
-                    @if (item.Problem.LinkHref is { } href)
-                    {
-                        <MudLink Href="@href" Class="ml-4">Open →</MudLink>
-                    }
-                </MudAlert>
-            }
-            @foreach (var item in _pluginProblems.Where(p => p.Problem.Severity != "Error"))
-            {
-                <MudAlert Severity="Severity.Warning" Class="mb-2 plugin-problem">
-                    <b>@item.Problem.Title</b> — @item.Connection.Name · @item.Problem.Detail
-                    @if (item.Problem.LinkHref is { } href)
-                    {
-                        <MudLink Href="@href" Class="ml-4">Peek →</MudLink>
-                    }
-                </MudAlert>
-            }
-            @if (_uncheckedConnections.Count > 0)
-            {
-                <MudAlert Severity="Severity.Warning" Class="mb-2 unchecked-connections">
-                    Couldn't check @_uncheckedConnections.Count connection(s) — see logs for details.
-                </MudAlert>
-            }
+            <section class="fleet" aria-label="Plugins">
+                @foreach (var plugin in Registry.Plugins)
+                {
+                    var fleet = FleetFor(plugin);
+                    <a href="@EntryHref(plugin)" class="fleet-card @(fleet.Errors > 0 ? "has-error" : null)" data-plugin="@plugin.Id">
+                        <div class="fleet-card-head">
+                            <span class="fleet-mono">@PluginMonogram.Of(plugin)</span>
+                            <span class="fleet-name">@plugin.DisplayName</span>
+                            @if (fleet.Errors + fleet.Warnings > 0)
+                            {
+                                <span class="fleet-count @(fleet.Errors > 0 ? "bad" : "warn")">@(fleet.Errors + fleet.Warnings)</span>
+                            }
+                        </div>
+                        <div class="fleet-metrics">
+                            @if (fleet.Metrics.Count == 0)
+                            {
+                                <span class="fleet-metric-none">—</span>
+                            }
+                            @foreach (var (label, count) in fleet.Metrics)
+                            {
+                                <span class="fleet-metric @(IsBacklogLabel(label) && count > 0 ? "warn" : null)">@count.ToString("N0", CultureInfo.InvariantCulture) @label.ToLowerInvariant()</span>
+                            }
+                        </div>
+                        <div class="fleet-conn">
+                            @foreach (var (connection, state) in fleet.Dots)
+                            {
+                                <span class="fleet-dot @state" title="@connection.Name"></span>
+                            }
+                            <span>@FleetConnectionLabel(fleet)</span>
+                        </div>
+                    </a>
+                }
+            </section>
         }
 
-        <MudText Typo="Typo.overline" Class="mud-text-secondary mt-4 mb-2 d-block">Namespaces</MudText>
-        <div class="d-flex flex-wrap gap-2">
-            @foreach (var connection in _connections)
-            {
-                <MudChip T="string" Class="namespace-chip" Color="@(NamespaceChipColor(connection.Id))">@connection.Name</MudChip>
-            }
-        </div>
-    </div>
-
-    <div style="flex-basis:35%;min-width:280px">
-        <div class="d-flex align-center mb-2">
-            <MudText Typo="Typo.h6">Activity</MudText>
-            <MudSpacer />
-            <MudLink Href="/audit">All →</MudLink>
-        </div>
-        @foreach (var entry in _recentActivity)
-        {
-            <div class="d-flex align-start gap-2 mb-2 activity-row">
-                <span style="@($"display:inline-block;width:8px;height:8px;margin-top:6px;border-radius:50%;background:{ActivityDotColor(entry)}")"></span>
-                <div>
-                    <MudText Typo="Typo.body2"><b>@entry.Actor</b> @entry.Action</MudText>
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@entry.Target · @entry.At.ToLocalTime().ToString("HH:mm")</MudText>
+        <div class="dash-body">
+            <section class="triage" aria-label="Needs attention">
+                <div class="triage-head">
+                    <h2 class="dash-section-title">Needs attention</h2>
+                    @if (Attention.Count > 0)
+                    {
+                        <div class="triage-filters" role="group" aria-label="Filter by severity">
+                            @foreach (var (filter, label, count) in FilterChips)
+                            {
+                                <button type="button" class="triage-filter @filter.ToString().ToLowerInvariant() @(_filter == filter ? "active" : null)"
+                                        data-filter="@filter.ToString().ToLowerInvariant()" aria-pressed="@(_filter == filter ? "true" : "false")"
+                                        @onclick="() => _filter = filter">@label @count</button>
+                            }
+                        </div>
+                    }
+                    else if (_connectionsLoaded && PendingCount == 0)
+                    {
+                        <span class="triage-count">0</span>
+                    }
+                    @if (!_connectionsLoaded)
+                    {
+                        <span class="triage-progress">checking…</span>
+                    }
+                    else if (PendingCount > 0)
+                    {
+                        <span class="triage-progress">checking @PendingCount of @_checks.Count…</span>
+                    }
+                    <span class="triage-order">error → warning → unchecked</span>
                 </div>
-            </div>
-        }
+
+                @if (_connectionsLoaded && Attention.Count == 0 && PendingCount == 0)
+                {
+                    <div class="triage-all-clear">
+                        <span class="triage-dot ok"></span>
+                        <span>@AllClearText</span>
+                    </div>
+                }
+                else if (_connectionsLoaded)
+                {
+                    <div class="triage-table" role="table">
+                        <div class="triage-grid triage-header" role="row">
+                            <span></span><span></span><span role="columnheader">Connection</span><span role="columnheader">Problem</span><span role="columnheader" class="triage-action">Action</span>
+                        </div>
+                        @foreach (var item in VisibleRows)
+                        {
+                            <div class="triage-grid triage-row sev-@item.Severity.ToString().ToLowerInvariant()" role="row">
+                                <span class="triage-dot @DotClass(item.Severity)"></span>
+                                <span class="triage-mono">@(item.Plugin is { } p ? PluginMonogram.Of(p) : "")</span>
+                                <span class="triage-conn" title="@item.Connection.Name">@item.Connection.Name</span>
+                                <span class="triage-problem">
+                                    @switch (item.Severity)
+                                    {
+                                        case TriageSeverity.Pending:
+                                            <span class="triage-skeleton"></span>
+                                            break;
+                                        case TriageSeverity.Unchecked:
+                                            <span>Couldn't check — its metrics are excluded from the fleet cards above</span>
+                                            break;
+                                        default:
+                                            @if (item.Title is { } title)
+                                            {
+                                                <span class="triage-title">@title</span>
+                                            }
+                                            <span class="triage-detail">@(item.Title is null ? "" : " · ")@item.Detail</span>
+                                            break;
+                                    }
+                                </span>
+                                <span class="triage-action">
+                                    @if (item.Unreachable)
+                                    {
+                                        <MudButton Class="retry-connection" Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                                                   Disabled="@(_retryingConnectionId == item.Connection.Id)" OnClick="@(() => RetryAsync(item.Connection))">
+                                            @(_retryingConnectionId == item.Connection.Id ? "Retrying…" : "Retry")
+                                        </MudButton>
+                                        <a href="/connections" class="triage-link muted">Edit</a>
+                                    }
+                                    else if (item.LinkHref is { } href)
+                                    {
+                                        <a href="@href" class="triage-link">Open →</a>
+                                    }
+                                </span>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
+            <aside class="dash-side">
+                <WallboardWidget />
+
+                <section class="dash-card activity" aria-label="Activity">
+                    <div class="dash-card-head">
+                        <h2 class="dash-section-title">Activity</h2>
+                        <a href="/audit" class="dash-card-link">All →</a>
+                    </div>
+                    @if (_recentActivity.Count == 0)
+                    {
+                        <span class="activity-empty">No activity yet.</span>
+                    }
+                    @foreach (var entry in _recentActivity)
+                    {
+                        <div class="activity-row">
+                            <span class="activity-dot @ActivityDotClass(entry)"></span>
+                            <div class="activity-text">
+                                <div><b>@entry.Actor</b> @entry.Action@(entry.Succeeded ? "" : " · failed")</div>
+                                <div class="activity-meta">@entry.Target · @ActivityTime(entry.At)</div>
+                            </div>
+                        </div>
+                    }
+                </section>
+            </aside>
+        </div>
     </div>
 </div>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
-    private int _connectionCount;
+    private enum TriageSeverity { Error, Warning, Unchecked, Pending }
+
+    private enum TriageFilter { All, Error, Warning, Unchecked }
+
+    private sealed record TriageItem(
+        TriageSeverity Severity,
+        IPlugin? Plugin,
+        ConnectionInfo Connection,
+        string? Title,
+        string Detail,
+        string? LinkHref,
+        bool Unreachable = false);
+
+    private sealed record ConnectionCheck(
+        ConnectionInfo Connection,
+        bool Checked,
+        IReadOnlyList<PluginDashboardMetric> Metrics,
+        IReadOnlyList<PluginDashboardProblem> Problems);
+
+    private sealed record FleetSummary(
+        IReadOnlyList<(string Label, int Count)> Metrics,
+        IReadOnlyList<(ConnectionInfo Connection, string State)> Dots,
+        int Errors,
+        int Warnings,
+        int Unchecked);
+
     private List<ConnectionInfo> _connections = [];
     private List<ConnectionInfo> _unreachable = [];
-    private List<(PluginDashboardProblem Problem, ConnectionInfo Connection)> _pluginProblems = [];
-    private HashSet<Guid> _connectionsWithProblems = [];
-    private HashSet<Guid> _uncheckedConnections = [];
-    private List<KeyValuePair<string, int>> _pluginMetrics = [];
+    private List<(IPlugin Plugin, ConnectionInfo Connection)> _checks = [];
+    private Dictionary<Guid, ConnectionCheck> _results = [];
     private IReadOnlyList<AuditEntry> _recentActivity = [];
     private DateTimeOffset _refreshedAt = DateTimeOffset.UtcNow;
     private Guid? _retryingConnectionId;
+    private TriageFilter _filter = TriageFilter.All;
+    private bool _connectionsLoaded;
     private bool _loading;
+    private int _generation;
 
-    private IEnumerable<(string Label, string Value, bool Alert)> Tiles =>
-    [
-        ("Connections", _connectionCount.ToString(), false),
-        .. _pluginMetrics.Select(m => (m.Key, m.Value.ToString(), false)),
-        ("Unreachable", _unreachable.Count.ToString(), _unreachable.Count > 0),
-    ];
+    private int PendingCount => _checks.Count(c => !_results.ContainsKey(c.Connection.Id));
 
-    private string HeaderSummary =>
-        $"{_connectionCount} conn · {MetricValue("Queues")} q · {MetricValue("Topics")} t / {MetricValue("Subscriptions")} sub · {MetricValue("Dead-lettered")} dlq";
+    private HashSet<Guid> UnreachableIds => [.. _unreachable.Select(c => c.Id)];
 
-    private int MetricValue(string label) => _pluginMetrics.FirstOrDefault(m => m.Key == label).Value;
-
-    private Color NamespaceChipColor(Guid connectionId) =>
-        _connectionsWithProblems.Contains(connectionId) ? Color.Error :
-        _uncheckedConnections.Contains(connectionId) ? Color.Warning :
-        Color.Success;
-
-    private static string ActivityDotColor(AuditEntry entry) => (entry.Succeeded, entry.Risk) switch
+    /// <summary>
+    /// Every row that needs attention, already in triage order: unreachable connections, then
+    /// plugin errors, then plugin warnings, then connections that couldn't be checked. Within a
+    /// group, plugin/connection order is kept so the list doesn't reshuffle as checks land.
+    /// </summary>
+    private List<TriageItem> Attention
     {
-        (false, _) => "var(--mud-palette-error)",
-        (true, ActionRisk.Destructive) => "var(--mud-palette-error)",
-        (true, ActionRisk.Mutating) => "var(--mud-palette-warning)",
-        _ => "var(--mud-palette-text-disabled)",
+        get
+        {
+            var unreachableIds = UnreachableIds;
+            var items = new List<TriageItem>();
+            items.AddRange(_unreachable.Select(c => new TriageItem(
+                TriageSeverity.Error, PluginForKind(c.Kind), c, null,
+                $"Unreachable since {c.LastTestedAt?.ToLocalTime():HH:mm} · {c.LastTestError}", null, Unreachable: true)));
+
+            var landed = _checks
+                .Where(c => _results.TryGetValue(c.Connection.Id, out _))
+                .Select(c => (c.Plugin, Result: _results[c.Connection.Id]))
+                .ToList();
+            var problems = landed
+                .Where(c => c.Result.Checked)
+                .SelectMany(c => c.Result.Problems.Select(p => new TriageItem(
+                    IsError(p) ? TriageSeverity.Error : TriageSeverity.Warning,
+                    c.Plugin, c.Result.Connection, p.Title, p.Detail, p.LinkHref)))
+                .ToList();
+            items.AddRange(problems.Where(p => p.Severity == TriageSeverity.Error));
+            items.AddRange(problems.Where(p => p.Severity == TriageSeverity.Warning));
+            items.AddRange(landed
+                .Where(c => !c.Result.Checked && !unreachableIds.Contains(c.Result.Connection.Id))
+                .Select(c => new TriageItem(TriageSeverity.Unchecked, c.Plugin, c.Result.Connection, null, "", null)));
+            return items;
+        }
+    }
+
+    private IEnumerable<TriageItem> VisibleRows
+    {
+        get
+        {
+            var attention = Attention.Where(i => _filter switch
+            {
+                TriageFilter.Error => i.Severity == TriageSeverity.Error,
+                TriageFilter.Warning => i.Severity == TriageSeverity.Warning,
+                TriageFilter.Unchecked => i.Severity == TriageSeverity.Unchecked,
+                _ => true,
+            });
+            if (_filter != TriageFilter.All)
+            {
+                return attention;
+            }
+
+            // 1d: a still-running check is its own placeholder row rather than one page-wide
+            // spinner, so a slow broker never hides the results that already landed.
+            var unreachableIds = UnreachableIds;
+            var pending = _checks
+                .Where(c => !_results.ContainsKey(c.Connection.Id) && !unreachableIds.Contains(c.Connection.Id))
+                .Select(c => new TriageItem(TriageSeverity.Pending, c.Plugin, c.Connection, null, "", null));
+            return attention.Concat(pending);
+        }
+    }
+
+    private IEnumerable<(TriageFilter Filter, string Label, int Count)> FilterChips
+    {
+        get
+        {
+            var attention = Attention;
+            yield return (TriageFilter.All, "All", attention.Count);
+            yield return (TriageFilter.Error, "Errors", attention.Count(i => i.Severity == TriageSeverity.Error));
+            yield return (TriageFilter.Warning, "Warnings", attention.Count(i => i.Severity == TriageSeverity.Warning));
+            yield return (TriageFilter.Unchecked, "Unchecked", attention.Count(i => i.Severity == TriageSeverity.Unchecked));
+        }
+    }
+
+    private string HeaderSummary
+    {
+        get
+        {
+            var attention = Attention.Count;
+            return $"{Plural(_connections.Count, "connection")} · {Plural(Registry.Plugins.Count, "plugin")} · " +
+                   $"{attention} {(attention == 1 ? "needs" : "need")} attention";
+        }
+    }
+
+    private string AllClearText => _connections.Count == 0
+        ? "No connections saved yet — nothing needs attention."
+        : $"All {Plural(_connections.Count, "connection")} checked — nothing needs attention.";
+
+    private static string Plural(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
+
+    private static bool IsError(PluginDashboardProblem problem) =>
+        string.Equals(problem.Severity, "Error", StringComparison.OrdinalIgnoreCase);
+
+    // The one label every broker plugin uses for its backlog -- tinted when non-zero so the
+    // number worth looking at stands out on its card.
+    private static bool IsBacklogLabel(string label) => label == "Dead-lettered";
+
+    private IPlugin? PluginForKind(string kind) => Registry.Plugins.FirstOrDefault(p => p.ConnectionKind == kind);
+
+    private static string EntryHref(IPlugin plugin) =>
+        plugin.NavItems is { Count: > 0 } items ? items[0].Href : $"/p/{plugin.Id}";
+
+    private FleetSummary FleetFor(IPlugin plugin)
+    {
+        var connections = _connections.Where(c => c.Kind == plugin.ConnectionKind).ToList();
+        var unreachableIds = UnreachableIds;
+
+        // Summed per label across this plugin's own connections only: same-kind connections share
+        // a vocabulary, so their counts add up; labels from different plugins never mix.
+        var metrics = new List<(string Label, int Count)>();
+        var errors = 0;
+        var warnings = 0;
+        var uncheckedCount = 0;
+        var dots = new List<(ConnectionInfo, string)>();
+        foreach (var connection in connections)
+        {
+            var result = _results.GetValueOrDefault(connection.Id);
+            if (result is { Checked: true })
+            {
+                foreach (var metric in result.Metrics)
+                {
+                    var index = metrics.FindIndex(m => m.Label == metric.Label);
+                    if (index < 0)
+                    {
+                        metrics.Add((metric.Label, metric.Count));
+                    }
+                    else
+                    {
+                        metrics[index] = (metric.Label, metrics[index].Count + metric.Count);
+                    }
+                }
+            }
+
+            var connectionErrors = (unreachableIds.Contains(connection.Id) ? 1 : 0)
+                + (result is { Checked: true } ? result.Problems.Count(IsError) : 0);
+            var connectionWarnings = result is { Checked: true } ? result.Problems.Count(p => !IsError(p)) : 0;
+            var isUnchecked = result is { Checked: false } && !unreachableIds.Contains(connection.Id);
+            errors += connectionErrors;
+            warnings += connectionWarnings;
+            uncheckedCount += isUnchecked ? 1 : 0;
+
+            var isPending = result is null && _checks.Any(c => c.Connection.Id == connection.Id);
+            var state = connectionErrors > 0 ? "bad"
+                : isPending ? "pending"
+                : isUnchecked ? "unchecked"
+                : connectionWarnings > 0 ? "warn"
+                : "ok";
+            dots.Add((connection, state));
+        }
+
+        return new FleetSummary(metrics, dots, errors, warnings, uncheckedCount);
+    }
+
+    private static string FleetConnectionLabel(FleetSummary fleet) => fleet.Dots.Count == 0
+        ? "no connections"
+        : $"{fleet.Dots.Count} conn{(fleet.Unchecked > 0 ? $" · {fleet.Unchecked} unchecked" : "")}";
+
+    private static string DotClass(TriageSeverity severity) => severity switch
+    {
+        TriageSeverity.Error => "bad",
+        TriageSeverity.Warning => "warn",
+        TriageSeverity.Unchecked => "unchecked",
+        _ => "pending",
+    };
+
+    // HH:mm alone is ambiguous once the feed reaches back past today.
+    private static string ActivityTime(DateTimeOffset at)
+    {
+        var local = at.ToLocalTime();
+        return local.Date == DateTimeOffset.Now.Date ? local.ToString("HH:mm") : local.ToString("MMM d HH:mm", CultureInfo.InvariantCulture);
+    }
+
+    private static string ActivityDotClass(AuditEntry entry) => (entry.Succeeded, entry.Risk) switch
+    {
+        (false, _) => "bad",
+        (true, ActionRisk.Destructive) => "bad",
+        (true, ActionRisk.Mutating) => "warn",
+        _ => "neutral",
     };
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
@@ -165,64 +415,79 @@
 
     private async Task LoadAsync()
     {
+        // A Refresh (or Retry) while an earlier load is still waiting on a slow broker starts a new
+        // generation; results that land for an older one are dropped instead of mixed in.
+        var generation = ++_generation;
         _loading = true;
         try
         {
             var connections = await ConnectionsHandler.HandleAsync();
-            _connections = [.. connections];
-            _connectionCount = connections.Count;
-            _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
-
-            var metrics = new Dictionary<string, int>();
-            var pluginProblems = new List<(PluginDashboardProblem, ConnectionInfo)>();
-            var uncheckedConnections = new HashSet<Guid>();
-            foreach (var plugin in Registry.Plugins)
+            if (generation != _generation)
             {
-                var store = PluginStoreFactory.For(plugin.Id);
-                foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
-                {
-                    try
-                    {
-                        // GetSecretAsync inside the try, not before it -- see NavMenu.RefreshBadgesAsync's
-                        // identical comment: a throw here must not stop the rest of the connections/plugins
-                        // in this pass.
-                        var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
-                        if (secret is null)
-                        {
-                            uncheckedConnections.Add(connection.Id);
-                            continue;
-                        }
-
-                        foreach (var metric in await plugin.GetDashboardMetricsAsync(secret))
-                        {
-                            metrics[metric.Label] = metrics.GetValueOrDefault(metric.Label) + metric.Count;
-                        }
-
-                        foreach (var problem in await plugin.GetDashboardProblemsAsync(connection.Id, secret, store))
-                        {
-                            pluginProblems.Add((problem, connection));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        uncheckedConnections.Add(connection.Id);
-                        Logger.LogWarning(ex, "Computing dashboard metrics/problems for connection {ConnectionId} failed; Needs-attention data for it may be incomplete.", connection.Id);
-                    }
-                }
+                return;
             }
 
-            _pluginMetrics = [.. metrics];
-            _pluginProblems = pluginProblems;
-            _connectionsWithProblems = [.. _unreachable.Select(c => c.Id), .. pluginProblems.Select(p => p.Item2.Id)];
-            _uncheckedConnections = uncheckedConnections;
+            _connections = [.. connections];
+            _unreachable = [.. connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false)];
+            _checks = [.. Registry.Plugins.SelectMany(plugin =>
+                connections.Where(c => c.Kind == plugin.ConnectionKind).Select(c => (plugin, c)))];
+            _results = [];
+            _connectionsLoaded = true;
+            StateHasChanged();
 
-            var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 10));
+            // Every connection is checked concurrently, not one after another: a stopped broker only
+            // fails after its client's connect timeout (~10s for Kafka/Redis), so a sequential loop
+            // made the Dashboard wait for the SUM of every down broker's timeout. Each result is
+            // rendered as soon as it lands (mockup 1d); ordering comes from _checks, not arrival.
+            var stores = Registry.Plugins.ToDictionary(p => p.Id, p => PluginStoreFactory.For(p.Id));
+            await Task.WhenAll(_checks.Select(async check =>
+            {
+                var result = await CheckConnectionAsync(check.Plugin, stores[check.Plugin.Id], check.Connection);
+                if (generation == _generation)
+                {
+                    _results[check.Connection.Id] = result;
+                    StateHasChanged();
+                }
+            }));
+
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            var page = await AuditHandler.HandleAsync(new AuditQuery(Page: 1, PageSize: 8));
             _recentActivity = page.Entries;
             _refreshedAt = DateTimeOffset.UtcNow;
         }
         finally
         {
-            _loading = false;
+            if (generation == _generation)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    private async Task<ConnectionCheck> CheckConnectionAsync(IPlugin plugin, IPluginStore store, ConnectionInfo connection)
+    {
+        try
+        {
+            // GetSecretAsync inside the try, not before it -- see NavMenu.RefreshBadgesAsync's
+            // identical comment: a throw here must only mark this one connection unchecked.
+            var secret = await ConnectionProvider.GetSecretAsync(connection.Id);
+            if (secret is null)
+            {
+                return new ConnectionCheck(connection, false, [], []);
+            }
+
+            var metrics = await plugin.GetDashboardMetricsAsync(secret);
+            var problems = await plugin.GetDashboardProblemsAsync(connection.Id, secret, store);
+            return new ConnectionCheck(connection, true, metrics, problems);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Computing dashboard metrics/problems for connection {ConnectionId} failed; Needs-attention data for it may be incomplete.", connection.Id);
+            return new ConnectionCheck(connection, false, [], []);
         }
     }
 

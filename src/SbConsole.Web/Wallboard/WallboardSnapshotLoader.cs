@@ -41,61 +41,46 @@ public sealed class WallboardSnapshotLoader(
         var connections = await connectionsHandler.HandleAsync(ct: ct);
         var unreachable = connections.Where(c => c.LastTestedAt is not null && c.LastTestSucceeded == false).ToList();
 
+        // Every connection is checked concurrently, not one after another: a stopped broker only
+        // fails after its client's connect timeout, so a sequential loop made the wallboard (and the
+        // Dashboard's embedded widget) wait for the SUM of every down broker's timeout. Results are
+        // merged afterwards in the original plugin/connection order.
+        var checks = await Task.WhenAll(registry.Plugins.SelectMany(plugin =>
+        {
+            var store = pluginStoreFactory.For(plugin.Id);
+            return connections
+                .Where(c => c.Kind == plugin.ConnectionKind)
+                .Select(connection => CheckConnectionAsync(plugin, store, connection, ct));
+        }));
+
         var namespaceBacklog = new List<(ConnectionInfo, int)>();
         var allHistories = new List<IReadOnlyList<MetricSnapshotPoint>>();
         var historyByLabel = new Dictionary<string, IReadOnlyList<MetricSnapshotPoint>>();
         var uncheckedConnections = new HashSet<Guid>();
         OldestDeadLetterEntry? oldest = null;
 
-        foreach (var plugin in registry.Plugins)
+        foreach (var check in checks)
         {
-            var store = pluginStoreFactory.For(plugin.Id);
-            foreach (var connection in connections.Where(c => c.Kind == plugin.ConnectionKind))
+            if (!check.Checked)
             {
-                try
-                {
-                    var secret = await connectionProvider.GetSecretAsync(connection.Id, ct);
-                    if (secret is null)
-                    {
-                        uncheckedConnections.Add(connection.Id);
-                        continue;
-                    }
+                uncheckedConnections.Add(check.Connection.Id);
+                continue;
+            }
 
-                    var deadLettered = 0;
-                    foreach (var metric in await plugin.GetDashboardMetricsAsync(secret, ct))
-                    {
-                        if (metric.Label == "Dead-lettered")
-                        {
-                            deadLettered += metric.Count;
-                        }
-                    }
+            if (check.DeadLettered > 0)
+            {
+                namespaceBacklog.Add((check.Connection, check.DeadLettered));
+            }
 
-                    if (deadLettered > 0)
-                    {
-                        namespaceBacklog.Add((connection, deadLettered));
-                    }
+            foreach (var (resource, history) in check.Histories)
+            {
+                allHistories.Add(history);
+                historyByLabel[$"{check.Connection.Name} / {resource.ResourceName}"] = history;
+            }
 
-                    var resources = await plugin.GetResourceMetricsAsync(secret, ct);
-                    var histories = await Task.WhenAll(resources.Select(async r =>
-                        (Resource: r, History: await MetricHistoryStore.ReadAsync(store, connection.Id, r.ResourceName))));
-
-                    foreach (var (resource, history) in histories)
-                    {
-                        allHistories.Add(history);
-                        historyByLabel[$"{connection.Name} / {resource.ResourceName}"] = history;
-                    }
-
-                    var connectionOldest = await plugin.GetOldestDeadLetterAsync(connection.Id, secret, ct);
-                    if (connectionOldest is not null && (oldest is null || connectionOldest.EnqueuedTime < oldest.EnqueuedTime))
-                    {
-                        oldest = connectionOldest;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    uncheckedConnections.Add(connection.Id);
-                    logger.LogWarning(ex, "Computing wallboard data for connection {ConnectionId} failed; it may be incomplete or missing.", connection.Id);
-                }
+            if (check.Oldest is not null && (oldest is null || check.Oldest.EnqueuedTime < oldest.EnqueuedTime))
+            {
+                oldest = check.Oldest;
             }
         }
 
@@ -140,5 +125,45 @@ public sealed class WallboardSnapshotLoader(
             deadLetterTotal,
             deadLetterDeltaLastHour,
             outageEvents);
+    }
+
+    private sealed record ConnectionCheck(
+        ConnectionInfo Connection,
+        bool Checked,
+        int DeadLettered,
+        IReadOnlyList<(PluginResourceMetric Resource, IReadOnlyList<MetricSnapshotPoint> History)> Histories,
+        OldestDeadLetterEntry? Oldest);
+
+    private async Task<ConnectionCheck> CheckConnectionAsync(IPlugin plugin, IPluginStore store, ConnectionInfo connection, CancellationToken ct)
+    {
+        try
+        {
+            var secret = await connectionProvider.GetSecretAsync(connection.Id, ct);
+            if (secret is null)
+            {
+                return new ConnectionCheck(connection, false, 0, [], null);
+            }
+
+            var deadLettered = 0;
+            foreach (var metric in await plugin.GetDashboardMetricsAsync(secret, ct))
+            {
+                if (metric.Label == "Dead-lettered")
+                {
+                    deadLettered += metric.Count;
+                }
+            }
+
+            var resources = await plugin.GetResourceMetricsAsync(secret, ct);
+            var histories = await Task.WhenAll(resources.Select(async r =>
+                (Resource: r, History: await MetricHistoryStore.ReadAsync(store, connection.Id, r.ResourceName))));
+
+            var oldest = await plugin.GetOldestDeadLetterAsync(connection.Id, secret, ct);
+            return new ConnectionCheck(connection, true, deadLettered, histories, oldest);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Computing wallboard data for connection {ConnectionId} failed; it may be incomplete or missing.", connection.Id);
+            return new ConnectionCheck(connection, false, 0, [], null);
+        }
     }
 }

@@ -22,6 +22,9 @@ services:
   kafka:
     image: apache/kafka:4.1.0
     container_name: nervecenter-kafka
+    # KRaft resolves the container's own hostname at startup and exits on a transient Docker DNS
+    # "Try again" (UnknownHostException) -- without a restart policy the broker just stays down.
+    restart: unless-stopped
     ports:
       - "${KAFKA_HOST_PORT:-9092}:9092"
     environment:
@@ -52,9 +55,9 @@ services:
       retries: 12
       start_period: 15s
 
-  # One-shot: creates the sample topics and drops a few messages in them so the Topics and
-  # Peek pages have something to show. Idempotent (--if-not-exists); re-runs re-produce the
-  # sample messages, which is harmless.
+  # One-shot: creates the sample topics, fills them with messages and sets up consumer groups
+  # with a range of lag so the Topics, Peek, Consumer groups and Dead-letter pages have something
+  # to show. Idempotent: only topics it creates get messages, and group offsets are re-reset.
   kafka-init:
     image: apache/kafka:4.1.0
     container_name: nervecenter-kafka-init
@@ -264,6 +267,21 @@ services:
       SQL_WAIT_INTERVAL: 0
     volumes:
       - ./docker/servicebus/Config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+
+  # One-shot: sends sample messages (active, dead-lettered, scheduled) into the entities
+  # Config.json declares. Python rather than a shell script because the emulator only accepts
+  # sends over AMQP. Skips itself when `orders` already has messages.
+  servicebus-init:
+    image: python:3.12-slim
+    container_name: nervecenter-servicebus-init
+    profiles: ["servicebus"]
+    depends_on:
+      servicebus-emulator:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c", "pip install --quiet --disable-pip-version-check --root-user-action=ignore 'azure-servicebus>=7.12' && python /seed.py"]
+    volumes:
+      - ./docker/servicebus/seed.py:/seed.py:ro
+    restart: "no"
 
   # ---------------------------------------------------------------------------------------
   # SbConsole itself (profile: app), built from source. For when you want the "one shared

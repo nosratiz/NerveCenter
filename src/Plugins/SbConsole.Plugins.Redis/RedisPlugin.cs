@@ -11,6 +11,7 @@ public sealed class RedisPlugin : IPlugin
 {
     public string Id => "redis";
     public string DisplayName => "Redis";
+    public string? Monogram => "RD";
     public string Version => "0.1.0";
     public string ConnectionKind => "redis";
     public string ConnectionKindDisplayName => "Redis";

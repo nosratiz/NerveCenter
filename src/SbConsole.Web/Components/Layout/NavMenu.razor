@@ -1,47 +1,152 @@
 @inject PluginRegistry Registry
 @inject IConnectionProvider Connections
+@inject NavigationManager Nav
 @inject ILogger<NavMenu> Logger
 @implements IDisposable
 
-<MudNavMenu Color="Color.Primary" Rounded="true">
-    <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
-    <MudNavLink Href="/connections" Icon="@Icons.Material.Filled.Cable">Connections</MudNavLink>
-    <MudNavLink Href="/audit" Icon="@Icons.Material.Filled.History">Audit</MudNavLink>
-    <MudNavLink Href="/plugins" Icon="@Icons.Material.Filled.Extension">Plugins</MudNavLink>
-    <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">Settings</MudNavLink>
+@* Icon rail + contextual drawer (mockup "SbConsole Navigation" option 1a): the rail holds the
+   console's own pages and one monogram per plugin, and never grows past one icon per plugin; only
+   the selected plugin's pages and connections are expanded, in the drawer beside it. Badges from
+   plugins not shown in the drawer still surface as a dot on their rail icon. *@
+<nav class="nav-shell">
+    <div class="nav-rail">
+        <a href="/" class="nav-rail-logo" title="SbConsole" aria-label="SbConsole"><span class="nav-logo-mark"></span></a>
+        <NavLink class="nav-rail-item" href="/" Match="NavLinkMatch.All" title="Dashboard" aria-label="Dashboard"><MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Small" /></NavLink>
+        <NavLink class="nav-rail-item" href="/connections" title="Connections" aria-label="Connections"><MudIcon Icon="@Icons.Material.Outlined.Cable" Size="Size.Small" /></NavLink>
+        <NavLink class="nav-rail-item" href="/audit" title="Audit" aria-label="Audit"><MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Small" /></NavLink>
+        <div class="nav-rail-sep"></div>
 
-    @foreach (var plugin in Registry.Plugins)
-    {
-        @* A plain section label instead of a collapsible MudNavGroup: with one plugin there is
-           nothing worth hiding, so a permanently-expanded, always-clickable group just adds an
-           extra (pointless) toggle interaction. Matches the mockup's own flat-sections call for
-           up to three plugins (docs/design.md). *@
-        <MudDivider Class="my-2 mx-4" />
-        <MudText Typo="Typo.overline" Class="nav-section-label px-4 mud-text-secondary">@plugin.DisplayName</MudText>
-        @foreach (var item in plugin.NavItems)
+        @foreach (var plugin in Registry.Plugins)
         {
-            <MudNavLink Href="@item.Href" Icon="@(item.Icon ?? Icons.Material.Filled.Extension)">
-                @item.Title
-                @if (_badges.TryGetValue(item.Href, out var count) && count > 0)
+            var isCurrent = plugin.Id == PluginIdFromUrl();
+            var showDot = PluginHasBadge(plugin) && !(_drawerOpen && plugin.Id == SelectedPlugin?.Id);
+            <a href="@EntryHref(plugin)" class="nav-rail-plugin @(isCurrent ? "active" : null)" title="@plugin.DisplayName" aria-label="@plugin.DisplayName">
+                @MonogramOf(plugin)
+                @if (showDot)
                 {
-                    <span class="nav-badge" style="margin-left:6px;font:600 10px monospace;padding:1px 6px;border-radius:9px;background:var(--mud-palette-error);color:#fff">@count</span>
+                    <span class="nav-rail-dot" aria-label="needs attention"></span>
                 }
-            </MudNavLink>
+            </a>
         }
+        <NavLink class="nav-rail-item nav-rail-add" href="/plugins" title="Plugins" aria-label="Plugins"><MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Small" /></NavLink>
+
+        <div class="nav-rail-bottom">
+            <NavLink class="nav-rail-item" href="/settings" title="Settings" aria-label="Settings"><MudIcon Icon="@Icons.Material.Outlined.Settings" Size="Size.Small" /></NavLink>
+            <button type="button" class="nav-rail-item nav-drawer-toggle" @onclick="ToggleDrawer"
+                    title="@(_drawerOpen ? "Collapse sidebar" : "Expand sidebar")" aria-label="@(_drawerOpen ? "Collapse sidebar" : "Expand sidebar")" aria-expanded="@(_drawerOpen ? "true" : "false")">
+                <MudIcon Icon="@(_drawerOpen ? Icons.Material.Filled.KeyboardDoubleArrowLeft : Icons.Material.Filled.KeyboardDoubleArrowRight)" Size="Size.Small" />
+            </button>
+        </div>
+    </div>
+
+    @if (_drawerOpen && SelectedPlugin is { } selected)
+    {
+        <div class="nav-drawer">
+            <div class="nav-drawer-head">
+                <span class="nav-drawer-title">@selected.DisplayName</span>
+                <span class="nav-drawer-version">@selected.Version</span>
+            </div>
+            <div class="nav-drawer-list">
+                @foreach (var item in selected.NavItems)
+                {
+                    <NavLink class="nav-drawer-item" href="@item.Href">
+                        <MudIcon Icon="@(item.Icon ?? Icons.Material.Outlined.Folder)" Size="Size.Small" />
+                        <span class="nav-drawer-item-title">@item.Title</span>
+                        @if (_badges.TryGetValue(item.Href, out var count) && count > 0)
+                        {
+                            <span class="nav-badge">@count</span>
+                        }
+                    </NavLink>
+                }
+            </div>
+
+            <div class="nav-drawer-sep"></div>
+            <div class="nav-section-label">Connections</div>
+            <div class="nav-drawer-list">
+                @if (_connections.TryGetValue(selected.Id, out var connections) && connections.Count > 0)
+                {
+                    @foreach (var connection in connections)
+                    {
+                        <a href="/connections" class="nav-connection" title="@StatusTitle(connection)">
+                            <span class="nav-status-dot @StatusClass(connection)"></span>@connection.Name
+                        </a>
+                    }
+                }
+                else
+                {
+                    <a href="/connections" class="nav-connection nav-connection-empty">Add a connection</a>
+                }
+            </div>
+        </div>
     }
-</MudNavMenu>
+</nav>
 
 @code {
     private readonly Dictionary<string, int> _badges = new();
+    private readonly Dictionary<string, IReadOnlyList<ConnectionInfo>> _connections = new();
     private readonly CancellationTokenSource _cts = new();
+    private bool _drawerOpen = true;
+
+    // The plugin shown in the drawer: the one owning the current URL, or -- on a host page such as
+    // Dashboard or Audit -- whichever was shown last, so leaving a plugin doesn't blank the drawer.
+    private string? _selectedPluginId;
+
+    private IPlugin? SelectedPlugin =>
+        Registry.Plugins.FirstOrDefault(p => p.Id == _selectedPluginId) ?? Registry.Plugins.FirstOrDefault();
 
     // Fire-and-forget: never awaited from a lifecycle method, so the very first render of any page
     // (this component is part of the persistent layout, not re-created per page) is never blocked
     // on a Service Bus or database call (docs/design.md §5).
     protected override void OnInitialized()
     {
+        _selectedPluginId = PluginIdFromUrl();
+        Nav.LocationChanged += OnLocationChanged;
         _ = RefreshLoopAsync(_cts.Token);
     }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _selectedPluginId = PluginIdFromUrl() ?? _selectedPluginId;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    // Plugin pages mount at /p/{pluginId}/... (docs/design.md), so the URL alone says which plugin
+    // owns the current page.
+    private string? PluginIdFromUrl()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0];
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2 || segments[0] != "p")
+        {
+            return null;
+        }
+
+        return Registry.Plugins.FirstOrDefault(p => p.Id == segments[1])?.Id;
+    }
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    private static string EntryHref(IPlugin plugin) =>
+        plugin.NavItems.Count > 0 ? plugin.NavItems[0].Href : $"/p/{plugin.Id}";
+
+    private static string MonogramOf(IPlugin plugin) => PluginMonogram.Of(plugin);
+
+    private bool PluginHasBadge(IPlugin plugin) =>
+        plugin.NavItems.Any(item => _badges.TryGetValue(item.Href, out var count) && count > 0);
+
+    private static string StatusClass(ConnectionInfo connection) => connection.LastTestSucceeded switch
+    {
+        true => "ok",
+        false => "bad",
+        null => "unknown",
+    };
+
+    private static string StatusTitle(ConnectionInfo connection) => connection.LastTestSucceeded switch
+    {
+        true => "Last test succeeded",
+        false => "Last test failed",
+        null => "Not tested yet",
+    };
 
     private async Task RefreshLoopAsync(CancellationToken ct)
     {
@@ -76,9 +181,19 @@
     // (docs/design.md §8) -- the loop above is just this method plus a delay, in a while loop.
     public async Task RefreshBadgesAsync(CancellationToken ct = default)
     {
+        // Connection lists first, rendered straight away: they're one local DB read each, while
+        // the badge calls below talk to every broker and can take seconds per unreachable one --
+        // the drawer's Connections section shouldn't wait on those.
         foreach (var plugin in Registry.Plugins)
         {
-            var connections = await Connections.ListAsync(plugin.ConnectionKind, ct);
+            _connections[plugin.Id] = await Connections.ListAsync(plugin.ConnectionKind, ct);
+        }
+
+        await InvokeAsync(StateHasChanged);
+
+        foreach (var plugin in Registry.Plugins)
+        {
+            var connections = _connections[plugin.Id];
             foreach (var navItem in plugin.NavItems)
             {
                 int? total = null;
@@ -131,6 +246,7 @@
     // disposing here can't race an in-flight token registration.
     public void Dispose()
     {
+        Nav.LocationChanged -= OnLocationChanged;
         _cts.Cancel();
         _cts.Dispose();
     }

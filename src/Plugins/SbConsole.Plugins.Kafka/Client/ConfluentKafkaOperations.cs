@@ -43,7 +43,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
         {
             try
             {
-                using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+                using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
                 admin.GetMetadata(AttemptTimeout);
                 return new ConnectionTestResult(true);
             }
@@ -60,13 +60,13 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
     public Task<IReadOnlyList<TopicSummary>> ListTopicsAsync(string config, CancellationToken ct = default) =>
         Task.Run<IReadOnlyList<TopicSummary>>(() =>
         {
-            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
             var metadata = admin.GetMetadata(AttemptTimeout);
 
             // One throwaway consumer group per call, purely to ask the cluster for watermark
             // offsets -- never subscribes, never commits. Same "fresh, never-reused group.id"
             // convention PeekMessagesAsync (Task 6) uses.
-            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Quiet().Build();
 
             var topics = new List<TopicSummary>();
             foreach (var topic in metadata.Topics)
@@ -97,7 +97,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
     public Task<(int TopicCount, int PartitionCount)> GetTopicCountsAsync(string config, CancellationToken ct = default) =>
         Task.Run(() =>
         {
-            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
             var metadata = admin.GetMetadata(AttemptTimeout);
             return (metadata.Topics.Count, metadata.Topics.Sum(t => t.Partitions.Count));
         }, ct);
@@ -115,7 +115,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
     // in this class.
     public async Task CreateTopicAsync(string config, CreateTopicRequest request, CancellationToken ct = default)
     {
-        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
         await admin.CreateTopicsAsync(
         [
             new TopicSpecification
@@ -129,7 +129,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
 
     public async Task DeleteTopicAsync(string config, string topicName, CancellationToken ct = default)
     {
-        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
         await admin.DeleteTopicsAsync([topicName], BuildDeleteTopicsOptions());
     }
 
@@ -147,7 +147,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
             // never shares a consumer group with anything else. See design spec §5.
             var consumerConfig = CreateConsumerConfig(config, Guid.NewGuid().ToString());
             consumerConfig.EnablePartitionEof = true;
-            using var consumer = new ConsumerBuilder<byte[], byte[]>(consumerConfig).Build();
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(consumerConfig).Quiet().Build();
 
             var topicPartition = new TopicPartition(topicName, new Partition(partition));
             var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
@@ -217,7 +217,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
 
     public async Task ProduceMessageAsync(string config, string topicName, string? key, string value, int? partition, CancellationToken ct = default)
     {
-        using var producer = new ProducerBuilder<string?, string>(CreateProducerConfig(config)).Build();
+        using var producer = new ProducerBuilder<string?, string>(CreateProducerConfig(config)).Quiet().Build();
         var message = new Message<string?, string> { Key = key, Value = value };
         var topicPartition = new TopicPartition(topicName, partition is { } p ? new Partition(p) : Partition.Any);
         await producer.ProduceAsync(topicPartition, message, ct);
@@ -242,27 +242,31 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
 
     public async Task<IReadOnlyList<ConsumerGroupSummary>> ListConsumerGroupsAsync(string config, CancellationToken ct = default)
     {
-        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
 
-        var listResult = await admin.ListConsumerGroupsAsync(new ListConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
-        if (listResult.Valid.Count == 0)
+        // The synchronous ListGroups (which also carries each group's state and members), NOT
+        // IAdminClient.ListConsumerGroupsAsync + DescribeConsumerGroupsAsync: ListConsumerGroupsAsync
+        // SIGSEGV/SIGABRTs the whole process on macOS arm64 / .NET 10 / Confluent.Kafka 2.15.1 --
+        // reproduced in a bare console app against an unreachable broker, 3/3 runs -- and the
+        // Dashboard and nav badge call this method on every render, so one stopped Kafka broker took
+        // the entire console down. ListGroups against the same broker throws a plain KafkaException.
+        // Guarded by KafkaPluginTests' unreachable-cluster regression test.
+        var groups = await Task.Run(() => admin.ListGroups(AttemptTimeout), ct);
+        var validGroups = groups.Where(g => !g.Error.IsError).ToList();
+        if (validGroups.Count == 0)
         {
             return [];
         }
 
-        var groupIds = listResult.Valid.Select(g => g.GroupId).ToList();
-        var describeResult = await admin.DescribeConsumerGroupsAsync(groupIds, new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
-        var memberCountByGroup = describeResult.ConsumerGroupDescriptions.ToDictionary(d => d.GroupId, d => d.Members.Count);
-
         // One throwaway consumer group, reused across every group's watermark lookups below -- same
         // "fresh, never-reused group.id, purely to ask the cluster for watermark offsets" convention
         // ListTopicsAsync already uses.
-        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Quiet().Build();
 
         var summaries = new List<ConsumerGroupSummary>();
-        foreach (var listing in listResult.Valid)
+        foreach (var group in validGroups)
         {
-            var offsets = await GetCommittedOffsetsAsync(admin, listing.GroupId);
+            var offsets = await GetCommittedOffsetsAsync(admin, group.Group);
             var totalLag = await Task.Run(() =>
             {
                 long total = 0;
@@ -285,7 +289,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
                 return total;
             }, ct);
 
-            summaries.Add(new ConsumerGroupSummary(listing.GroupId, listing.State.ToString(), memberCountByGroup.GetValueOrDefault(listing.GroupId, 0), totalLag));
+            summaries.Add(new ConsumerGroupSummary(group.Group, group.State, group.Members.Count, totalLag));
         }
 
         return summaries;
@@ -293,7 +297,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
 
     public async Task<ConsumerGroupDetail> GetConsumerGroupDetailAsync(string config, string groupId, CancellationToken ct = default)
     {
-        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
 
         var describeResult = await admin.DescribeConsumerGroupsAsync([groupId], new DescribeConsumerGroupsOptions { RequestTimeout = AttemptTimeout });
         var description = describeResult.ConsumerGroupDescriptions[0];
@@ -311,7 +315,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
 
         var offsets = await GetCommittedOffsetsAsync(admin, groupId);
 
-        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Quiet().Build();
         var partitionLags = await Task.Run(() =>
         {
             var result = new List<ConsumerGroupPartitionLag>();
@@ -377,7 +381,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
             // QueryWatermarkOffsets and OffsetsForTimes are synchronous/blocking, so the whole
             // resolution runs inside one Task.Run, same convention as every other blocking call in
             // this class.
-            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Quiet().Build();
             resolvedOffset = await Task.Run(() =>
             {
                 var watermarks = consumer.QueryWatermarkOffsets(topicPartition, AttemptTimeout);
@@ -393,7 +397,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
             }, ct);
         }
 
-        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+        using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
         await admin.AlterConsumerGroupOffsetsAsync(
             [new ConsumerGroupTopicPartitionOffsets(groupId, [new TopicPartitionOffset(topicPartition, resolvedOffset)])],
             new AlterConsumerGroupOffsetsOptions { RequestTimeout = AttemptTimeout });
@@ -415,7 +419,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
     public Task<IReadOnlyList<DeadLetterTopicSummary>> ListDeadLetterTopicsAsync(string config, CancellationToken ct = default) =>
         Task.Run<IReadOnlyList<DeadLetterTopicSummary>>(() =>
         {
-            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Build();
+            using var admin = new AdminClientBuilder(CreateAdminClientConfig(config)).Quiet().Build();
             var metadata = admin.GetMetadata(AttemptTimeout);
             var dlqTopics = metadata.Topics.Where(t => IsDlqTopic(t.Topic)).ToList();
             if (dlqTopics.Count == 0)
@@ -429,7 +433,7 @@ public sealed class ConfluentKafkaOperations : IKafkaOperations, ISingletonServi
             // the repeated Assign/Unassign on one instance (rather than a fresh consumer per
             // partition) is new to this method -- see this plan's Global Constraints for why Task 6
             // exists to verify this against a real broker.
-            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Build();
+            using var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(config, Guid.NewGuid().ToString())).Quiet().Build();
 
             var results = new List<DeadLetterTopicSummary>();
             foreach (var topic in dlqTopics)

@@ -2,22 +2,12 @@ h1:focus {
     outline: none;
 }
 
-/* MudBlazor's own .mud-main-content padding-top:var(--mud-appbar-height) reserves space below
-   the fixed MudAppBar; a plain "pa-4" utility class overrides that (its padding shorthand carries
-   !important), which pushed every page's own <h1> title underneath the fixed app bar. Global (not
-   MainLayout.razor.css-scoped) because MudMainContent doesn't forward the Blazor CSS-isolation
-   scope attribute onto its own rendered root element, so a scoped .page-content rule here would
-   silently never match it.
-   Also gives the sidebar visual weight as its own panel: the drawer/app-bar stay on
-   --mud-palette-background (the darker of the two theme tones) while the content pane sits on
-   --mud-palette-surface (the lighter tone already used for cards/tables), instead of both
-   inheriting the same body background. (2026-09-14: --mud-palette-surface is now applied at 70%
-   via color-mix(), not opaque, so the body's ambient glow — see the glass-shell rules below —
-   bleeds through the content area too, per the approved "whole app" scope in
-   docs/superpowers/specs/2026-09-14-glass-shell-design.md.) */
+/* Page area beside the icon-rail nav (MainLayout.razor). The ambient body glow below shows through
+   it; cards and tables sit on --mud-palette-surface above it, as in the navigation mockup. */
 .page-content {
-    padding: calc(var(--mud-appbar-height) + 16px) 16px 16px 16px;
-    background: color-mix(in srgb, var(--mud-palette-surface) 70%, transparent);
+    flex: 1;
+    min-width: 0;
+    padding: 20px;
 }
 
 /* Ambient glow behind the whole app shell (docs/design.md §10 addendum, 2026-09-14): MudBlazor's
@@ -36,44 +26,789 @@ body {
     background-repeat: no-repeat;
 }
 
-/* Gradient-glass app-bar and drawer (docs/design.md §10 addendum, 2026-09-14): replaces the flush,
-   same-as-background app-bar/drawer from the prior sidebar modernization with a translucent,
-   blurred gradient that reveals the body glow above. Colors are color-mix()'d from the same
-   tokens as the glow, so both themes stay in sync automatically. The drawer's color-mix
-   percentages (35%/18%) are intentionally denser than the app-bar's
-   (30%/14%), matching the approved mockup — not a drift to "harmonize" later. Note for future
-   maintainers: backdrop-filter makes both elements a containing block for any
-   position:fixed descendant (e.g. a popover rendered inside the app-bar or
-   drawer would mis-position) — not an issue today since neither holds
-   anything that renders one, but worth knowing before adding one. */
-.mud-appbar {
-    background: linear-gradient(100deg, color-mix(in srgb, var(--mud-palette-primary) 30%, transparent), color-mix(in srgb, var(--mud-palette-info) 14%, transparent));
-    backdrop-filter: blur(18px) saturate(160%);
-    -webkit-backdrop-filter: blur(18px) saturate(160%);
-    border-bottom: 1px solid color-mix(in srgb, var(--mud-palette-text-primary) 12%, transparent);
+/* Icon rail + contextual drawer (NavMenu.razor; mockup "SbConsole Navigation" option 1a).
+   Global rather than NavMenu.razor.css-scoped because most elements here are rendered by child
+   components (NavLink, MudIcon), which don't carry NavMenu's CSS-isolation attribute. Colors only
+   from --mud-palette-* tokens so light and dark both stay correct. */
+.app-shell {
+    display: flex;
+    min-height: 100vh;
 }
 
-.mud-drawer {
-    background: linear-gradient(165deg, color-mix(in srgb, var(--mud-palette-primary) 35%, transparent), color-mix(in srgb, var(--mud-palette-info) 18%, transparent));
-    backdrop-filter: blur(18px) saturate(160%);
-    -webkit-backdrop-filter: blur(18px) saturate(160%);
-    border-right: 1px solid color-mix(in srgb, var(--mud-palette-text-primary) 12%, transparent);
+.nav-shell {
+    --nav-muted: var(--mud-palette-text-secondary);
+    --nav-faint: color-mix(in srgb, var(--mud-palette-text-primary) 38%, transparent);
+    --nav-accent-bg: color-mix(in srgb, var(--mud-palette-primary) 16%, transparent);
+    --nav-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    flex: none;
+    display: flex;
+    z-index: 2;
 }
 
-/* Collapsed (mini/icon-rail) sidebar: MudBlazor already visually hides each MudNavLink's own text
-   this same way (clipped to 1px, not display:none, so it stays announced to screen readers) --
-   the plugin section's plain-text label needs the same treatment, since it isn't a MudNavLink and
-   would otherwise overflow the icon-only rail. */
-.mud-drawer--closed.mud-drawer-mini .nav-section-label {
-    position: absolute;
-    clip: rect(1px, 1px, 1px, 1px);
-    clip-path: inset(50%);
-    white-space: nowrap;
-    padding: 0;
+.nav-rail {
+    width: 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0 12px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    background: color-mix(in srgb, var(--mud-palette-surface) 70%, var(--mud-palette-background));
+    border-right: 1px solid var(--mud-palette-divider);
+}
+
+.nav-rail-logo {
+    width: 36px;
+    height: 36px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    margin-bottom: 8px;
+}
+
+.nav-logo-mark {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--mud-palette-primary);
+    border-radius: 4px;
+}
+
+.nav-rail-item,
+.nav-rail-plugin {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    flex: none;
+    display: grid;
+    place-items: center;
     border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--nav-muted);
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color .12s, color .12s;
+}
+
+.nav-rail-item:hover,
+.nav-rail-plugin:hover {
+    background: color-mix(in srgb, var(--mud-palette-text-primary) 8%, transparent);
+    color: var(--mud-palette-text-primary);
+}
+
+.nav-rail-item.active,
+.nav-rail-plugin.active {
+    background: var(--nav-accent-bg);
+    color: var(--mud-palette-primary);
+}
+
+/* Accent bar at the rail's left edge marks the plugin that owns the current page. */
+.nav-rail-plugin.active::before {
+    content: "";
+    position: absolute;
+    left: -10px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--mud-palette-primary);
+}
+
+.nav-rail-plugin {
+    font: 600 10.5px var(--nav-mono);
+}
+
+.nav-rail-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--mud-palette-error);
+    box-shadow: 0 0 0 2px var(--mud-palette-background);
+}
+
+.nav-rail-add {
+    margin-top: 4px;
+    color: var(--nav-faint);
+    border: 1px dashed var(--mud-palette-divider);
+}
+
+.nav-rail-sep {
+    width: 24px;
     height: 1px;
-    width: 1px;
+    flex: none;
+    margin: 8px 0;
+    background: var(--mud-palette-divider);
+}
+
+.nav-rail-bottom {
+    margin-top: auto;
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.nav-drawer {
+    width: 196px;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 12px;
+    overflow-y: auto;
+    background: var(--mud-palette-surface);
+    border-right: 1px solid var(--mud-palette-divider);
+}
+
+.nav-drawer-head {
+    height: 48px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+}
+
+.nav-drawer-title {
+    font-weight: 500;
+    font-size: 14px;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-drawer-version {
+    font: 400 10px var(--nav-mono);
+    color: var(--nav-muted);
+}
+
+.nav-drawer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 8px;
+}
+
+.nav-drawer-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--nav-muted);
+    text-decoration: none;
+}
+
+.nav-drawer-item .mud-icon-root {
+    font-size: 16px;
+    opacity: .75;
+}
+
+.nav-drawer-item:hover {
+    background: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+    color: var(--mud-palette-text-primary);
+}
+
+.nav-drawer-item.active {
+    background: var(--nav-accent-bg);
+    color: var(--mud-palette-primary);
+}
+
+.nav-drawer-item.active .mud-icon-root {
+    opacity: 1;
+}
+
+.nav-drawer-item-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nav-badge {
+    font: 600 10px var(--nav-mono);
+    padding: 1px 6px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--mud-palette-error) 15%, transparent);
+    color: var(--mud-palette-error);
+}
+
+.nav-drawer-sep {
+    height: 1px;
+    flex: none;
+    margin: 12px 14px 8px;
+    background: var(--mud-palette-divider);
+}
+
+.nav-section-label {
+    font-size: 9.5px;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--nav-muted);
+    padding: 2px 18px 5px;
+}
+
+.nav-connection {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font: 400 12px var(--nav-mono);
+    color: var(--nav-muted);
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-connection:hover {
+    background: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+    color: var(--mud-palette-text-primary);
+}
+
+.nav-connection-empty {
+    font-family: inherit;
+    color: var(--nav-faint);
+}
+
+.nav-status-dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+}
+
+.nav-status-dot.ok { background: var(--mud-palette-success); }
+.nav-status-dot.bad { background: var(--mud-palette-error); }
+.nav-status-dot.unknown { background: var(--nav-faint); }
+
+/* Dashboard (Home.razor + WallboardWidget.razor; mockup "SbConsole Dashboard" option 1a, with the
+   1c all-clear and 1d per-connection checking states). Global rather than component-scoped for the
+   same reason as the nav above: MudButton/MudLink children don't carry the isolation attribute.
+   Status colors come only from --mud-palette-success/warning/error, so light and dark both hold. */
+.dash {
+    --dash-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --dash-muted: var(--mud-palette-text-secondary);
+    --dash-faint: color-mix(in srgb, var(--mud-palette-text-primary) 45%, transparent);
+    --dash-skeleton: color-mix(in srgb, var(--mud-palette-text-primary) 11%, transparent);
+    --dash-ok: var(--mud-palette-success);
+    --dash-warn: var(--mud-palette-warning);
+    --dash-bad: var(--mud-palette-error);
+    --dash-warn-bg: color-mix(in srgb, var(--mud-palette-warning) 15%, transparent);
+    --dash-bad-bg: color-mix(in srgb, var(--mud-palette-error) 15%, transparent);
+    margin: -20px; /* the header bar runs edge to edge, so undo .page-content's padding */
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    color: var(--mud-palette-text-primary);
+}
+
+.dash-head {
+    height: 48px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+.dash-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.dash-summary {
+    font: 400 12px var(--dash-mono);
+    color: var(--dash-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.dash-head-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+}
+
+.dash-refreshed {
+    font: 400 11px var(--dash-mono);
+    color: var(--dash-faint);
+}
+
+.dash-head-right .refresh-dashboard {
+    font-size: 12px;
+    padding: 2px 10px;
+    min-width: 0;
+    text-transform: none;
+}
+
+.dash-head-right .open-wallboard {
+    font-size: 12.5px;
+}
+
+.dash-main {
+    flex: 1;
+    min-height: 0;
+    padding: 16px 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.dash-section-title {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+/* Fleet: one card per plugin */
+.fleet {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+}
+
+.fleet-card {
+    background: var(--mud-palette-surface);
+    border-radius: 8px;
+    padding: 11px 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    color: inherit;
+    text-decoration: none;
+    transition: box-shadow 120ms ease;
+}
+
+.fleet-card:hover {
+    box-shadow: inset 0 0 0 1px var(--mud-palette-lines-default);
+}
+
+.fleet-card.has-error,
+.fleet-card.has-error:hover {
+    box-shadow: inset 0 0 0 1px var(--dash-bad-bg);
+}
+
+.fleet-card-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+
+.fleet-mono {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    background: var(--dash-skeleton);
+    color: var(--dash-muted);
+    font: 600 9.5px var(--dash-mono);
+}
+
+.fleet-name {
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fleet-count {
+    margin-left: auto;
+    font: 600 10px var(--dash-mono);
+    padding: 1px 6px;
+    border-radius: 9px;
+}
+
+.fleet-count.bad { background: var(--dash-bad-bg); color: var(--dash-bad); }
+.fleet-count.warn { background: var(--dash-warn-bg); color: var(--dash-warn); }
+
+.fleet-metrics {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: start;
+    gap: 2px 10px;
+    font: 400 11px var(--dash-mono);
+    color: var(--dash-muted);
+    min-height: 15px;
+}
+
+.fleet-metric.warn { color: var(--dash-warn); }
+.fleet-metric-none { color: var(--dash-faint); }
+
+.fleet-conn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font: 400 10.5px var(--dash-mono);
+    color: var(--dash-faint);
+}
+
+/* Status dots, shared by fleet cards and triage rows */
+.fleet-dot,
+.triage-dot {
+    flex: none;
+    border-radius: 50%;
+    background: var(--dash-ok);
+}
+
+.fleet-dot { width: 6px; height: 6px; }
+.triage-dot { width: 8px; height: 8px; }
+
+.fleet-dot.warn, .triage-dot.warn { background: var(--dash-warn); }
+.fleet-dot.bad, .triage-dot.bad { background: var(--dash-bad); }
+
+.fleet-dot.unchecked,
+.triage-dot.unchecked {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--dash-faint);
+}
+
+.fleet-dot.pending,
+.triage-dot.pending {
+    background: transparent;
+    border: 1.5px solid var(--dash-faint);
+    border-top-color: transparent;
+    animation: dash-spin 0.9s linear infinite;
+}
+
+@keyframes dash-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fleet-dot.pending, .triage-dot.pending { animation: none; }
+}
+
+/* Body: triage list + side column */
+.dash-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 16px;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    .dash-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+.triage {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.triage-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-height: 24px;
+}
+
+.triage-filters {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.triage-filter {
+    font: 400 11px var(--dash-mono);
+    padding: 2px 8px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--dash-muted);
+    cursor: pointer;
+}
+
+.triage-filter.error { color: var(--dash-bad); }
+.triage-filter.warning { color: var(--dash-warn); }
+
+.triage-filter:hover {
+    background: var(--dash-skeleton);
+}
+
+.triage-filter.active {
+    font-weight: 500;
+    background: color-mix(in srgb, var(--mud-palette-primary) 16%, transparent);
+    color: var(--mud-palette-primary);
+}
+
+.triage-count,
+.triage-progress,
+.triage-order {
+    font: 400 11px var(--dash-mono);
+    color: var(--dash-faint);
+}
+
+.triage-order { margin-left: auto; }
+
+.triage-table {
+    background: var(--mud-palette-surface);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.triage-grid {
+    display: grid;
+    grid-template-columns: 8px 26px 150px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 9px 14px;
+    min-height: 40px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+.triage-grid:last-child { border-bottom: 0; }
+
+.triage-header {
+    min-height: 0;
+    padding: 8px 14px;
+    font-size: 9.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--dash-faint);
+}
+
+.triage-row.sev-unchecked,
+.triage-row.sev-pending {
+    color: var(--dash-muted);
+}
+
+.triage-mono {
+    font: 600 9.5px var(--dash-mono);
+    color: var(--dash-muted);
+}
+
+.triage-conn {
+    font: 400 12px var(--dash-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.triage-problem {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.triage-title {
+    font-family: var(--dash-mono);
+    font-size: 12px;
+}
+
+.triage-detail { color: var(--dash-muted); }
+
+.triage-skeleton {
+    display: block;
+    height: 8px;
+    width: 55%;
+    border-radius: 4px;
+    background: var(--dash-skeleton);
+}
+
+.triage-action {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.triage-action .retry-connection {
+    font-size: 12px;
+    min-width: 0;
+    padding: 0 4px;
+    text-transform: none;
+}
+
+.triage-link {
+    color: var(--mud-palette-primary);
+    text-decoration: none;
+}
+
+.triage-link:hover { text-decoration: underline; }
+.triage-link.muted { color: var(--dash-muted); }
+
+.triage-all-clear {
+    background: var(--mud-palette-surface);
+    border-radius: 8px;
+    padding: 22px 18px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+}
+
+/* Side column cards: Backlog (WallboardWidget) + Activity */
+.dash-side {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.dash-card {
+    background: var(--mud-palette-surface);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dash-card-head {
+    display: flex;
+    align-items: center;
+}
+
+.dash-card-meta {
+    margin-left: auto;
+    font: 400 11px var(--dash-mono);
+    color: var(--dash-faint);
+}
+
+.dash-card-link {
+    font-size: 12px;
+    color: var(--mud-palette-primary);
+    text-decoration: none;
+}
+
+.dash-card-head .dash-card-link { margin-left: auto; }
+.dash-card-link:hover { text-decoration: underline; }
+
+.backlog-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.backlog-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.backlog-label {
+    font-size: 9.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--dash-faint);
+}
+
+.backlog-value {
+    font: 400 20px var(--dash-mono);
+    white-space: nowrap;
+}
+
+.backlog-value.bad { color: var(--dash-bad); }
+
+.backlog-sub {
+    font: 400 10.5px var(--dash-mono);
+    color: var(--dash-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.backlog-sub.warn { color: var(--dash-warn); }
+
+.backlog-spark {
+    display: block;
+    width: 100%;
+    height: 56px;
+}
+
+.backlog-spark polyline {
+    fill: none;
+    stroke-width: 1.2;
+    vector-effect: non-scaling-stroke;
+}
+
+.backlog-spark .spark-active { stroke: var(--dash-faint); }
+.backlog-spark .spark-dead { stroke: var(--dash-bad); }
+
+.backlog-spark .spark-outage {
+    stroke: var(--dash-bad);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.backlog-axis {
+    display: flex;
+    justify-content: space-between;
+    font: 400 10.5px var(--dash-mono);
+    color: var(--dash-faint);
+    margin-top: -4px;
+}
+
+.backlog-summary {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--dash-muted);
+}
+
+.activity { gap: 9px; }
+
+.activity-row {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+}
+
+.activity-dot {
+    width: 7px;
+    height: 7px;
+    margin-top: 5px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--dash-faint);
+}
+
+.activity-dot.warn { background: var(--dash-warn); }
+.activity-dot.bad { background: var(--dash-bad); }
+
+.activity-text {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.activity-text b { font-weight: 500; }
+
+.activity-meta,
+.activity-empty {
+    font: 400 10.5px var(--dash-mono);
+    color: var(--dash-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .valid.modified:not([type=checkbox]) {

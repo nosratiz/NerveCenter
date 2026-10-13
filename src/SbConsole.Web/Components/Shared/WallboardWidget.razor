@@ -1,78 +1,104 @@
 @* src/SbConsole.Web/Components/Shared/WallboardWidget.razor *@
+@using System.Globalization
 @using SbConsole.Web.Wallboard
 @inject WallboardSnapshotLoader SnapshotLoader
 @inject TimeProvider Clock
 
-<MudPaper Class="pa-4 mb-4 wallboard-widget" Style="border:1px solid var(--mud-palette-lines-default)" Elevation="0">
-    <div class="d-flex align-center mb-2">
-        <MudText Typo="Typo.h6">Wallboard</MudText>
-        <MudSpacer />
-        <MudLink Href="/wallboard" Class="open-full-wallboard">Open full wallboard →</MudLink>
+@* The Dashboard's "Backlog" card (mockup "SbConsole Dashboard" 1a): the full /wallboard page's
+   tiles and 1h trend condensed into one side-column card, with the same outage rule. *@
+<section class="dash-card wallboard-widget" aria-label="Backlog">
+    <div class="dash-card-head">
+        <h2 class="dash-section-title">Backlog</h2>
+        <span class="dash-card-meta">1h</span>
     </div>
 
     @if (_loading)
     {
-        <MudProgressLinear Indeterminate="true" Class="mb-2" />
+        <MudProgressLinear Indeterminate="true" />
     }
     else
     {
-        <div class="d-flex flex-wrap gap-4 mb-4">
-            <MudPaper Class="pa-3 tile-active" Style="min-width:140px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">ACTIVE</MudText>
-                <MudText Typo="Typo.h5">@_activeCount</MudText>
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute / min</MudText>
-            </MudPaper>
-            <MudPaper Class="pa-3 tile-dead-lettered" Style="@($"min-width:140px;border:1px solid {(_deadLetterTotal > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-lines-default)")}")" Elevation="0">
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">DEAD-LETTERED</MudText>
-                <MudText Typo="Typo.h5" Color="@(_deadLetterTotal > 0 ? Color.Error : Color.Default)">@_deadLetterTotal</MudText>
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">@DeadLetterDeltaLabel</MudText>
-            </MudPaper>
-            <MudPaper Class="pa-3 tile-oldest" Style="min-width:140px;border:1px solid var(--mud-palette-lines-default)" Elevation="0">
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">OLDEST MESSAGE</MudText>
+        <div class="backlog-stats">
+            <div class="backlog-stat tile-active">
+                <span class="backlog-label">Active</span>
+                <span class="backlog-value">@_activeCount.ToString("N0", CultureInfo.InvariantCulture)</span>
+                <span class="backlog-sub">@(_activeDeltaLastMinute >= 0 ? "+" : "")@_activeDeltaLastMinute / min</span>
+            </div>
+            <div class="backlog-stat tile-dead-lettered">
+                <span class="backlog-label">Dead-lettered</span>
+                <span class="backlog-value @(_deadLetterTotal > 0 ? "bad" : null)">@_deadLetterTotal.ToString("N0", CultureInfo.InvariantCulture)</span>
+                <span class="backlog-sub @(_deadLetterDeltaLastHour > 0 ? "warn" : null)">@DeadLetterDeltaLabel</span>
+            </div>
+            <div class="backlog-stat tile-oldest">
+                <span class="backlog-label">Oldest</span>
                 @if (_oldestDeadLetter is { } oldest)
                 {
-                    <MudText Typo="Typo.h5">@FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime)</MudText>
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@oldest.ResourceName · @oldest.DeadLetterCount msgs</MudText>
+                    <span class="backlog-value">@FormatAge(Clock.GetUtcNow() - oldest.EnqueuedTime)</span>
+                    <span class="backlog-sub" title="@oldest.ResourceName · @oldest.DeadLetterCount msgs">@oldest.ResourceName</span>
                 }
                 else
                 {
-                    <MudText Typo="Typo.h5">—</MudText>
+                    <span class="backlog-value">—</span>
                 }
-            </MudPaper>
+            </div>
         </div>
 
-        <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@TrendSeries" ChartLabels="@TrendLabels" Width="100%" Height="140px" />
+        @if (_buckets1h.Count >= 2)
+        {
+            <svg class="backlog-spark" viewBox="0 0 @ChartWidth @ChartHeight" preserveAspectRatio="none" aria-hidden="true">
+                <polyline class="spark-active" points="@Points(b => b.TotalActive)"></polyline>
+                <polyline class="spark-dead" points="@Points(b => b.TotalDeadLetter)"></polyline>
+                @foreach (var position in WallboardAggregator.OutageMarkerPositions(_outageEvents, _buckets1h))
+                {
+                    var x = Format(position * ChartWidth);
+                    <line class="spark-outage" x1="@x" y1="0" x2="@x" y2="@ChartHeight"></line>
+                }
+            </svg>
+            <div class="backlog-axis">
+                <span>@_buckets1h[0].At.ToLocalTime().ToString("HH:mm")</span>
+                <span>@_buckets1h[^1].At.ToLocalTime().ToString("HH:mm")</span>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_growthSummary))
+        {
+            <div class="backlog-summary">@_growthSummary</div>
+        }
+        <a href="/wallboard" class="dash-card-link open-full-wallboard">Open full wallboard →</a>
     }
-</MudPaper>
+</section>
 
 @code {
+    private const double ChartWidth = 292;
+    private const double ChartHeight = 56;
+
     private bool _loading = true;
     private long _activeCount;
     private long _activeDeltaLastMinute;
     private long _deadLetterTotal;
     private long? _deadLetterDeltaLastHour;
     private OldestDeadLetterEntry? _oldestDeadLetter;
+    private string _growthSummary = "";
+    private IReadOnlyList<DateTimeOffset> _outageEvents = [];
     private IReadOnlyList<WallboardAggregator.Bucket> _buckets1h = [];
 
     private string DeadLetterDeltaLabel =>
         _deadLetterDeltaLastHour is { } delta ? $"{(delta >= 0 ? "+" : "")}{delta} / 1h" : "— / 1h";
 
-    private List<ChartSeries<double>> TrendSeries =>
-    [
-        new() { Name = "Active", Data = _buckets1h.Select(b => (double)b.TotalActive).ToList() },
-        new() { Name = "Dead-lettered", Data = _buckets1h.Select(b => (double)b.TotalDeadLetter).ToList() },
-    ];
-
-    // Same thinning approach as the full Wallboard page's chart -- a 60-point 1h series is too
-    // dense to label every point, so only every Nth bucket gets a label (blank "" for the rest).
-    private string[] TrendLabels
+    // Each series is scaled to its own range: active counts are typically orders of magnitude
+    // above dead-lettered ones, and on a shared axis the dead-letter line would sit flat at zero.
+    // This is a sparkline -- the shape matters, the exact numbers are in the stats above.
+    private string Points(Func<WallboardAggregator.Bucket, long> value)
     {
-        get
-        {
-            var stride = Math.Max(1, _buckets1h.Count / 6);
-            return [.. _buckets1h.Select((b, i) => i % stride == 0 ? b.At.ToLocalTime().ToString("HH:mm") : "")];
-        }
+        var values = _buckets1h.Select(value).ToList();
+        var min = values.Min();
+        var range = Math.Max(1, values.Max() - min);
+        const double pad = 4;
+        return string.Join(" ", values.Select((v, i) =>
+            $"{Format(i * ChartWidth / (values.Count - 1))},{Format(ChartHeight - pad - (v - min) * (ChartHeight - 2 * pad) / range)}"));
     }
+
+    private static string Format(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 1 ? $"{(int)age.TotalHours}h {age.Minutes}m" : $"{age.Minutes}m";
@@ -85,6 +111,8 @@
         _deadLetterTotal = snapshot.DeadLetterTotal;
         _deadLetterDeltaLastHour = snapshot.DeadLetterDeltaLastHour;
         _oldestDeadLetter = snapshot.OldestDeadLetter;
+        _growthSummary = snapshot.GrowthSummary;
+        _outageEvents = snapshot.OutageEvents;
         _buckets1h = snapshot.Buckets1h;
         _loading = false;
     }

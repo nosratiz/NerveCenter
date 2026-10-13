@@ -13,6 +13,7 @@ public sealed class AwsPlugin : IPlugin
 {
     public string Id => "aws";
     public string DisplayName => "AWS SQS/SNS";
+    public string? Monogram => "AW";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [

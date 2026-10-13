@@ -8,6 +8,7 @@ public sealed class ServiceBusPlugin : IPlugin
 {
     public string Id => "azure-servicebus";
     public string DisplayName => "Azure Service Bus";
+    public string? Monogram => "SB";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [

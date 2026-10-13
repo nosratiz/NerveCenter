@@ -63,11 +63,12 @@ public class HomeTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public void Shows_all_clear_when_nothing_needs_attention()
+    public void Shows_one_quiet_all_clear_row_when_nothing_needs_attention()
     {
         var cut = Render<Home>();
+        cut.WaitForState(() => cut.FindAll(".triage-all-clear").Count > 0);
 
-        cut.Markup.Should().Contain("All clear");
+        cut.Find(".triage-all-clear").TextContent.Should().Contain("nothing needs attention");
     }
 
     [Fact]
@@ -90,57 +91,80 @@ public class HomeTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public async Task Connections_tile_reflects_the_saved_connection_count()
+    public async Task Header_summary_counts_connections_plugins_and_problems()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            db.Connections.Add(new Connection { Name = "sb-staging", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
+        var ids = await SeedConnections(("sb-dev", "azure-servicebus"), ("sb-uk-prod", "azure-servicebus"));
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardProblemsAsync(ids[1], "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem> { new("Warning", "payments-dlq", "5 dead-lettered", null) });
+        _plugins = [plugin];
 
         var cut = Render<Home>();
-        cut.WaitForState(() => cut.FindAll(".dashboard-tile").Count > 0);
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
 
-        cut.Markup.Should().Contain("CONNECTIONS");
-        cut.Markup.Should().Contain(">2<");
+        cut.Find(".dash-summary").TextContent.Should().Be("2 connections · 1 plugin · 1 needs attention");
     }
 
     [Fact]
-    public async Task Dashboard_tiles_are_flat_with_no_shadow()
+    public async Task Fleet_shows_one_card_per_plugin_with_its_own_metrics_instead_of_summing_same_labels_across_plugins()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
+        await SeedConnections(("sb-dev", "azure-servicebus"), ("kafka-dev", "kafka"));
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var serviceBus = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        serviceBus.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric> { new("Queues", 14), new("Topics", 6) });
+        var kafka = FakePlugin("kafka", "Kafka", "KF");
+        kafka.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric> { new("Topics", 38), new("Partitions", 1214) });
+        _plugins = [serviceBus, kafka];
 
         var cut = Render<Home>();
-        cut.WaitForState(() => cut.FindAll(".dashboard-tile").Count > 0);
+        cut.WaitForState(() => cut.Markup.Contains("38 topics"));
 
-        var tile = cut.Find(".dashboard-tile");
-        tile.ClassList.Should().Contain("mud-elevation-0");
-        tile.ClassList.Should().NotContain("mud-elevation-1");
-        tile.GetAttribute("style").Should().Contain("--mud-palette-lines-default");
+        var sbCard = cut.Find(".fleet-card[data-plugin='azure-servicebus']");
+        sbCard.TextContent.Should().Contain("SB").And.Contain("Service Bus")
+            .And.Contain("14 queues").And.Contain("6 topics");
+        var kafkaCard = cut.Find(".fleet-card[data-plugin='kafka']");
+        kafkaCard.TextContent.Should().Contain("38 topics").And.Contain("1,214 partitions");
+        cut.Markup.Should().NotContain("44 topics");
     }
 
     [Fact]
-    public async Task Unreachable_connection_shows_an_alert_with_a_working_retry_button()
+    public async Task Fleet_card_shows_a_dot_per_connection_and_a_problem_count_colored_by_worst_severity()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection
-            {
-                Name = "sb-eu-prod", Kind = "azure-servicebus", SecretCiphertext = [1],
-                LastTestedAt = DateTimeOffset.UtcNow, LastTestSucceeded = false, LastTestError = "Unauthorized (401)",
-            });
-            await db.SaveChangesAsync();
-        }
+        var ids = await SeedConnections(("sb-uk-prod", "azure-servicebus"), ("sb-dev", "azure-servicebus"));
+        await MarkUnreachable("sb-eu-stage", "azure-servicebus");
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardProblemsAsync(ids[0], "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem> { new("Warning", "payments-dlq", "5 dead-lettered", null) });
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
+
+        var card = cut.Find(".fleet-card[data-plugin='azure-servicebus']");
+        var count = card.QuerySelector(".fleet-count")!;
+        count.TextContent.Should().Be("2");
+        count.ClassList.Should().Contain("bad");
+        card.ClassList.Should().Contain("has-error");
+        card.QuerySelector(".fleet-dot[title='sb-uk-prod']")!.ClassList.Should().Contain("warn");
+        card.QuerySelector(".fleet-dot[title='sb-dev']")!.ClassList.Should().Contain("ok");
+        card.QuerySelector(".fleet-dot[title='sb-eu-stage']")!.ClassList.Should().Contain("bad");
+        card.QuerySelector(".fleet-conn")!.TextContent.Should().Contain("3 conn");
+    }
+
+    [Fact]
+    public async Task Unreachable_connection_shows_a_triage_row_with_a_working_retry_button()
+    {
+        await MarkUnreachable("sb-eu-prod", "azure-servicebus");
 
         var cut = Render<Home>();
         cut.WaitForState(() => cut.Markup.Contains("sb-eu-prod"));
 
-        cut.Markup.Should().Contain("Unauthorized (401)");
+        var row = cut.Find(".triage-row.sev-error");
+        row.TextContent.Should().Contain("sb-eu-prod").And.Contain("Unauthorized (401)");
 
         // No plugin is registered in this test host, so TestConnectionCommandHandler fails fast
         // with "no plugin registered" rather than touching the connection row. The button round-
@@ -151,19 +175,11 @@ public class HomeTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public async Task Plugin_reported_problems_render_in_Needs_attention()
+    public async Task Plugin_reported_problems_render_as_triage_rows_carrying_the_plugin_monogram_and_connection()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
-
+        await SeedConnections(("sb-uk-prod", "azure-servicebus"));
         _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
-
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
         plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
             .Returns(new List<PluginDashboardProblem>
             {
@@ -174,152 +190,168 @@ public class HomeTests : BunitContext, IAsyncLifetime
         var cut = Render<Home>();
         cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
 
-        cut.Markup.Should().Contain("payments-dlq");
-        cut.Markup.Should().Contain("214 dead-lettered");
-        cut.Markup.Should().Contain("sb-uk-prod");
+        var row = cut.Find(".triage-row.sev-warning");
+        row.QuerySelector(".triage-mono")!.TextContent.Should().Be("SB");
+        row.QuerySelector(".triage-conn")!.TextContent.Should().Be("sb-uk-prod");
+        row.TextContent.Should().Contain("payments-dlq").And.Contain("214 dead-lettered");
+        row.QuerySelector("a")!.GetAttribute("href").Should().Be("/p/azure-servicebus/dead-letter");
     }
 
     [Fact]
     public async Task All_clear_requires_both_zero_unreachable_connections_and_zero_plugin_problems()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
-
+        await SeedConnections(("sb-dev", "azure-servicebus"));
         _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
-
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
-        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
-            .Returns(new List<PluginDashboardProblem>());
-        _plugins = [plugin];
+        _plugins = [FakePlugin("azure-servicebus", "Service Bus", "SB")];
 
         var cut = Render<Home>();
-        cut.WaitForState(() => cut.FindAll(".dashboard-tile").Count > 0);
+        cut.WaitForState(() => cut.FindAll(".triage-all-clear").Count > 0);
 
-        cut.Markup.Should().Contain("All clear");
+        cut.Find(".triage-all-clear").TextContent.Should().Contain("All 1 connection checked");
     }
 
     [Fact]
-    public async Task Header_summary_reflects_connection_count_and_plugin_metrics()
+    public async Task A_plugin_that_throws_gets_an_unchecked_row_naming_its_connection_instead_of_All_clear()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
-
+        await SeedConnections(("sb-uk-prod", "azure-servicebus"));
         _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
-
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
-        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
-            .Returns(new List<PluginDashboardMetric>
-            {
-                new("Queues", 148), new("Topics", 23), new("Subscriptions", 91), new("Dead-lettered", 312),
-            });
-        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
-            .Returns(new List<PluginDashboardProblem>());
-        _plugins = [plugin];
-
-        var cut = Render<Home>();
-        cut.WaitForState(() => cut.Markup.Contains("148 q"));
-
-        cut.Markup.Should().Contain("1 conn · 148 q · 23 t / 91 sub · 312 dlq");
-    }
-
-    [Fact]
-    public async Task Namespace_chip_turns_red_when_its_connection_has_an_open_problem()
-    {
-        Guid problemConnectionId;
-        Guid cleanConnectionId;
-        await using (var db = _testDb.CreateDbContext())
-        {
-            var problematic = new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] };
-            var clean = new Connection { Name = "sb-dev", Kind = "azure-servicebus", SecretCiphertext = [1] };
-            db.Connections.AddRange(problematic, clean);
-            await db.SaveChangesAsync();
-            problemConnectionId = problematic.Id;
-            cleanConnectionId = clean.Id;
-        }
-
-        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
-
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
-        plugin.GetDashboardProblemsAsync(problemConnectionId, "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
-            .Returns(new List<PluginDashboardProblem> { new("Warning", "payments-dlq", "5 dead-lettered", null) });
-        plugin.GetDashboardProblemsAsync(cleanConnectionId, "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
-            .Returns(new List<PluginDashboardProblem>());
-        _plugins = [plugin];
-
-        var cut = Render<Home>();
-        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
-
-        var chips = cut.FindComponents<MudChip<string>>();
-        var problemChip = chips.Single(c => c.Markup.Contains("sb-uk-prod"));
-        var cleanChip = chips.Single(c => c.Markup.Contains("sb-dev"));
-        problemChip.Instance.Color.Should().Be(Color.Error);
-        cleanChip.Instance.Color.Should().Be(Color.Success);
-    }
-
-    [Fact]
-    public async Task A_plugin_that_throws_marks_its_connection_unchecked_and_shows_a_warning_instead_of_All_clear()
-    {
-        Guid connectionId;
-        await using (var db = _testDb.CreateDbContext())
-        {
-            var connection = new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] };
-            db.Connections.Add(connection);
-            await db.SaveChangesAsync();
-            connectionId = connection.Id;
-        }
-
-        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
-
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
         plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<PluginDashboardProblem>>(new InvalidOperationException("boom")));
         _plugins = [plugin];
 
         var cut = Render<Home>();
-        cut.WaitForState(() => cut.Markup.Contains("Couldn't check"));
+        cut.WaitForState(() => cut.FindAll(".triage-row.sev-unchecked").Count > 0);
 
-        cut.Markup.Should().NotContain("All clear");
-        cut.Markup.Should().Contain("Couldn't check 1 connection(s)");
-
-        var chips = cut.FindComponents<MudChip<string>>();
-        var chip = chips.Single(c => c.Markup.Contains("sb-uk-prod"));
-        chip.Instance.Color.Should().Be(Color.Warning);
+        cut.FindAll(".triage-all-clear").Should().BeEmpty();
+        var row = cut.Find(".triage-row.sev-unchecked");
+        row.TextContent.Should().Contain("sb-uk-prod").And.Contain("Couldn't check");
+        row.TextContent.Should().NotContain("boom");
+        cut.Find(".fleet-dot[title='sb-uk-prod']").ClassList.Should().Contain("unchecked");
     }
 
     [Fact]
-    public async Task Needs_attention_sorts_unreachable_connections_before_plugin_errors_before_plugin_warnings()
+    public async Task An_unreachable_connection_whose_plugin_check_also_fails_is_listed_once_not_twice()
     {
-        await using (var db = _testDb.CreateDbContext())
-        {
-            db.Connections.Add(new Connection
-            {
-                Name = "sb-eu-prod", Kind = "azure-servicebus", SecretCiphertext = [1],
-                LastTestedAt = DateTimeOffset.UtcNow, LastTestSucceeded = false, LastTestError = "Unauthorized (401)",
-            });
-            db.Connections.Add(new Connection { Name = "sb-uk-prod", Kind = "azure-servicebus", SecretCiphertext = [1] });
-            await db.SaveChangesAsync();
-        }
-
+        await MarkUnreachable("sb-eu-stage", "azure-servicebus");
         _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardMetricsAsync("secret", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<PluginDashboardMetric>>(new InvalidOperationException("down")));
+        _plugins = [plugin];
 
-        var plugin = Substitute.For<IPlugin>();
-        plugin.Id.Returns("azure-servicebus");
-        plugin.ConnectionKind.Returns("azure-servicebus");
-        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.FindAll(".triage-row").Count > 0 && cut.FindAll(".triage-row.sev-pending").Count == 0);
+
+        cut.FindAll(".triage-row").Should().ContainSingle().Which.ClassList.Should().Contain("sev-error");
+    }
+
+    [Fact]
+    public async Task Results_render_per_connection_as_they_land_while_slower_checks_show_as_pending()
+    {
+        var ids = await SeedConnections(("sb-fast", "azure-servicebus"), ("sb-slow", "azure-servicebus"));
+        _connectionProvider.GetSecretAsync(ids[0], Arg.Any<CancellationToken>()).Returns("fast");
+        _connectionProvider.GetSecretAsync(ids[1], Arg.Any<CancellationToken>()).Returns("slow");
+        var release = new TaskCompletionSource<IReadOnlyList<PluginDashboardProblem>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardProblemsAsync(ids[0], "fast", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem> { new("Warning", "payments-dlq", "5 dead-lettered", null) });
+        plugin.GetDashboardProblemsAsync(ids[1], "slow", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(_ => release.Task);
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
+
+        cut.Find(".triage-row.sev-pending .triage-conn").TextContent.Should().Be("sb-slow");
+        cut.Find(".triage-progress").TextContent.Should().Be("checking 1 of 2…");
+        cut.Find(".fleet-dot[title='sb-slow']").ClassList.Should().Contain("pending");
+
+        release.SetResult([]);
+        cut.WaitForState(() => cut.FindAll(".triage-row.sev-pending").Count == 0);
+        cut.FindAll(".triage-progress").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Connections_are_checked_concurrently_so_one_slow_broker_does_not_serialize_the_rest()
+    {
+        // Each connection's metrics call only completes once the OTHER connection's call has
+        // started -- a sequential loop deadlocks on the first one, a concurrent one finishes. Stands
+        // in for a stopped broker: before this, every down broker added its full connect timeout to
+        // the Dashboard's load time, one after another.
+        var (plugin, _) = await SeedTwoConnectionsThatWaitForEachOther();
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("3 queues"), TimeSpan.FromSeconds(5));
+
+        cut.Find(".fleet-card[data-plugin='azure-servicebus']").TextContent.Should().Contain("3 queues");
+    }
+
+    // Two connections of one plugin, with secrets "secret-a"/"secret-b" and one Queues metric each
+    // (1 and 2), whose metrics calls each wait for the other's to start.
+    private async Task<(IPlugin Plugin, (Guid A, Guid B) Ids)> SeedTwoConnectionsThatWaitForEachOther()
+    {
+        var ids = await SeedConnections(("sb-a", "azure-servicebus"), ("sb-b", "azure-servicebus"));
+        var (a, b) = (ids[0], ids[1]);
+
+        _connectionProvider.GetSecretAsync(a, Arg.Any<CancellationToken>()).Returns("secret-a");
+        _connectionProvider.GetSecretAsync(b, Arg.Any<CancellationToken>()).Returns("secret-b");
+
+        var aStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardMetricsAsync("secret-a", Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            aStarted.TrySetResult();
+            await bStarted.Task;
+            return (IReadOnlyList<PluginDashboardMetric>)[new("Queues", 1)];
+        });
+        plugin.GetDashboardMetricsAsync("secret-b", Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            bStarted.TrySetResult();
+            await aStarted.Task;
+            return (IReadOnlyList<PluginDashboardMetric>)[new("Queues", 2)];
+        });
+        return (plugin, (a, b));
+    }
+
+    [Fact]
+    public async Task Needs_attention_sorts_unreachable_before_plugin_errors_before_warnings_before_unchecked()
+    {
+        await MarkUnreachable("sb-eu-prod", "azure-servicebus");
+        var ids = await SeedConnections(("sb-uk-prod", "azure-servicebus"), ("sb-broken", "azure-servicebus"));
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardProblemsAsync(ids[0], "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>
+            {
+                new("Warning", "payments-dlq", "5 dead-lettered", null),
+                new("Error", "namespace-outage", "connectivity lost", null),
+            });
+        plugin.GetDashboardProblemsAsync(ids[1], "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<PluginDashboardProblem>>(new InvalidOperationException("boom")));
+        _plugins = [plugin];
+
+        var cut = Render<Home>();
+        cut.WaitForState(() => cut.Markup.Contains("payments-dlq") && cut.FindAll(".triage-row.sev-pending").Count == 0);
+
+        var rows = cut.FindAll(".triage-row").Select(r => r.TextContent).ToList();
+        rows.Should().HaveCount(4);
+        rows[0].Should().Contain("sb-eu-prod");
+        rows[1].Should().Contain("namespace-outage");
+        rows[2].Should().Contain("payments-dlq");
+        rows[3].Should().Contain("sb-broken");
+    }
+
+    [Fact]
+    public async Task Severity_filter_chips_narrow_the_triage_list()
+    {
+        var ids = await SeedConnections(("sb-uk-prod", "azure-servicebus"));
+        _connectionProvider.GetSecretAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns("secret");
+        var plugin = FakePlugin("azure-servicebus", "Service Bus", "SB");
+        plugin.GetDashboardProblemsAsync(ids[0], "secret", Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
             .Returns(new List<PluginDashboardProblem>
             {
                 new("Error", "namespace-outage", "connectivity lost", null),
@@ -330,13 +362,47 @@ public class HomeTests : BunitContext, IAsyncLifetime
         var cut = Render<Home>();
         cut.WaitForState(() => cut.Markup.Contains("payments-dlq"));
 
-        var unreachableIndex = cut.Markup.IndexOf("sb-eu-prod", StringComparison.Ordinal);
-        var pluginErrorIndex = cut.Markup.IndexOf("namespace-outage", StringComparison.Ordinal);
-        var pluginWarningIndex = cut.Markup.IndexOf("payments-dlq", StringComparison.Ordinal);
+        cut.Find(".triage-filter[data-filter='all']").TextContent.Should().Be("All 2");
+        cut.Find(".triage-filter[data-filter='error']").TextContent.Should().Be("Errors 1");
 
-        unreachableIndex.Should().BeGreaterThan(-1);
-        pluginErrorIndex.Should().BeGreaterThan(unreachableIndex);
-        pluginWarningIndex.Should().BeGreaterThan(pluginErrorIndex);
+        cut.Find(".triage-filter[data-filter='error']").Click();
+
+        cut.FindAll(".triage-row").Should().ContainSingle().Which.TextContent.Should().Contain("namespace-outage");
+        cut.Find(".triage-filter[data-filter='error']").ClassList.Should().Contain("active");
+    }
+
+    private async Task<Guid[]> SeedConnections(params (string Name, string Kind)[] connections)
+    {
+        await using var db = _testDb.CreateDbContext();
+        var entities = connections.Select(c => new Connection { Name = c.Name, Kind = c.Kind, SecretCiphertext = [1] }).ToList();
+        db.Connections.AddRange(entities);
+        await db.SaveChangesAsync();
+        return [.. entities.Select(e => e.Id)];
+    }
+
+    private async Task MarkUnreachable(string name, string kind)
+    {
+        await using var db = _testDb.CreateDbContext();
+        db.Connections.Add(new Connection
+        {
+            Name = name, Kind = kind, SecretCiphertext = [1],
+            LastTestedAt = DateTimeOffset.UtcNow, LastTestSucceeded = false, LastTestError = "Unauthorized (401)",
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private static IPlugin FakePlugin(string id, string displayName, string monogram)
+    {
+        var plugin = Substitute.For<IPlugin>();
+        plugin.Id.Returns(id);
+        plugin.ConnectionKind.Returns(id);
+        plugin.DisplayName.Returns(displayName);
+        plugin.Monogram.Returns(monogram);
+        plugin.GetDashboardMetricsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardMetric>());
+        plugin.GetDashboardProblemsAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IPluginStore>(), Arg.Any<CancellationToken>())
+            .Returns(new List<PluginDashboardProblem>());
+        return plugin;
     }
 
     [Fact]

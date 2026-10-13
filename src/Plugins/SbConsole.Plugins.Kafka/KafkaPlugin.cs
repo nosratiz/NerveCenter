@@ -13,6 +13,7 @@ public sealed class KafkaPlugin : IPlugin
 
     public string Id => "kafka";
     public string DisplayName => "Apache Kafka";
+    public string? Monogram => "KF";
     public string Version => "1.0.0";
     public IReadOnlyList<PluginNavItem> NavItems =>
     [
@@ -81,9 +82,7 @@ public sealed class KafkaPlugin : IPlugin
 
     // `now` and `fetch` are parameters (rather than reading DateTimeOffset.UtcNow / constructing
     // ConfluentKafkaOperations directly) so the cache's reuse/expiry behavior is unit-testable with a
-    // counting fake fetcher and a controlled clock, without a real broker -- ListConsumerGroupsAsync
-    // itself can't be exercised in tests (see KafkaPluginTests' comment on GetDashboardProblemsAsync
-    // for why: Confluent.Kafka's admin async API crashes the process on this environment).
+    // counting fake fetcher and a controlled clock, without a real broker.
     internal static async Task<IReadOnlyList<ConsumerGroupSummary>> GetCachedConsumerGroupsAsync(
         string connectionString,
         DateTimeOffset now,

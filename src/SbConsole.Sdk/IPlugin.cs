@@ -9,6 +9,13 @@ public interface IPlugin
 
     string DisplayName { get; }
 
+    /// <summary>
+    /// Optional short (two-letter) mark shown for this plugin on the host's icon rail, e.g. "SB".
+    /// Returning null (the default) makes the host fall back to the first two letters of
+    /// DisplayName, so a plugin written before this member existed needs no change at all.
+    /// </summary>
+    string? Monogram => null;
+
     string Version { get; }
 
     IReadOnlyList<PluginNavItem> NavItems { get; }
@@ -69,8 +76,9 @@ public interface IPlugin
 
     /// <summary>
     /// Optional Dashboard KPI metrics for one connection of this plugin's ConnectionKind. The host
-    /// calls this once per connection and sums same-Label metrics into one Dashboard tile per
-    /// label. Returning an empty list means "nothing to report" -- the default implementation does
+    /// calls this once per connection, sums same-Label metrics across this plugin's connections,
+    /// and shows them with their labels verbatim on this plugin's own Dashboard fleet card (so
+    /// "Topics" from two different plugins is never added together). Returning an empty list means "nothing to report" -- the default implementation does
     /// exactly that, so a plugin written before this method existed needs no change at all.
     /// </summary>
     Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default) =>

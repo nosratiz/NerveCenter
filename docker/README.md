@@ -15,12 +15,22 @@ That starts:
 | Service      | Host address             | What it is                                              |
 |--------------|--------------------------|---------------------------------------------------------|
 | `kafka`      | `localhost:9092`         | Apache Kafka 4.1, single-node KRaft, plaintext, no auth |
-| `kafka-init` | (one-shot)               | Creates sample topics and drops a few messages in them  |
+| `kafka-init` | (one-shot)               | Seeds sample topics, messages and consumer groups       |
 | `kafka-ui`   | http://localhost:8080    | Kafbat Kafka UI, for inspecting the broker directly     |
 
-Seeded topics: `orders` (3 partitions, 5 messages), `payments` (3, 3), `notifications` (1, 2),
-`orders.dlq` (1, 1). Auto-create is **off**, so the plugin's "Create topic" is meaningful and a
-mistyped topic name fails loudly.
+Seeded topics (partitions, messages): `orders` (3, 300), `payments` (3, 180), `notifications`
+(1, 4), `clickstream` (6, 12,500), and the dead-letter topics `orders-dlq` (1, 3) and
+`payments-dlq` (1, 1). The DLQ topics use the `-dlq` suffix because that is what the plugin's
+Dead-letter page looks for. Messages are only produced into topics the seed creates, so re-runs
+don't grow the backlog; `docker compose down -v` resets it.
+
+Seeded consumer groups: `billing-service` and `notification-worker` (caught up, lag 0),
+`fulfillment-service` (lag 75 on `orders`), `dlq-reprocessor` (lag 3 on `orders-dlq`) and
+`analytics-etl` (lag 12,500 on `clickstream`, over the plugin's 10,000 threshold, so it appears in
+the Dashboard's Needs-attention).
+
+Auto-create is **off**, so the plugin's "Create topic" is meaningful and a mistyped topic name
+fails loudly.
 
 ### Connect the app to it
 
@@ -53,6 +63,19 @@ Entities are declared up front in [`servicebus/Config.json`](servicebus/Config.j
 `orders` and `payments`; topic `events` with subscriptions `all-events` and `order-events`
 (the latter has a correlation rule on `Label = order`). Edit that file and
 `docker compose --profile servicebus restart servicebus-emulator` to change them.
+
+The one-shot `servicebus-init` service (Python, because the emulator only accepts sends over AMQP)
+then fills them with sample messages:
+
+| Entity                  | Active | Dead-lettered | Scheduled |
+|-------------------------|--------|---------------|-----------|
+| `orders`                | 30     | 4             | 0         |
+| `payments`              | 12     | 1             | 3 (15 min, 1 h, 4 h out) |
+| `events` / `all-events` | 18     | 2             | 0         |
+| `events` / `order-events` | 8    | 0             | 0         |
+
+It skips itself when `orders` already has messages. To re-seed, drain the queues or run
+`docker compose --profile servicebus down -v`.
 
 Connection string for the app (kind *Azure Service Bus*):
 
