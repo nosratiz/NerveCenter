@@ -1,6 +1,8 @@
 # SQLite plugin — Design
 
-Status: approved, 2026-10-13.
+Status: approved, 2026-10-13. Revised during planning the same day (plugin
+initialization hook, dbstat absent from the bundled build, raw interrupt for
+timeouts, JS-stream CSV download, problem severities, `/sqlite` demo mount).
 
 ## 1. Context
 
@@ -56,6 +58,17 @@ lives in Core, not the plugin, so the plugin never learns host env var names
 and Core alone knows where its own database is. It **fails closed**: with no
 roots configured, no SQLite connection opens.
 
+**Plugins get one post-build initialization hook.** The host constructs each
+plugin with `new()` (`AddSbConsolePlugin<TPlugin>`), so the plugin-instance
+hooks (`TestConnectionAsync`, `GetDashboardProblemsAsync`, …) have no DI
+access — the existing plugins `new` up their operations class, which works
+only because none of them need a host service. SQLite needs
+`IHostPathPolicy` there, so the SDK gains an optional default-no-op
+`IPlugin.Initialize(IServiceProvider services)`, called once for every plugin
+right after `app.Build()` (via `PluginRegistry.InitializeAll`). `SqlitePlugin`
+resolves its `ISqliteOperations` there; until then its hooks fail closed
+("SQLite plugin is not initialized").
+
 **Phase 1 is strictly read-only.** Every connection opens with
 `Mode=ReadOnly` regardless of the stored mode; the stored `Mode` exists so
 phase 2 needs no secret-format migration.
@@ -79,7 +92,9 @@ public sealed record PathCheckResult(bool Allowed, string? ResolvedPath, string?
 
 Core implementation `HostPathPolicy` (`ISingletonService`):
 
-1. Reads allowed roots from `SBC_SQLITE_ROOTS` (`;`-separated). Empty or unset
+1. Reads allowed roots from `BootstrapOptions.SqliteRoots`, which
+   `BootstrapOptions.FromEnvironment` fills from `SBC_SQLITE_ROOTS`
+   (`;`-separated, blanks dropped) — BootstrapOptions stays the only env reader. Empty or unset
    → every path refused with Reason
    `"No SQLite roots are configured — set SBC_SQLITE_ROOTS."`.
 2. Resolves the candidate to a full path (`Path.GetFullPath`, so `..` is
@@ -157,10 +172,14 @@ Every `SqliteOperations` call:
    mode never creates a missing file.
 3. Sets `PRAGMA busy_timeout = <BusyTimeoutMs>`.
 4. Runs each command under a `CancellationTokenSource` linked to the caller's
-   token with `CancelAfter(StatementTimeoutS)`. Microsoft.Data.Sqlite wires
-   cancellation to `sqlite3_interrupt`, so a long scan actually stops. A
-   cancellation caused by the timeout (not the caller) becomes
-   `SqliteStatementTimeoutException`.
+   token with `CancelAfter(StatementTimeoutS)`, whose registration calls
+   `SQLitePCL.raw.sqlite3_interrupt(connection.Handle)` directly. **Verified
+   2026-10-13 against Microsoft.Data.Sqlite 10.0.12:** passing a token to
+   `ExecuteReaderAsync`, or `SqliteCommand.Cancel()`, does *not* stop a
+   running statement; the raw interrupt does (SQLITE_INTERRUPT, code 9, in
+   ~300 ms, connection still usable). An interrupt caused by the timeout
+   becomes `SqliteStatementTimeoutException`; one caused by the caller's token
+   becomes `OperationCanceledException`.
 
 `TestConnectionAsync` reports `ConnectionCheck` rows: "Path allowed",
 "File opened" (with SQLite version, size, journal mode), "Schema readable"
@@ -194,9 +213,12 @@ Tiles:
 on it: `SELECT name, SUM(pgsize) FROM dbstat GROUP BY name` (full b-tree walk;
 runs under the statement timeout). Joined to `sqlite_schema` (table vs index)
 and `sqlite_stat1` (row count ≈). Panel shows the top 4 objects + "N more",
-header "dbstat · N tables, M indexes". If `dbstat` is absent ("no such
-table: dbstat") the panel says "dbstat isn't compiled into this SQLite
-build" — verify during implementation whether the bundled `e_sqlite3` has it.
+header "dbstat · N tables, M indexes". **Verified 2026-10-13: the bundled
+`e_sqlite3` (SQLite 3.53.3) is built without `dbstat`**, so the fallback is
+the normal case: on "no such table: dbstat" the panel becomes **Largest
+tables** ranked by `sqlite_stat1` rows ≈ (tables without stats listed last
+with "—"), with the sub-caption "sizes need dbstat, which this SQLite build
+doesn't include". Sizes appear automatically if a future build has it.
 
 **Integrity strip** — `RunIntegrityCheckCommandHandler`, on demand only
 (**Run now**), `ActionRisk.Safe`, audited as `sqlite.integrity.check`. Runs
@@ -220,7 +242,7 @@ Route `/p/sqlite/tables`, optional `?table=<name>`.
 indexes · V views · T triggers · from sqlite_schema"). Internal `sqlite_%`
 objects excluded. Row counts from `sqlite_stat1` (first integer of `stat` for
 the table's rows) marked **≈**; no stats → "—". Sizes from the same `dbstat`
-query as §5 when available. Client-side filter box. **Never** runs `COUNT(*)`
+query as §5 when available; the Size column is omitted otherwise. Client-side filter box. **Never** runs `COUNT(*)`
 by default; footnote explains why.
 
 **Detail header**: name, "N columns · M indexes · WITHOUT ROWID yes/no · rows
@@ -259,11 +281,11 @@ statement timeout, with a Cancel button wired to the page's token.
 
 **Export CSV — `ExportTableCsvCommandHandler`**, `ActionRisk.Safe`, audited as
 `sqlite.table.export` (data leaves the server). RFC 4180 quoting; BLOBs as
-base64. Delivery mechanism is decided in planning: preferred is a streamed
-download (hard cap 1,000,000 rows) via a plugin endpoint behind the UI's
-cookie auth; **if the host has no plugin-endpoint seam, fall back to a
-100,000-row cap delivered via `IJSRuntime`** rather than adding a new SDK seam
-in phase 1.
+base64. **Decided in planning:** the host has no plugin-endpoint seam, so
+the CSV is built server-side (hard cap 100,000 rows; the footer says when the
+cap truncated it) and handed to the browser through a `DotNetStreamReference`
+and a tiny plugin JS module (`wwwroot/sqlite.js`, `downloadFromStream`), no
+new SDK seam.
 
 ## 7. Errors
 
@@ -290,9 +312,10 @@ SQLite.
 - `HostPathPolicy` registered by marker; `ProgramDiRegistrationTests` covers it.
 - `Contribution => new(PageCount: 2, ActionCount: 2)` (integrity check, CSV export).
 - `GetDashboardMetricsAsync`: `"Databases" = 1` per connection (sums correctly).
-- `GetDashboardProblemsAsync`: Warning "Integrity check failed" when the stored
-  last result (§5) is not ok; Info "N% free pages — VACUUM would reclaim X"
-  when `freelist_count / page_count ≥ 20%`. Links to `/p/sqlite/overview`.
+- `GetDashboardProblemsAsync` (`PluginDashboardProblem.Severity` only supports
+  "Error" / "Warning"): Error "Integrity check failed" when the stored last
+  result (§5) is not ok; Warning "N% free pages — VACUUM would reclaim X" when
+  `freelist_count / page_count ≥ 20%`. Links to `/p/sqlite/overview`.
 - No nav badges; no oldest-dead-letter (SDK defaults).
 - `docs/design.md`: dated section on the path-policy seam, fail-closed
   rationale, and the temp-file test exception (§9).
@@ -300,7 +323,9 @@ SQLite.
 **Local dev stack:** `docker/sqlite/seed.py` builds a ~50 MB demo
 `reports.db` (tenants, sessions, events with JSON `props`, event_props with an
 FK, an index on `events.ts`, a view, `ANALYZE` run so `sqlite_stat1` exists).
-Mounted at `/data` for the `app` profile with `SBC_SQLITE_ROOTS=/data`.
+Mounted read-only at `/sqlite` for the `app` profile with
+`SBC_SQLITE_ROOTS=/sqlite` — deliberately **not** `/data`, which holds
+SbConsole's own database and data-protection keys.
 Documented in `docker/README.md`.
 
 ## 9. Testing
