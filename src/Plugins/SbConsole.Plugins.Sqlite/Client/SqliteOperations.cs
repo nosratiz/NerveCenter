@@ -139,6 +139,8 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
         {
             connection.Open();
             SqliteSql.Execute(connection, $"PRAGMA busy_timeout = {settings.BusyTimeoutMs.ToString(CultureInfo.InvariantCulture)}");
+            // Defence in depth for untrusted files: a hostile schema can't run SQL functions from views/triggers/defaults.
+            SqliteSql.Execute(connection, "PRAGMA trusted_schema = OFF");
             return connection;
         }
         catch

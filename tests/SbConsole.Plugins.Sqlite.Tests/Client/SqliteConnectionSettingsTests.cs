@@ -38,6 +38,7 @@ public class SqliteConnectionSettingsTests
     [InlineData("Path=", "Path is required.")]
     [InlineData("Path=/x.db;Mode=Sideways", "Unknown Mode 'Sideways'.")]
     [InlineData("Path=/x.db;Mode=1", "Unknown Mode '1'.")]
+    [InlineData("Path=/x.db;Mode=ReadOnly,ReadWrite", "Unknown Mode 'ReadOnly,ReadWrite'.")]
     [InlineData("Path=/x.db;BusyTimeoutMs=soon", "BusyTimeoutMs must be a positive whole number.")]
     [InlineData("Path=/x.db;StatementTimeoutS=0", "StatementTimeoutS must be a positive whole number.")]
     [InlineData("Path=/x.db;garbage", "Expected key=value, got 'garbage'.")]

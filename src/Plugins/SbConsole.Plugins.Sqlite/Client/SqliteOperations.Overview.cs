@@ -31,32 +31,39 @@ public sealed partial class SqliteOperations
         RunAsync(secret, c =>
         {
             var objects = ReadSchemaObjects(c);
-            var rows = ReadStat1Rows(c);
-            var sizes = TryReadDbstatSizes(c);
+            return BuildTableSizes(objects, ReadStat1Rows(c), TryReadDbstatSizes(c));
+        }, ct);
 
-            var entries = objects
-                .Where(o => o.Type is SchemaObjectType.Table or SchemaObjectType.Index)
-                .Select(o => new TableSizeEntry(
-                    o.Name,
-                    o.Type,
-                    sizes is null ? null : Lookup(sizes, o.Name),
-                    o.Type == SchemaObjectType.Table ? Lookup(rows, o.Name) : null))
+    /// <summary>
+    /// With dbstat: tables and indexes by bytes (descending, then name). Without: tables only, by
+    /// sqlite_stat1 row estimate (descending), never-analysed tables last, ties by name.
+    /// </summary>
+    internal static TableSizes BuildTableSizes(
+        IReadOnlyList<SchemaRow> objects, IReadOnlyDictionary<string, long> stat1Rows, IReadOnlyDictionary<string, long>? dbstatSizes)
+    {
+        var entries = objects
+            .Where(o => o.Type is SchemaObjectType.Table or SchemaObjectType.Index)
+            .Select(o => new TableSizeEntry(
+                o.Name,
+                o.Type,
+                dbstatSizes is null ? null : Lookup(dbstatSizes, o.Name),
+                o.Type == SchemaObjectType.Table ? Lookup(stat1Rows, o.Name) : null))
+            .ToList();
+
+        IReadOnlyList<TableSizeEntry> ordered = dbstatSizes is not null
+            ? entries.OrderByDescending(e => e.Bytes ?? 0).ThenBy(e => e.Name, StringComparer.Ordinal).ToList()
+            : entries.Where(e => e.Type == SchemaObjectType.Table)
+                .OrderByDescending(e => e.EstimatedRows.HasValue)
+                .ThenByDescending(e => e.EstimatedRows ?? 0)
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
                 .ToList();
 
-            IReadOnlyList<TableSizeEntry> ordered = sizes is not null
-                ? entries.OrderByDescending(e => e.Bytes ?? 0).ThenBy(e => e.Name, StringComparer.Ordinal).ToList()
-                : entries.Where(e => e.Type == SchemaObjectType.Table)
-                    .OrderByDescending(e => e.EstimatedRows.HasValue)
-                    .ThenByDescending(e => e.EstimatedRows ?? 0)
-                    .ThenBy(e => e.Name, StringComparer.Ordinal)
-                    .ToList();
-
-            return new TableSizes(
-                sizes is not null,
-                objects.Count(o => o.Type == SchemaObjectType.Table),
-                objects.Count(o => o.Type == SchemaObjectType.Index),
-                ordered);
-        }, ct);
+        return new TableSizes(
+            dbstatSizes is not null,
+            objects.Count(o => o.Type == SchemaObjectType.Table),
+            objects.Count(o => o.Type == SchemaObjectType.Index),
+            ordered);
+    }
 
     internal static string SynchronousName(long level) => level switch
     {
@@ -113,17 +120,26 @@ public sealed partial class SqliteOperations
     /// <summary>Bytes per table/index from the dbstat virtual table, or null when this SQLite build lacks it.</summary>
     internal static Dictionary<string, long>? TryReadDbstatSizes(SqliteConnection c)
     {
+        // A user table called "dbstat" (any case) shadows the virtual table: its columns are not
+        // name/pgsize, or worse, it has them and the "sizes" would be bogus. Treat as unavailable.
+        if (SqliteSql.Long(c, "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'dbstat' COLLATE NOCASE") > 0)
+        {
+            return null;
+        }
+
         try
         {
             return SqliteSql.Rows(c, "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name", r => (Name: r.GetString(0), Bytes: r.GetInt64(1)))
                 .ToDictionary(x => x.Name, x => x.Bytes, StringComparer.Ordinal);
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("no such table: dbstat", StringComparison.Ordinal))
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
         {
+            // SQLITE_ERROR: no dbstat module in this build (or it can't be queried). Timeouts and
+            // interrupts (code 9) are not caught and still propagate.
             return null;
         }
     }
 
-    internal static long? Lookup(Dictionary<string, long> values, string key) =>
+    internal static long? Lookup(IReadOnlyDictionary<string, long> values, string key) =>
         values.TryGetValue(key, out var value) ? value : null;
 }

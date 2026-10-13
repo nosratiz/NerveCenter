@@ -46,10 +46,12 @@ public sealed record SqliteConnectionSettings(
         }
 
         var mode = SqliteAccessMode.ReadOnly;
-        if (values.TryGetValue("Mode", out var modeText)
-            && (!Enum.TryParse(modeText, ignoreCase: true, out mode) || !Enum.IsDefined(mode) || int.TryParse(modeText, out _)))
+        if (values.TryGetValue("Mode", out var modeText))
         {
-            throw new FormatException($"Unknown Mode '{modeText}'.");
+            // Exact name match only: Enum.TryParse would also accept "A,B" flag syntax and numbers.
+            var name = Enum.GetNames<SqliteAccessMode>().FirstOrDefault(n => string.Equals(n, modeText, StringComparison.OrdinalIgnoreCase))
+                ?? throw new FormatException($"Unknown Mode '{modeText}'.");
+            mode = Enum.Parse<SqliteAccessMode>(name);
         }
 
         return new SqliteConnectionSettings(

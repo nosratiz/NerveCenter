@@ -101,4 +101,70 @@ public class SqliteOperationsOverviewTests
         sizes.Entries.Select(e => e.Name).Should().Equal("u");
         sizes.IndexCount.Should().Be(0, "sqlite_autoindex_* is internal");
     }
+
+    [Fact]
+    public async Task A_user_table_named_dbstat_does_not_break_sizes_or_the_schema_listing()
+    {
+        using var db = new TempDatabase("CREATE TABLE dbstat(x); INSERT INTO dbstat VALUES (1); CREATE TABLE other(y); ANALYZE;");
+        var operations = db.Operations();
+
+        var sizes = await operations.GetTableSizesAsync(db.Secret());
+        var listing = await operations.ListSchemaAsync(db.Secret());
+
+        sizes.SizesAvailable.Should().BeFalse();
+        sizes.Entries.Select(e => e.Name).Should().Contain("dbstat");
+        listing.Objects.Should().Contain(o => o.Name == "dbstat" && o.Type == SchemaObjectType.Table);
+    }
+
+    private static SchemaRow Row(SchemaObjectType type, string name, string? table = null) => new(type, name, table ?? name, null);
+
+    [Fact]
+    public void With_dbstat_sizes_tables_and_indexes_are_ordered_by_bytes_then_name()
+    {
+        SchemaRow[] objects =
+        [
+            Row(SchemaObjectType.Table, "b"), Row(SchemaObjectType.Table, "a"), Row(SchemaObjectType.Index, "ix_a", "a"),
+            Row(SchemaObjectType.View, "v"), Row(SchemaObjectType.Trigger, "tr", "a"),
+        ];
+        var sizes = new Dictionary<string, long> { ["a"] = 100, ["b"] = 100, ["ix_a"] = 500 };
+        var rows = new Dictionary<string, long> { ["a"] = 7 };
+
+        var result = SqliteOperations.BuildTableSizes(objects, rows, sizes);
+
+        result.SizesAvailable.Should().BeTrue();
+        result.TableCount.Should().Be(2);
+        result.IndexCount.Should().Be(1);
+        result.Entries.Select(e => (e.Name, e.Type, e.Bytes, e.EstimatedRows)).Should().Equal(
+            ("ix_a", SchemaObjectType.Index, (long?)500, (long?)null),
+            ("a", SchemaObjectType.Table, (long?)100, (long?)7),
+            ("b", SchemaObjectType.Table, (long?)100, (long?)null));
+    }
+
+    [Fact]
+    public void Without_dbstat_only_tables_are_listed_by_rows_descending_with_unanalysed_last_and_ties_by_name()
+    {
+        SchemaRow[] objects =
+        [
+            Row(SchemaObjectType.Table, "z"), Row(SchemaObjectType.Table, "m"), Row(SchemaObjectType.Table, "never"),
+            Row(SchemaObjectType.Table, "a"), Row(SchemaObjectType.Table, "big"), Row(SchemaObjectType.Index, "ix", "big"),
+        ];
+        var rows = new Dictionary<string, long> { ["z"] = 5, ["m"] = 5, ["a"] = 5, ["big"] = 99 };
+
+        var result = SqliteOperations.BuildTableSizes(objects, rows, null);
+
+        result.SizesAvailable.Should().BeFalse();
+        result.IndexCount.Should().Be(1);
+        result.Entries.Select(e => e.Name).Should().Equal("big", "a", "m", "z", "never");
+        result.Entries.Should().OnlyContain(e => e.Type == SchemaObjectType.Table && e.Bytes == null);
+    }
+
+    [Fact]
+    public void Without_any_stat1_rows_tables_are_alphabetical()
+    {
+        SchemaRow[] objects = [Row(SchemaObjectType.Table, "c"), Row(SchemaObjectType.Table, "a"), Row(SchemaObjectType.Table, "b")];
+
+        var result = SqliteOperations.BuildTableSizes(objects, new Dictionary<string, long>(), null);
+
+        result.Entries.Select(e => e.Name).Should().Equal("a", "b", "c");
+    }
 }
