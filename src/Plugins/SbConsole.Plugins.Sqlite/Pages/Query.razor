@@ -1,0 +1,1148 @@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Query.razor -- mockups 1c (query) and 1d (write mode),
+   design spec §11.3 / §11.4. Read-only by default; write mode is behind a switch, never runs a bare
+   statement (dry run of the same text first), and on prod asks for the connection name twice: to
+   enter write mode and before running. *@
+@page "/p/sqlite/query"
+@using System.Globalization
+@using System.Text
+@using System.Text.Encodings.Web
+@using System.Text.Json
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Sqlite.Client
+@using SbConsole.Plugins.Sqlite.Query
+@inject RunQueryQueryHandler RunQuery
+@inject ExplainQueryQueryHandler ExplainQuery
+@inject DryRunWriteQueryHandler DryRunWrite
+@inject RunWriteCommandHandler RunWrite
+@inject CheckpointWalCommandHandler CheckpointWal
+@inject ExportQueryCsvCommandHandler ExportCsv
+@inject ListSavedQueriesQueryHandler ListSaved
+@inject SaveQueryCommandHandler SaveQuery
+@inject DeleteSavedQueryCommandHandler DeleteSaved
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>SQLite query</PageTitle>
+
+<div class="sql-page">
+    <SqlitePageHeader Title="Query" Class="@(_writeMode ? "sql-header-write" : null)">
+        <Chips>
+            <SqliteConnectionPicker Loading="Busy" SelectionChanged="OnSelectionChangedAsync" />
+            @if (_connection is not null)
+            {
+                <span class="sql-seg" role="group" aria-label="Query mode">
+                    <button type="button" class="sql-seg-opt sqlite-query-mode-read @(!_writeMode ? "sql-is-active" : null)"
+                            aria-pressed="@(!_writeMode ? "true" : "false")" disabled="@_writing" @onclick="ExitWriteMode">Read-only</button>
+                    <span class="sql-seg-wrap sqlite-query-mode-write-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                        <button type="button" class="sql-seg-opt sqlite-query-mode-write @(_writeMode ? "sql-is-active" : null)"
+                                aria-pressed="@(_writeMode ? "true" : "false")" disabled="@(!CanWrite)" @onclick="EnterWriteModeAsync">Write</button>
+                    </span>
+                </span>
+            }
+        </Chips>
+        <Meta>
+            @if (_connection is { } meta)
+            {
+                <span class="sqlite-query-meta">@MetaText(meta)</span>
+            }
+        </Meta>
+        <Actions>
+            @if (_connection is not null)
+            {
+                <button type="button" class="sql-btn sqlite-query-save" disabled="@string.IsNullOrWhiteSpace(_sql)" @onclick="StartSave">Save</button>
+                @if (_writeMode)
+                {
+                    <button type="button" class="sql-btn sqlite-query-dryrun" disabled="@(_writing || string.IsNullOrWhiteSpace(_sql))" @onclick="DryRunAsync">Dry run</button>
+                    <button type="button" class="sql-btn sql-btn-primary sqlite-query-runwrite" disabled="@(!CanRunWrite)"
+                            title="@(CanRunWrite ? null : "Dry run this exact script first")" @onclick="RunWriteAsync">Run in transaction</button>
+                }
+                else
+                {
+                    <button type="button" class="sql-btn sqlite-query-explain" disabled="@(_explaining || string.IsNullOrWhiteSpace(_sql))" @onclick="ExplainAsync">Explain</button>
+                    <button type="button" class="sql-btn sql-btn-primary sqlite-query-run" disabled="@(_running || string.IsNullOrWhiteSpace(_sql))" @onclick="RunAsync">
+                        Run <span class="sql-kbd">⌘↵</span>
+                    </button>
+                }
+            }
+        </Actions>
+    </SqlitePageHeader>
+
+    @if (_error is not null)
+    {
+        <div class="sql-body sql-body-tight">
+            <div class="sql-banner sql-banner-danger sqlite-query-error">
+                <span class="sqlite-query-error-text" role="alert">@_error</span>
+                <span class="sql-spacer"></span>
+                @if (_errorIsConnection)
+                {
+                    <a class="sql-link sqlite-query-settings-link" href="/connections">Connection settings</a>
+                }
+                @if (_retry is not null)
+                {
+                    <button type="button" class="sql-btn sqlite-query-retry" @onclick="RetryAsync">Retry</button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_writeMode)
+    {
+        <div class="sql-body sql-body-tight">
+            <div class="sql-banner sql-banner-warn sqlite-query-write-banner" role="status">
+                <span>
+                    <strong>Write mode.</strong> Dry run first — <span class="sql-mono">Run in transaction</span> runs the whole script inside one
+                    <span class="sql-mono">BEGIN IMMEDIATE … COMMIT</span>; any error rolls everything back and nothing is kept.
+                </span>
+            </div>
+        </div>
+    }
+
+    <div class="sql-split sql-query-split">
+        <aside class="sql-list sqlite-query-saved">
+            <div class="sql-list-group">Saved</div>
+            @foreach (var saved in _saved)
+            {
+                <div class="sql-saved-item">
+                    <button type="button" class="sql-list-row sqlite-query-saved-row" data-name="@saved.Name" title="@saved.Sql" @onclick="() => LoadSaved(saved)">
+                        <span class="sql-muted">▸</span>
+                        <span class="sql-list-name">@saved.Name</span>
+                    </button>
+                    <button type="button" class="sql-icon-btn sqlite-query-saved-delete" aria-label="@($"Delete saved query {saved.Name}")"
+                            @onclick="() => DeleteSavedAsync(saved)">×</button>
+                </div>
+            }
+            @if (_saved.Count == 0 && !_saving)
+            {
+                <div class="sql-footnote sqlite-query-saved-empty">No saved queries yet — write one and press Save.</div>
+            }
+            @if (_saving)
+            {
+                <div class="sql-save-form">
+                    <MudTextField T="string" Class="sqlite-query-save-name" Label="Name" Value="_saveName" ValueChanged="v => _saveName = v ?? string.Empty"
+                                  Immediate="true" MaxLength="SavedQuery.MaxNameLength" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <div class="sql-actions">
+                        <button type="button" class="sql-btn sql-btn-primary sqlite-query-save-confirm" disabled="@string.IsNullOrWhiteSpace(_saveName)" @onclick="SaveAsync">Save</button>
+                        <button type="button" class="sql-btn sqlite-query-save-cancel" @onclick="CancelSave">Cancel</button>
+                    </div>
+                </div>
+            }
+            @if (_savedError is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-query-saved-error">@_savedError</MudAlert>
+            }
+            <div class="sql-footnote">Saved queries are shared by every SQLite connection — the same SQL usually works on any copy of the file.</div>
+        </aside>
+
+        <section class="sql-detail sql-query-main">
+            <div class="sql-query-editor-row @(ShowPlan ? null : "sql-query-editor-row-single")">
+                <textarea class="sql-editor sqlite-query-editor" aria-label="SQL" spellcheck="false" placeholder="SELECT …"
+                          value="@_sql" @oninput="OnSqlInput" @onkeydown="OnEditorKeyDownAsync"></textarea>
+                @if (ShowPlan)
+                {
+                    <div class="sql-plan sqlite-query-plan" aria-live="polite">
+                        <div class="sql-overline">EXPLAIN QUERY PLAN</div>
+                        @if (_explaining)
+                        {
+                            <div class="sql-footnote">Explaining…</div>
+                        }
+                        else if (_plan is { } plan)
+                        {
+                            @if (plan.Nodes.Count == 0)
+                            {
+                                <div class="sql-footnote">No plan — the statement doesn't read a table.</div>
+                            }
+                            @foreach (var (node, depth) in PlanRows(plan))
+                            {
+                                <div class="sql-plan-node sqlite-query-plan-node @(IsScan(node.Detail) ? "sql-plan-scan" : null)"
+                                     data-depth="@depth" style="--depth: @depth">@node.Detail</div>
+                            }
+                            @if (plan.StatementCount > 1)
+                            {
+                                <div class="sql-footnote">Plan of statement 1 of @plan.StatementCount — the rest of the script isn't explained.</div>
+                            }
+                            @if (plan.Nodes.Any(n => IsScan(n.Detail)))
+                            {
+                                <div class="sql-footnote"><span class="sql-warn">SCAN</span> reads every row of that table — check it before pressing Run on a large file.</div>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (_writeMode)
+            {
+                @if (_writing)
+                {
+                    <div class="sql-footnote" role="status">Running inside a transaction…</div>
+                }
+
+                @if (_dryRun is not null || _writeResult is not null)
+                {
+                    <div class="sql-panel-grid">
+                        @if (_dryRun is { } dry)
+                        {
+                            <div class="sql-report sql-report-warn sqlite-query-dryrun-panel">
+                                <div class="sql-overline">Dry run</div>
+                                <div class="sql-footnote">Ran the real script inside a transaction, then rolled back — it does the work, so it takes as long as the run itself.</div>
+                                @for (var i = 0; i < dry.Statements.Count; i++)
+                                {
+                                    var statement = dry.Statements[i];
+                                    <div class="sql-report-row sqlite-query-dryrun-statement">
+                                        <span class="sql-report-label">@(i + 1) · @statement.Keyword</span>
+                                        <span class="sql-mono">@RowsText(statement.DirectRows)</span>
+                                        <span class="sql-muted sql-mono sql-ellipsis" title="@statement.Text">@Preview(statement.Text)</span>
+                                    </div>
+                                }
+                                <div class="sql-report-row sqlite-query-dryrun-cascaded">
+                                    <span class="sql-report-label">Cascades</span>
+                                    <span class="sql-mono">@RowsText(dry.CascadedRows)</span>
+                                    <span class="sql-muted">changed by triggers and foreign-key actions</span>
+                                </div>
+                                <div class="sql-report-row sqlite-query-dryrun-duration">
+                                    <span class="sql-report-label">Duration</span>
+                                    <span class="sql-mono">@SqliteFormat.Duration(dry.Duration)</span>
+                                </div>
+                                <div class="sql-report-row">
+                                    <span class="sql-report-label">Space</span>
+                                    <span>freed pages stay in the file until VACUUM</span>
+                                </div>
+                                @if (_dryRunSql != _sql)
+                                {
+                                    <div class="sql-footnote sql-warn sqlite-query-dryrun-stale">The SQL changed since the dry run — dry run it again before running.</div>
+                                }
+                            </div>
+                        }
+
+                        @if (_writeResult is { } written)
+                        {
+                            <div class="sql-report sql-report-ok sqlite-query-write-result">
+                                <div class="sql-overline">After running</div>
+                                <div><span class="sql-ok">●</span> committed</div>
+                                @for (var i = 0; i < written.Statements.Count; i++)
+                                {
+                                    var statement = written.Statements[i];
+                                    <div class="sql-report-row sqlite-query-write-statement">
+                                        <span class="sql-report-label">@(i + 1) · @statement.Keyword</span>
+                                        <span class="sql-mono">@RowsText(statement.DirectRows)</span>
+                                        <span class="sql-muted sql-mono sql-ellipsis" title="@statement.Text">@Preview(statement.Text)</span>
+                                    </div>
+                                }
+                                <div class="sql-report-row">
+                                    <span class="sql-report-label">Cascades</span>
+                                    <span class="sql-mono">@RowsText(written.CascadedRows)</span>
+                                </div>
+                                <div class="sql-report-row">
+                                    <span class="sql-report-label">Duration</span>
+                                    <span class="sql-mono">@SqliteFormat.Duration(written.Duration)</span>
+                                </div>
+                                <div class="sql-report-row sqlite-query-write-after">
+                                    <span class="sql-report-label">File now</span>
+                                    <span class="sql-mono">@AfterText(written.After)</span>
+                                </div>
+                                <div class="sql-footnote sqlite-query-write-audit">
+                                    Audit row written: <span class="sql-mono">@RunWriteCommandHandler.Action</span> · statement hash
+                                    <span class="sql-mono">@QueryAudit.Hash(_writeSql ?? "")</span> · rows @SqliteFormat.Count(written.TotalRows).
+                                    Freed pages stay in the file until <span class="sql-mono">VACUUM</span>.
+                                </div>
+                                @if (_checkpoint is { } checkpoint)
+                                {
+                                    <div class="sql-footnote sqlite-query-checkpoint-result" aria-live="polite">@CheckpointText(checkpoint)</div>
+                                }
+                                @if (_checkpointError is not null)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-query-checkpoint-error">@_checkpointError</MudAlert>
+                                }
+                                <div class="sql-actions">
+                                    <button type="button" class="sql-btn sqlite-query-checkpoint" disabled="@_checkpointing" @onclick="CheckpointAsync">
+                                        @(_checkpointing ? "Checkpointing…" : "Checkpoint WAL")
+                                    </button>
+                                    <button type="button" class="sql-btn sqlite-query-back-readonly" disabled="@_writing" @onclick="ExitWriteMode">Back to read-only</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                @if (_running)
+                {
+                    <div class="sql-footnote" role="status">Running…</div>
+                }
+
+                @if (_result is { } result)
+                {
+                    var pair = _chartPair;
+                    <div class="sql-result-bar">
+                        <span class="sqlite-query-status">
+                            @if (result.HasResultSet)
+                            {
+                                <span class="sql-ok">●</span>
+                                <span>@TotalText(result)</span>
+                                <span class="sql-mono">@SqliteFormat.Duration(result.Duration)</span>
+                                @if (result.StatementCount > 1 && result.ResultStatement is { } index)
+                                {
+                                    <span class="sql-muted">· result of statement @index of @result.StatementCount</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="sql-muted">●</span>
+                                <span>@StatementsText(result.StatementCount) ran · no statement returned rows</span>
+                                <span class="sql-mono">@SqliteFormat.Duration(result.Duration)</span>
+                            }
+                        </span>
+                        <span class="sql-spacer"></span>
+                        @if (result.HasResultSet)
+                        {
+                            <span class="sql-seg" role="tablist" aria-label="Result view">
+                                @foreach (var view in Enum.GetValues<ResultView>())
+                                {
+                                    if (view == ResultView.Chart && pair is null)
+                                    {
+                                        continue;
+                                    }
+                                    <button type="button" role="tab" aria-selected="@(view == _view ? "true" : "false")"
+                                            class="sql-seg-opt sqlite-query-tab-@(view.ToString().ToLowerInvariant()) @(view == _view ? "sql-is-active" : null)"
+                                            @onclick="() => _view = view">@view</button>
+                                }
+                            </span>
+                            <button type="button" class="sql-btn sqlite-query-export" disabled="@_exporting" @onclick="ExportAsync">@(_exporting ? "Exporting…" : "Export CSV")</button>
+                        }
+                    </div>
+                    @if (_exportMessage is not null)
+                    {
+                        <div class="sql-footnote sqlite-query-export-message" aria-live="polite">@_exportMessage</div>
+                    }
+
+                    @if (result.HasResultSet)
+                    {
+                        switch (_view)
+                        {
+                            case ResultView.Json:
+                                <pre class="sql-ddl sql-json sqlite-query-json">@(_json ??= ToJson(result))</pre>
+                                break;
+
+                            case ResultView.Chart when pair is { } chart:
+                                <div class="sqlite-query-chart">
+                                    <div class="sql-caption">
+                                        <span class="sql-mono">@result.Columns[chart.Value].Name</span> by <span class="sql-mono">@result.Columns[chart.Label].Name</span>
+                                        @if (result.Rows.Count > ChartMaxRows)
+                                        {
+                                            <text> · first @ChartMaxRows rows</text>
+                                        }
+                                    </div>
+                                    <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@_chartSeries" ChartLabels="@_chartLabels" Width="100%" Height="320px" />
+                                </div>
+                                break;
+
+                            default:
+                                <div class="sql-grid-wrap">
+                                    <table class="sql-table sql-grid sqlite-query-grid">
+                                        <thead>
+                                            <tr>
+                                                <th class="sql-num">#</th>
+                                                @foreach (var column in result.Columns)
+                                                {
+                                                    <th class="sqlite-query-col" data-column="@column.Name">
+                                                        <span class="sql-mono">@column.Name</span>
+                                                        @if (!string.IsNullOrEmpty(column.DeclaredType))
+                                                        {
+                                                            <span class="sql-mono sql-muted sql-col-type sqlite-query-col-type">@column.DeclaredType</span>
+                                                        }
+                                                    </th>
+                                                }
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @for (var r = 0; r < result.Rows.Count; r++)
+                                            {
+                                                var row = result.Rows[r];
+                                                <tr>
+                                                    <td class="sql-mono sql-muted sql-num">@(r + 1)</td>
+                                                    @for (var i = 0; i < row.Count; i++)
+                                                    {
+                                                        var cell = row[i];
+                                                        var hint = i < result.Columns.Count ? DateHint(result.Columns[i], cell) : null;
+                                                        <td class="sql-mono sql-cell-@(cell.Kind.ToString().ToLowerInvariant())"
+                                                            title="@(cell.Truncated ? "truncated to 200 characters" : null)">
+                                                            @cell.Display
+                                                            @if (hint is not null)
+                                                            {
+                                                                <small class="sql-muted sql-hint">@hint</small>
+                                                            }
+                                                        </td>
+                                                    }
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                                break;
+                        }
+
+                        <div class="sql-result-foot">
+                            <span class="sql-muted sqlite-query-count">@SqliteFormat.Count(result.Rows.Count) of @TotalText(result)</span>
+                            @if (result.Rows.Count < result.TotalRows || result.TotalCapped)
+                            {
+                                <button type="button" class="sql-link sqlite-query-more" disabled="@_running" @onclick="LoadMoreAsync">Load @QueryResult.DefaultLimit more</button>
+                            }
+                            <span class="sql-spacer"></span>
+                            <span class="sql-footnote">Integer columns that look like unix-ms get a date hint — the value is never changed.</span>
+                        </div>
+                    }
+                }
+            }
+        </section>
+    </div>
+</div>
+
+@code {
+    private enum ResultView
+    {
+        Grid,
+        Json,
+        Chart,
+    }
+
+    private const int ChartMaxRows = 50;
+    private const int PreviewLength = 80;
+    private const string ReadOnlyReason = "This connection is read-only — set Default mode to Read-write in Connections.";
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    private static readonly JsonWriterOptions JsonOptions = new() { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    // Substrings of the friendly errors that are about the saved connection rather than the SQL, so
+    // the banner offers "Connection settings" only when that is where the fix is.
+    private static readonly string[] ConnectionErrorMarkers =
+    [
+        "connection is read-only", "File not found", "SQLite roots", "Invalid connection settings",
+        HandlerRunner.ConnectionNotFound, "not a valid or healthy SQLite database",
+    ];
+
+    private readonly CancellationTokenSource _pageCts = new();
+    private CancellationTokenSource _connectionCts = new();
+    private IJSObjectReference? _module;
+
+    private ConnectionInfo? _connection;
+    private int? _statementTimeoutS;
+    private string _sql = "";
+    private bool _writeMode;
+    private string? _error;
+    private bool _errorIsConnection;
+    private Func<Task>? _retry;
+
+    private QueryResult? _result;
+    private string? _resultSql;
+    private int _limit = QueryResult.DefaultLimit;
+    private bool _running;
+    private int _runGeneration;
+    private ResultView _view = ResultView.Grid;
+    private string? _json;
+    private (int Label, int Value)? _chartPair;
+    private List<ChartSeries<double>> _chartSeries = [];
+    private string[] _chartLabels = [];
+    private bool _exporting;
+    private string? _exportMessage;
+
+    private ExplainPlan? _plan;
+    private bool _explaining;
+    private int _explainGeneration;
+
+    private WriteScriptResult? _dryRun;
+    private string? _dryRunSql;
+    private WriteScriptResult? _writeResult;
+    private string? _writeSql;
+    private bool _writing;
+    private int _writeGeneration;
+    private WalCheckpointResult? _checkpoint;
+    private string? _checkpointError;
+    private bool _checkpointing;
+
+    private IReadOnlyList<SavedQuery> _saved = [];
+    private bool _saving;
+    private string _saveName = "";
+    private string? _savedError;
+
+    private bool Busy => _running || _explaining || _writing;
+
+    private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private bool CanRunWrite => _writeMode && !_writing && _dryRun is not null && _dryRunSql == _sql;
+
+    private bool ShowPlan => !_writeMode && (_explaining || _plan is not null);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        if (query.TryGetValue("sql", out var sql))
+        {
+            _sql = sql.ToString();
+        }
+
+        await ReloadSavedAsync();
+    }
+
+    private async Task OnSelectionChangedAsync(ConnectionInfo connection)
+    {
+        // Everything below belongs to the previous connection: cancel it and never let a late
+        // response land under the new name. The SQL stays -- it is usually portable.
+        _connectionCts.Cancel();
+        _connectionCts = new CancellationTokenSource();
+        _connection = connection;
+        _writeMode = false;
+        _statementTimeoutS = null;
+        ClearError();
+        ResetReadState();
+        ResetWriteState();
+        _plan = null;
+        _explaining = false;
+        _explainGeneration++;
+
+        var token = _connectionCts.Token;
+        try
+        {
+            // The meta line names the connection's statement timeout; it lives only in the secret.
+            var secret = await Connections.GetSecretAsync(connection.Id, token);
+            if (!token.IsCancellationRequested && secret is not null)
+            {
+                _statementTimeoutS = SqliteConnectionSettings.Parse(secret).StatementTimeoutS;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (FormatException)
+        {
+            // Unparsable secret: every action reports it properly; the meta just omits the timeout.
+        }
+    }
+
+    private void ResetReadState()
+    {
+        _result = null;
+        _resultSql = null;
+        _limit = QueryResult.DefaultLimit;
+        _running = false;
+        _runGeneration++;
+        _json = null;
+        _chartPair = null;
+        _chartSeries = [];
+        _chartLabels = [];
+        _view = ResultView.Grid;
+        _exporting = false;
+        _exportMessage = null;
+    }
+
+    private void ResetWriteState()
+    {
+        _dryRun = null;
+        _dryRunSql = null;
+        _writeResult = null;
+        _writeSql = null;
+        _writing = false;
+        _writeGeneration++;
+        _checkpoint = null;
+        _checkpointError = null;
+        _checkpointing = false;
+    }
+
+    private void ClearError()
+    {
+        _error = null;
+        _retry = null;
+        _errorIsConnection = false;
+    }
+
+    private void ShowError(string? error, Func<Task> retry)
+    {
+        _error = error ?? "The operation failed.";
+        _retry = retry;
+        _errorIsConnection = ConnectionErrorMarkers.Any(m => _error.Contains(m, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task RetryAsync()
+    {
+        if (_retry is { } retry)
+        {
+            await retry();
+        }
+    }
+
+    private void OnSqlInput(ChangeEventArgs e) => _sql = e.Value?.ToString() ?? "";
+
+    private async Task OnEditorKeyDownAsync(KeyboardEventArgs e)
+    {
+        // Ctrl/⌘+Enter runs in read-only mode only: write mode never runs from a keystroke.
+        if (e.Key == "Enter" && (e.CtrlKey || e.MetaKey) && !_writeMode && !_running)
+        {
+            await RunAsync();
+        }
+    }
+
+    // ---- read-only ----
+
+    private Task RunAsync() => ExecuteRunAsync(_sql, QueryResult.DefaultLimit);
+
+    private Task LoadMoreAsync() =>
+        _resultSql is { } sql ? ExecuteRunAsync(sql, _limit + QueryResult.DefaultLimit) : Task.CompletedTask;
+
+    private async Task ExecuteRunAsync(string sql, int limit)
+    {
+        if (_connection is not { } connection || string.IsNullOrWhiteSpace(sql))
+        {
+            return;
+        }
+
+        var generation = ++_runGeneration;
+        var token = _connectionCts.Token;
+        _running = true;
+        _exportMessage = null;
+        ClearError();
+        try
+        {
+            var result = await RunQuery.HandleAsync(connection.Id, sql, limit, token);
+            if (token.IsCancellationRequested || generation != _runGeneration)
+            {
+                return;
+            }
+
+            if (!result.IsSuccess)
+            {
+                _result = null;
+                ShowError(result.Error, () => ExecuteRunAsync(sql, limit));
+                return;
+            }
+
+            ApplyResult(result.Value!, sql, limit);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Connection switched or page disposed mid-run.
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested && generation == _runGeneration)
+            {
+                _running = false;
+            }
+        }
+    }
+
+    private void ApplyResult(QueryResult result, string sql, int limit)
+    {
+        _result = result;
+        _resultSql = sql;
+        _limit = limit;
+        _json = null;
+        _chartPair = ChartPair(result);
+        if (_chartPair is { } pair)
+        {
+            var rows = result.Rows.Take(ChartMaxRows).ToList();
+            _chartLabels = [.. rows.Select(r => r[pair.Label].Display)];
+            _chartSeries = [new() { Name = result.Columns[pair.Value].Name, Data = rows.Select(r => Numeric(r[pair.Value]) ?? 0).ToList() }];
+        }
+        else if (_view == ResultView.Chart)
+        {
+            _view = ResultView.Grid;
+        }
+    }
+
+    private async Task ExplainAsync()
+    {
+        if (_connection is not { } connection || string.IsNullOrWhiteSpace(_sql))
+        {
+            return;
+        }
+
+        var sql = _sql;
+        var generation = ++_explainGeneration;
+        var token = _connectionCts.Token;
+        _explaining = true;
+        ClearError();
+        try
+        {
+            var plan = await ExplainQuery.HandleAsync(connection.Id, sql, token);
+            if (token.IsCancellationRequested || generation != _explainGeneration)
+            {
+                return;
+            }
+
+            if (plan.IsSuccess)
+            {
+                _plan = plan.Value;
+            }
+            else
+            {
+                _plan = null;
+                ShowError(plan.Error, ExplainAsync);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested && generation == _explainGeneration)
+            {
+                _explaining = false;
+            }
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (_connection is not { } connection || _resultSql is not { } sql)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportMessage = null;
+        var generation = _runGeneration;
+        var token = _connectionCts.Token;
+        try
+        {
+            var result = await ExportCsv.HandleAsync(new ExportQueryCsvCommand(connection.Id, connection.Name, sql), token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (!result.IsSuccess)
+            {
+                _exportMessage = result.Error;
+                return;
+            }
+
+            var export = result.Value!;
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SbConsole.Plugins.Sqlite/sqlite.js");
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            using var stream = new MemoryStream(export.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await _module.InvokeVoidAsync("downloadFromStream", export.FileName, streamRef);
+            if (token.IsCancellationRequested || generation != _runGeneration)
+            {
+                return;
+            }
+
+            _exportMessage = export.Truncated
+                ? $"Exported the first {SqliteFormat.Count(export.RowCount)} rows to {export.FileName} — the query returned more (exports are capped at {SqliteFormat.Count(CsvExport.MaxRows)} rows or {SqliteFormat.Bytes(CsvExport.MaxBytes)})."
+                : $"Exported {SqliteFormat.Count(export.RowCount)} rows to {export.FileName}.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (JSException) when (!token.IsCancellationRequested)
+        {
+            _exportMessage = "The browser couldn't save the file.";
+        }
+        catch (JSException)
+        {
+            // Stale export for a connection that is no longer shown.
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _exporting = false;
+            }
+        }
+    }
+
+    // ---- write mode ----
+
+    private async Task EnterWriteModeAsync()
+    {
+        if (_writeMode || _connection is not { } connection || !CanWrite)
+        {
+            return;
+        }
+
+        // IsProd comes from the picker's server-side ConnectionInfo, never from the client.
+        var token = _connectionCts.Token;
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Enable write mode on", connection.Name, true, ct: token))
+        {
+            return;
+        }
+
+        if (token.IsCancellationRequested || !ReferenceEquals(_connection, connection))
+        {
+            return;
+        }
+
+        ClearError();
+        ResetWriteState();
+        _writeMode = true;
+    }
+
+    private void ExitWriteMode()
+    {
+        if (!_writeMode || _writing)
+        {
+            return;
+        }
+
+        _writeMode = false;
+        ClearError();
+        ResetWriteState();
+    }
+
+    private async Task DryRunAsync()
+    {
+        if (!_writeMode || _writing || _connection is not { } connection || string.IsNullOrWhiteSpace(_sql))
+        {
+            return;
+        }
+
+        var sql = _sql;
+        var generation = ++_writeGeneration;
+        var token = _connectionCts.Token;
+        _writing = true;
+        _dryRun = null;
+        _dryRunSql = null;
+        ClearError();
+        try
+        {
+            var result = await DryRunWrite.HandleAsync(connection.Id, sql, token);
+            if (token.IsCancellationRequested || generation != _writeGeneration)
+            {
+                return;
+            }
+
+            if (!result.IsSuccess)
+            {
+                ShowError(result.Error, DryRunAsync);
+                return;
+            }
+
+            _dryRun = result.Value;
+            _dryRunSql = sql;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested && generation == _writeGeneration)
+            {
+                _writing = false;
+            }
+        }
+    }
+
+    private async Task RunWriteAsync()
+    {
+        if (!CanRunWrite || _connection is not { } connection)
+        {
+            return;
+        }
+
+        var sql = _sql;
+        var dryRun = _dryRun!;
+        var token = _connectionCts.Token;
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Run write script on", connection.Name, true,
+                (int)Math.Min(dryRun.TotalRows, int.MaxValue), token))
+        {
+            return;
+        }
+
+        // The dialog is async: the connection, the mode or the text may have changed under it.
+        if (token.IsCancellationRequested || !_writeMode || _dryRunSql != sql || _sql != sql)
+        {
+            return;
+        }
+
+        var generation = ++_writeGeneration;
+        _writing = true;
+        _checkpoint = null;
+        _checkpointError = null;
+        ClearError();
+        try
+        {
+            var result = await RunWrite.HandleAsync(new RunWriteCommand(connection.Id, connection.Name, sql), token);
+            if (token.IsCancellationRequested || generation != _writeGeneration)
+            {
+                return;
+            }
+
+            if (!result.IsSuccess)
+            {
+                // Rolled back: the dry run still describes the file, so Retry may run again.
+                ShowError(result.Error, RunWriteAsync);
+                return;
+            }
+
+            _writeResult = result.Value;
+            _writeSql = sql;
+            // The file changed: running the same text again needs a fresh dry run.
+            _dryRun = null;
+            _dryRunSql = null;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested && generation == _writeGeneration)
+            {
+                _writing = false;
+            }
+        }
+    }
+
+    private async Task CheckpointAsync()
+    {
+        if (_connection is not { } connection || _checkpointing)
+        {
+            return;
+        }
+
+        var generation = _writeGeneration;
+        var token = _connectionCts.Token;
+        _checkpointing = true;
+        _checkpoint = null;
+        _checkpointError = null;
+        try
+        {
+            var result = await CheckpointWal.HandleAsync(new CheckpointWalCommand(connection.Id, connection.Name), token);
+            if (token.IsCancellationRequested || generation != _writeGeneration)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _checkpoint = result.Value;
+            }
+            else
+            {
+                _checkpointError = result.Error;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested && generation == _writeGeneration)
+            {
+                _checkpointing = false;
+            }
+        }
+    }
+
+    // ---- saved queries ----
+
+    private async Task ReloadSavedAsync()
+    {
+        try
+        {
+            _saved = await ListSaved.HandleAsync(_pageCts.Token);
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void LoadSaved(SavedQuery saved) => _sql = saved.Sql;
+
+    private void StartSave()
+    {
+        _saving = true;
+        _saveName = "";
+        _savedError = null;
+    }
+
+    private void CancelSave()
+    {
+        _saving = false;
+        _savedError = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        var result = await SaveQuery.HandleAsync(new SaveQueryCommand(_saveName, _sql), _pageCts.Token);
+        if (!result.IsSuccess)
+        {
+            _savedError = result.Error;
+            return;
+        }
+
+        _saving = false;
+        _savedError = null;
+        await ReloadSavedAsync();
+    }
+
+    private async Task DeleteSavedAsync(SavedQuery saved)
+    {
+        var result = await DeleteSaved.HandleAsync(new DeleteSavedQueryCommand(saved.Id), _pageCts.Token);
+        if (!result.IsSuccess)
+        {
+            _savedError = result.Error;
+            return;
+        }
+
+        await ReloadSavedAsync();
+    }
+
+    // ---- rendering helpers ----
+
+    private string MetaText(ConnectionInfo connection)
+    {
+        if (_writeMode)
+        {
+            return (connection.IsProd ? "write mode on a prod file" : "write mode") + " · every statement runs inside a transaction and is audited";
+        }
+
+        return _statementTimeoutS is { } seconds
+            ? $"opened with mode=ro · statement timeout {seconds.ToString(Inv)} s"
+            : "opened with mode=ro";
+    }
+
+    private static string TotalText(QueryResult result) =>
+        result.TotalCapped ? $"{SqliteFormat.Count(result.TotalRows)}+ rows" : RowsText(result.TotalRows);
+
+    private static string RowsText(long rows) => rows == 1 ? "1 row" : $"{SqliteFormat.Count(rows)} rows";
+
+    private static string StatementsText(int count) => count == 1 ? "1 statement" : $"{count} statements";
+
+    private static string Preview(string sql)
+    {
+        var line = string.Join(' ', sql.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length <= PreviewLength ? line : line[..PreviewLength] + "…";
+    }
+
+    private static string AfterText(WriteFileState? after) => after is null
+        ? "file state unavailable — the commit itself succeeded"
+        : $"{(after.WalBytes is { } wal ? $"-wal {SqliteFormat.Bytes(wal)}" : "no -wal file")} · {after.FreePagePercent.ToString("0", Inv)}% free pages";
+
+    private static string CheckpointText(WalCheckpointResult result)
+    {
+        if (result.LogFrames < 0)
+        {
+            return "Checkpoint: the file isn't in WAL mode — nothing to checkpoint.";
+        }
+
+        var status = result.Busy ? "busy — another connection held the WAL, so it couldn't finish; try again" : "done";
+        return $"Checkpoint {status} · {SqliteFormat.Count(result.LogFrames)} frames · {SqliteFormat.Count(result.CheckpointedFrames)} checkpointed";
+    }
+
+    private static IEnumerable<(ExplainNode Node, int Depth)> PlanRows(ExplainPlan plan)
+    {
+        var depths = new Dictionary<int, int>();
+        foreach (var node in plan.Nodes)
+        {
+            var depth = node.Parent != 0 && depths.TryGetValue(node.Parent, out var parentDepth) ? parentDepth + 1 : 0;
+            depths[node.Id] = depth;
+            yield return (node, depth);
+        }
+    }
+
+    // A full scan of a table (or index); "SCAN CONSTANT ROW" reads nothing.
+    private static bool IsScan(string detail) =>
+        detail.StartsWith("SCAN ", StringComparison.Ordinal) && !detail.StartsWith("SCAN CONSTANT ROW", StringComparison.Ordinal);
+
+    private static string? DateHint(QueryColumn column, CellValue cell) =>
+        column.UnixMsHint && cell is { Kind: CellKind.Integer, Integer: { } value } && ColumnSample.InEpochMsRange(value)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(value).ToString("yyyy-MM-dd", Inv)
+            : null;
+
+    private static double? Numeric(CellValue cell) => cell switch
+    {
+        { Kind: CellKind.Integer, Integer: { } value } => value,
+        { Kind: CellKind.Real } when double.TryParse(cell.Display, NumberStyles.Float, Inv, out var real) && double.IsFinite(real) => real,
+        _ => null,
+    };
+
+    /// <summary>The first column whose non-NULL values are all TEXT, and the first whose are all numeric (§11.3 Chart).</summary>
+    private static (int Label, int Value)? ChartPair(QueryResult result)
+    {
+        int? label = null;
+        int? value = null;
+        var rows = result.Rows.Take(ChartMaxRows).ToList();
+        for (var i = 0; i < result.Columns.Count; i++)
+        {
+            var kinds = rows.Where(r => i < r.Count).Select(r => r[i].Kind).Where(k => k != CellKind.Null).ToList();
+            if (kinds.Count == 0)
+            {
+                continue;
+            }
+
+            if (label is null && kinds.All(k => k == CellKind.Text))
+            {
+                label = i;
+            }
+            else if (value is null && kinds.All(k => k is CellKind.Integer or CellKind.Real))
+            {
+                value = i;
+            }
+        }
+
+        return label is { } l && value is { } v ? (l, v) : null;
+    }
+
+    private static string ToJson(QueryResult result)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, JsonOptions))
+        {
+            writer.WriteStartArray();
+            foreach (var row in result.Rows)
+            {
+                writer.WriteStartObject();
+                for (var i = 0; i < row.Count && i < result.Columns.Count; i++)
+                {
+                    writer.WritePropertyName(result.Columns[i].Name);
+                    var cell = row[i];
+                    switch (cell.Kind)
+                    {
+                        case CellKind.Null:
+                            writer.WriteNullValue();
+                            break;
+                        case CellKind.Integer when cell.Integer is { } integer:
+                            writer.WriteNumberValue(integer);
+                            break;
+                        case CellKind.Real when Numeric(cell) is { } real:
+                            writer.WriteNumberValue(real);
+                            break;
+                        default:
+                            writer.WriteStringValue(cell.Display);
+                            break;
+                    }
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        // Cancel but never dispose (same rule as Tables): a continuation resuming after dispose may
+        // still read .Token, which throws ObjectDisposedException on a disposed source.
+        _pageCts.Cancel();
+        _connectionCts.Cancel();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already gone.
+            }
+        }
+    }
+}

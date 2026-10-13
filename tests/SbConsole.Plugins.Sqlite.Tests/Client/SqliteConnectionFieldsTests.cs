@@ -129,11 +129,24 @@ public class SqliteConnectionFieldsTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
-    public void Read_write_is_shown_but_disabled_in_phase_one()
+    public void Read_write_can_be_chosen_and_is_emitted()
     {
-        var cut = RenderFields(null, out _);
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db").ToSecretString(), out var emitted);
 
-        cut.Find(".sqlite-conn-mode-readwrite input").HasAttribute("disabled").Should().BeTrue();
-        cut.Find(".sqlite-conn-mode-readwrite").TextContent.Should().Contain("not available yet");
+        cut.Find(".sqlite-conn-mode-readwrite input").HasAttribute("disabled").Should().BeFalse();
+        cut.Find(".sqlite-conn-mode-readwrite").TextContent.Should().NotContain("not available");
+        cut.Find(".sqlite-conn-mode-readwrite input").Click();
+
+        SqliteConnectionSettings.Parse(emitted.Last()).Mode.Should().Be(SqliteAccessMode.ReadWrite);
+    }
+
+    [Fact]
+    public void A_read_write_secret_hydrates_the_mode()
+    {
+        var cut = RenderFields(new SqliteConnectionSettings("/data/reports.db", SqliteAccessMode.ReadWrite).ToSecretString(), out var emitted);
+
+        cut.Find(".sqlite-conn-busy input").Input("2500");
+
+        SqliteConnectionSettings.Parse(emitted.Last()).Mode.Should().Be(SqliteAccessMode.ReadWrite);
     }
 }

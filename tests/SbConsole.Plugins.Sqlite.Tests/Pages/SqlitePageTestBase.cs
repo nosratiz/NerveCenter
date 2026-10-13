@@ -7,6 +7,7 @@ using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Sqlite.Client;
 using SbConsole.Plugins.Sqlite.Overview;
+using SbConsole.Plugins.Sqlite.Query;
 using SbConsole.Plugins.Sqlite.Tables;
 using SbConsole.Sdk;
 
@@ -24,6 +25,7 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
     protected readonly ISqliteOperations Operations = Substitute.For<ISqliteOperations>();
     protected readonly IConnectionProvider Connections = Substitute.For<IConnectionProvider>();
     protected readonly IAuditScope Audit = Substitute.For<IAuditScope>();
+    protected readonly IConfirmationService Confirmation = Substitute.For<IConfirmationService>();
     protected readonly InMemoryPluginStore Store = new();
     protected readonly FakeTimeProvider Time = new(new DateTimeOffset(2026, 10, 13, 9, 40, 51, TimeSpan.Zero));
     protected readonly Guid ConnectionId = Guid.NewGuid();
@@ -43,6 +45,8 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddKeyedSingleton<IPluginStore>(SqlitePlugin.PluginId, Store);
         Services.AddSingleton<TimeProvider>(Time);
         Services.AddSingleton(Connections);
+        Confirmation.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        Services.AddSingleton(Confirmation);
         Services.AddSingleton(new GetOverviewQueryHandler(Operations, Connections, NullLogger<GetOverviewQueryHandler>.Instance));
         Services.AddSingleton(new GetTableSizesQueryHandler(Operations, Connections, NullLogger<GetTableSizesQueryHandler>.Instance));
         Services.AddSingleton(new RunIntegrityCheckCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RunIntegrityCheckCommandHandler>.Instance));
@@ -53,6 +57,15 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new PreviewRowsQueryHandler(Operations, Connections, NullLogger<PreviewRowsQueryHandler>.Instance));
         Services.AddSingleton(new CountRowsQueryHandler(Operations, Connections, NullLogger<CountRowsQueryHandler>.Instance));
         Services.AddSingleton(new ExportTableCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportTableCsvCommandHandler>.Instance));
+        Services.AddSingleton(new RunQueryQueryHandler(Operations, Connections, NullLogger<RunQueryQueryHandler>.Instance));
+        Services.AddSingleton(new ExplainQueryQueryHandler(Operations, Connections, NullLogger<ExplainQueryQueryHandler>.Instance));
+        Services.AddSingleton(new DryRunWriteQueryHandler(Operations, Connections, NullLogger<DryRunWriteQueryHandler>.Instance));
+        Services.AddSingleton(new RunWriteCommandHandler(Operations, Connections, Audit, NullLogger<RunWriteCommandHandler>.Instance));
+        Services.AddSingleton(new CheckpointWalCommandHandler(Operations, Connections, Audit, NullLogger<CheckpointWalCommandHandler>.Instance));
+        Services.AddSingleton(new ExportQueryCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportQueryCsvCommandHandler>.Instance));
+        Services.AddSingleton(new ListSavedQueriesQueryHandler(Store));
+        Services.AddSingleton(new SaveQueryCommandHandler(Store, Time, NullLogger<SaveQueryCommandHandler>.Instance));
+        Services.AddSingleton(new DeleteSavedQueryCommandHandler(Store, NullLogger<DeleteSavedQueryCommandHandler>.Instance));
     }
 
     /// <summary>MudMenu items render into a MudPopoverProvider (hosted by the real layout), so menu tests render one alongside.</summary>

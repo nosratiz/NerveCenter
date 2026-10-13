@@ -8,7 +8,7 @@
 
 <MudRadioGroup T="SqliteAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
     <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadOnly" Class="sqlite-conn-mode-readonly">Read-only</MudRadio>
-    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadWrite" Disabled="true" Class="sqlite-conn-mode-readwrite">Read-write — not available yet</MudRadio>
+    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadWrite" Class="sqlite-conn-mode-readwrite">Read-write</MudRadio>
 </MudRadioGroup>
 
 @* No Min/Max on the numeric fields: MudBlazor would silently clamp 0 up to Min and hide the validation

@@ -11,6 +11,7 @@ public sealed class SqlitePlugin : IPlugin
     public const string PluginId = "sqlite";
     public const string OverviewHref = "/p/sqlite/overview";
     public const string TablesHref = "/p/sqlite/tables";
+    public const string QueryHref = "/p/sqlite/query";
 
     // Resolved in Initialize (IPlugin.Initialize): the host constructs plugins with new(), so the
     // instance hooks below have no DI of their own. Until then they fail closed.
@@ -28,10 +29,12 @@ public sealed class SqlitePlugin : IPlugin
     [
         new PluginNavItem("Overview", OverviewHref),
         new PluginNavItem("Tables", TablesHref),
+        new PluginNavItem("Query", QueryHref),
     ];
 
-    // Pages: Overview, Tables. Audited actions: integrity check, CSV export (design spec §8).
-    public PluginContribution Contribution => new(PageCount: 2, ActionCount: 2);
+    // Pages: Overview, Tables, Query. Audited actions: integrity check, CSV export (design spec §8);
+    // the phase 2/3 action count is settled with §11.9's contribution update.
+    public PluginContribution Contribution => new(PageCount: 3, ActionCount: 2);
 
     internal static ConnectionTestResult NotInitialized => new(false, "SQLite plugin is not initialized.");
 

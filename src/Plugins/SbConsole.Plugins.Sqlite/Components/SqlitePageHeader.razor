@@ -5,7 +5,7 @@
     <link rel="stylesheet" href="_content/SbConsole.Plugins.Sqlite/sqlite.css" />
 </HeadContent>
 
-<div class="sql-header">
+<div class="sql-header @Class">
     <span class="sql-title">@Title</span>
     @Chips
     @if (Meta is not null)
@@ -24,4 +24,7 @@
     [Parameter] public RenderFragment? Meta { get; set; }
 
     [Parameter] public RenderFragment? Actions { get; set; }
+
+    /// <summary>Extra classes on the bar, e.g. the Query page's write-mode tint.</summary>
+    [Parameter] public string? Class { get; set; }
 }
