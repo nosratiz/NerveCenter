@@ -324,7 +324,7 @@
                                     }
                                     <button type="button" role="tab" aria-selected="@(view == _view ? "true" : "false")"
                                             class="sql-seg-opt sqlite-query-tab-@(view.ToString().ToLowerInvariant()) @(view == _view ? "sql-is-active" : null)"
-                                            @onclick="() => _view = view">@view</button>
+                                            @onclick="() => _view = view">@ViewLabel(view)</button>
                                 }
                             </span>
                             <button type="button" class="sql-btn sqlite-query-export" disabled="@_exporting" @onclick="ExportAsync">@(_exporting ? "Exporting…" : "Export CSV")</button>
@@ -352,7 +352,7 @@
                                             <text> · first @ChartMaxRows rows</text>
                                         }
                                     </div>
-                                    <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@_chartSeries" ChartLabels="@_chartLabels" Width="100%" Height="320px" />
+                                    <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@_chartSeries" ChartLabels="@_chartLabels" ChartOptions="@ChartTheme" Width="100%" Height="320px" />
                                 </div>
                                 break;
 
@@ -426,6 +426,9 @@
     }
 
     private const int ChartMaxRows = 50;
+
+    /// <summary>MudBlazor writes palette entries verbatim into the bars' SVG fill/stroke, so a palette token follows the theme (light and dark).</summary>
+    private static readonly BarChartOptions ChartTheme = new() { ChartPalette = ["var(--mud-palette-primary)"] };
     private const int PreviewLength = 80;
     private const string ReadOnlyReason = "This connection is read-only — set Default mode to Read-write in Connections.";
     private const string BackupReason = "Backups open read-only — query the live file to write.";
@@ -1086,11 +1089,19 @@
         ? "file state unavailable — the commit itself succeeded"
         : $"{(after.WalBytes is { } wal ? $"-wal {SqliteFormat.Bytes(wal)}" : "no -wal file")} · {after.FreePagePercent.ToString("0", Inv)}% free pages";
 
+    private static string ViewLabel(ResultView view) => view == ResultView.Json ? "JSON" : view.ToString();
+
     private static string CheckpointText(WalCheckpointResult result)
     {
         if (result.LogFrames < 0)
         {
             return "Checkpoint: the file isn't in WAL mode — nothing to checkpoint.";
+        }
+
+        if (result.LogFrames == 0 && !result.Busy)
+        {
+            // Pooling is off, so SQLite already checkpointed and removed the WAL when the last connection closed.
+            return "WAL already empty — nothing to checkpoint";
         }
 
         var status = result.Busy ? "busy — another connection held the WAL, so it couldn't finish; try again" : "done";

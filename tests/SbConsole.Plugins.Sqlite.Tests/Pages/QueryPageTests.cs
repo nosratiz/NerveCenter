@@ -283,6 +283,14 @@ public class QueryPageTests : SqlitePageTestBase
     }
 
     [Fact]
+    public void Result_tabs_read_grid_json_and_chart()
+    {
+        var cut = RenderAndRun();
+
+        cut.FindAll("[role=tablist][aria-label='Result view'] [role=tab]").Select(t => t.TextContent).Should().Equal("Grid", "JSON", "Chart");
+    }
+
+    [Fact]
     public void Json_view_is_an_array_of_objects()
     {
         var cut = RenderAndRun();
@@ -307,6 +315,18 @@ public class QueryPageTests : SqlitePageTestBase
 
         cut.Find(".sqlite-query-chart").TextContent.Should().Contain("tenant").And.Contain("n");
         cut.FindAll(".sqlite-query-chart .mud-chart").Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void Chart_bars_take_the_theme_primary_colour()
+    {
+        var cut = RenderAndRun();
+
+        cut.Find(".sqlite-query-tab-chart").Click();
+
+        var bars = cut.FindAll(".sqlite-query-chart path.mud-chart-bar");
+        bars.Should().NotBeEmpty();
+        bars.Should().OnlyContain(b => b.GetAttribute("fill") == "var(--mud-palette-primary)");
     }
 
     [Fact]
@@ -465,6 +485,22 @@ public class QueryPageTests : SqlitePageTestBase
 
         cut.WaitForAssertion(() => cut.Find(".sqlite-query-checkpoint-result").TextContent.Should().Contain("2,048 frames").And.Contain("2,048 checkpointed"));
         await Audit.Received(1).RecordAsync("sqlite.wal.checkpoint", ConnectionName, ActionRisk.Mutating, true, Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void A_checkpoint_of_an_empty_wal_says_there_was_nothing_to_checkpoint()
+    {
+        // Pooling is off, so SQLite checkpoints and removes the WAL when the write's connection closes.
+        Operations.CheckpointWalAsync(Secret, Arg.Any<CancellationToken>()).Returns(new WalCheckpointResult(false, 0, 0));
+        var cut = RenderInWriteMode();
+        cut.Find(".sqlite-query-dryrun").Click();
+        cut.WaitForElement(".sqlite-query-dryrun-panel");
+        cut.Find(".sqlite-query-runwrite").Click();
+        cut.WaitForElement(".sqlite-query-write-result");
+
+        cut.Find(".sqlite-query-checkpoint").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".sqlite-query-checkpoint-result").TextContent.Should().Be("WAL already empty — nothing to checkpoint"));
     }
 
     [Fact]
