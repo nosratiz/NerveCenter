@@ -60,6 +60,7 @@ public abstract class SqlitePageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new ExportTableCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportTableCsvCommandHandler>.Instance));
         Services.AddSingleton(new RunQueryQueryHandler(Operations, Connections, NullLogger<RunQueryQueryHandler>.Instance));
         Services.AddSingleton(new ExplainQueryQueryHandler(Operations, Connections, NullLogger<ExplainQueryQueryHandler>.Instance));
+        Services.AddSingleton(new GetCompletionSchemaQueryHandler(Operations, Connections, NullLogger<GetCompletionSchemaQueryHandler>.Instance));
         Services.AddSingleton(new DryRunWriteQueryHandler(Operations, Connections, NullLogger<DryRunWriteQueryHandler>.Instance));
         Services.AddSingleton(new RunWriteCommandHandler(Operations, Connections, Audit, NullLogger<RunWriteCommandHandler>.Instance));
         Services.AddSingleton(new CheckpointWalCommandHandler(Operations, Connections, Audit, NullLogger<CheckpointWalCommandHandler>.Instance));

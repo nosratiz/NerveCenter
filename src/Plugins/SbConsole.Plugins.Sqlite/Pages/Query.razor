@@ -3,7 +3,9 @@
    statement (dry run of the same text first), and on prod asks for the connection name twice: to
    enter write mode and before running. ?backup=<file name> (Backups "Open read-only", §11.7) runs
    Run / Explain / Export against that file in the connection's backup directory; write mode is
-   unavailable there. *@
+   unavailable there. Completion (§12): the schema is loaded per connection / backup and refreshed
+   after a committed write that ran DDL; sqlite-completion.js renders the popup and asks
+   GetCompletions (SqlCompletionEngine) for each request. *@
 @page "/p/sqlite/query"
 @using System.Globalization
 @using System.Text
@@ -21,6 +23,7 @@
 @inject ListSavedQueriesQueryHandler ListSaved
 @inject SaveQueryCommandHandler SaveQuery
 @inject DeleteSavedQueryCommandHandler DeleteSaved
+@inject GetCompletionSchemaQueryHandler CompletionSchemaQuery
 @inject IConnectionProvider Connections
 @inject IConfirmationService Confirmation
 @inject NavigationManager Navigation
@@ -156,7 +159,7 @@
         <section class="sql-detail sql-query-main">
             <div class="sql-query-editor-row @(ShowPlan ? null : "sql-query-editor-row-single")">
                 <textarea class="sql-editor sqlite-query-editor" aria-label="SQL" spellcheck="false" placeholder="SELECT …"
-                          value="@_sql" @oninput="OnSqlInput" @onkeydown="OnEditorKeyDownAsync"></textarea>
+                          value="@_sql" @ref="_editor" @oninput="OnSqlInput" @onkeydown="OnEditorKeyDownAsync"></textarea>
                 @if (ShowPlan)
                 {
                     <div class="sql-plan sqlite-query-plan" aria-live="polite">
@@ -426,6 +429,10 @@
     }
 
     private const int ChartMaxRows = 50;
+    private const string CompletionModulePath = "./_content/SbConsole.Plugins.Sqlite/sqlite-completion.js";
+
+    // A committed script whose statements start with one of these may have changed the schema (§12).
+    private static readonly HashSet<string> DdlKeywords = new(["CREATE", "DROP", "ALTER"], StringComparer.Ordinal);
 
     /// <summary>MudBlazor writes palette entries verbatim into the bars' SVG fill/stroke, so a palette token follows the theme (light and dark).</summary>
     private static readonly BarChartOptions ChartTheme = new() { ChartPalette = ["var(--mud-palette-primary)"] };
@@ -446,6 +453,11 @@
     private readonly CancellationTokenSource _pageCts = new();
     private CancellationTokenSource _connectionCts = new();
     private IJSObjectReference? _module;
+    private ElementReference _editor;
+    private IJSObjectReference? _completionModule;
+    private DotNetObjectReference<Query>? _completionRef;
+    private CompletionSchema _schema = CompletionSchema.Empty;
+    private int _schemaGeneration;
 
     private ConnectionInfo? _connection;
     private int? _statementTimeoutS;
@@ -558,6 +570,8 @@
         {
             // Unparsable secret: every action reports it properly; the meta just omits the timeout.
         }
+
+        _ = LoadSchemaAsync(keepCurrent: false);
     }
 
     private void ExitBackup()
@@ -572,6 +586,7 @@
         ResetReadState();
         _plan = null;
         _explainGeneration++;
+        _ = LoadSchemaAsync(keepCurrent: false);
     }
 
     private void DropBackupParameter()
@@ -644,6 +659,71 @@
         if (e.Key == "Enter" && (e.CtrlKey || e.MetaKey) && !_writeMode && !_running)
         {
             await RunAsync();
+        }
+    }
+
+    // ---- completion (§12) ----
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            var module = await JS.InvokeAsync<IJSObjectReference>("import", _pageCts.Token, CompletionModulePath);
+            if (_pageCts.IsCancellationRequested)
+            {
+                await module.DisposeAsync(); // disposed while importing: DisposeAsync saw no module to detach
+                return;
+            }
+
+            _completionModule = module;
+            _completionRef = DotNetObjectReference.Create(this);
+            await module.InvokeVoidAsync("attach", _pageCts.Token, _editor, _completionRef);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or OperationCanceledException)
+        {
+            // No completion popup (script failed to load, or the page is already gone): the editor still works.
+        }
+    }
+
+    /// <summary>Called by sqlite-completion.js for every (debounced) request; the engine is pure and fast.</summary>
+    [JSInvokable]
+    public CompletionResult GetCompletions(string text, int caret) => SqlCompletionEngine.Complete(text ?? "", caret, _schema);
+
+    /// <summary>
+    /// Loads the selected connection's (or backup's) schema. Never shows an error: completion just
+    /// works without tables. keepCurrent keeps the old schema until the new one arrives (DDL refresh).
+    /// </summary>
+    private async Task LoadSchemaAsync(bool keepCurrent)
+    {
+        if (!keepCurrent)
+        {
+            _schema = CompletionSchema.Empty;
+        }
+
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var generation = ++_schemaGeneration;
+        var token = _connectionCts.Token;
+        try
+        {
+            var result = await CompletionSchemaQuery.HandleAsync(connection.Id, _backupFile, token);
+            if (token.IsCancellationRequested || generation != _schemaGeneration)
+            {
+                return;
+            }
+
+            _schema = result is { IsSuccess: true, Value: { } schema } ? schema : keepCurrent ? _schema : CompletionSchema.Empty;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
         }
     }
 
@@ -949,6 +1029,10 @@
             // The file changed: running the same text again needs a fresh dry run.
             _dryRun = null;
             _dryRunSql = null;
+            if (result.Value!.Statements.Any(s => DdlKeywords.Contains(s.Keyword)))
+            {
+                _ = LoadSchemaAsync(keepCurrent: true);
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -1207,6 +1291,20 @@
         // still read .Token, which throws ObjectDisposedException on a disposed source.
         _pageCts.Cancel();
         _connectionCts.Cancel();
+        if (_completionModule is not null)
+        {
+            try
+            {
+                await _completionModule.InvokeVoidAsync("detach", _editor);
+                await _completionModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already gone.
+            }
+        }
+
+        _completionRef?.Dispose();
         if (_module is not null)
         {
             try
