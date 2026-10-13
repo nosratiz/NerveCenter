@@ -412,29 +412,52 @@ SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
 SQLite is a file, not a server, so there's no broker container — just a one-shot seed
 (`docker/sqlite/seed.py`) that writes, into one directory:
 
-| File | What it is for |
-|---|---|
-| `reports.db` | ~35 MB demo file shaped like the plugin mockups: tenants / users / sessions / events with JSON props and unix-ms timestamps from ~13 months ago up to the moment the seed ran, a WITHOUT ROWID `event_props` table, `reports` / `report_runs` (`ON DELETE CASCADE`), two views, a trigger, `ANALYZE` stats and some free pages. Tenant `umbrella` is churned (last activity ~60 days before seeding), so the retention script below has rows to dry-run and cascades to show. |
-| `new.db` | A 0-byte file — SQLite opens it as an empty database (the Tables page's empty state, mockup 1g). |
-| `backups/` | World-writable directory for the connections' **Enable backups to** (Backups page). |
+| File | Journal | What it demos |
+|---|---|---|
+| `reports.db` | WAL | ~35 MB file shaped like the plugin mockups: tenants / users / sessions / events with JSON props and unix-ms timestamps from ~13 months ago up to the moment the seed ran, a WITHOUT ROWID `event_props` table, `reports` / `report_runs` (`ON DELETE CASCADE`), two views, a trigger, `ANALYZE` stats and some free pages (Overview, WAL checkpoint). Tenant `umbrella` is churned (last activity ~60 days before seeding), so the retention script below has rows to dry-run and cascades to show. |
+| `shop.db` | DELETE | ~6 MB shop: 6 000 customers, 22 000 orders, ~57 000 order items, 12 000 reviews, 400 products. `price_cents` integers, JSON `attributes` / review `meta`, `CHECK`s on order status / quantity / rating, `order_items` → `orders` **ON DELETE CASCADE** and → `products` **ON DELETE RESTRICT** (the Drop dialog shows both), a partial index (`idx_orders_pending … WHERE status = 'pending'`), the view `v_revenue_by_month`, an `updated_at` trigger, a WITHOUT ROWID `product_tags`, `ANALYZE` stats. |
+| `corrupt.db` | DELETE | Tiny and deliberately broken: the `idx_items_name` index b-tree is damaged (integrity check fails with "row N missing from index…"; **REINDEX** fixes it) and `item_notes` has 3 orphan rows (foreign-key check violations). Demos the Overview's failed-integrity strip, REINDEX, **Recover into new file** and the dashboard's problem counts. |
+| `reference.db` | DELETE | Small lookup data — countries (ISO alpha-2/3, numeric), currencies, a `country_currencies` join with FKs — connected **Read-only** to show the read-only UI state. |
+| `new.db` | — | A 0-byte file — SQLite opens it as an empty database (the Tables page's empty state, mockup 1g). |
+| `backups/` | | World-writable directory for the connections' **Enable backups to** (Backups page). |
 
-The seed is idempotent: each piece is created only when missing. `--force` deletes and rebuilds
-`reports.db` and `new.db` (never `backups/`) — needed once if your volume predates the
-`reports` tables or the "up to now" timestamps.
+The seed is idempotent: each file is created only when missing. `--force` deletes and rebuilds
+every database file (never `backups/`) — the seed verifies that `corrupt.db` really fails its
+integrity check and that `REINDEX` on a copy repairs it.
 
-- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. Everything
-  lands in the `sqlite-demo` volume, mounted at `/sqlite`, and the app gets `SBC_SQLITE_ROOTS=/sqlite`.
-  Rebuild with `docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite`.
-- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo` (add `--force` to rebuild),
-  then set `SBC_SQLITE_ROOTS` in `launchSettings.json` to the absolute path of `.sqlite-demo` and use
-  `<that path>/…` below instead of `/sqlite/…`.
+**Demo connections are created automatically.** With `SBC_DEMO_CONNECTIONS` pointing at a JSON
+file, the app creates each listed connection at startup **if no connection with that name exists**
+— it never updates or deletes one, so your edits survive restarts and a connection you delete comes
+back on the next start (remove it from the file to stop that). They go through the same path as the
+Connections form: secret encrypted, `connection.create` audit row with actor `system`. Unset = off;
+an unreadable file is logged and skipped. Demo/dev only — never put production secrets in a plain
+JSON file. The compose app mounts `docker/sqlite/demo-connections.json` (read-only) at
+`/demo/connections.json`:
 
-Suggested connections (kind *SQLite*; paths as seen inside the container):
-
-| Name | File path | Default mode | Enable backups to | Tags |
+| Name | File path | Mode | Enable backups to | Tags |
 |---|---|---|---|---|
 | `sqlite-reports` | `/sqlite/reports.db` | Read-write | `/sqlite/backups` | `prod` |
-| `sqlite-new` | `/sqlite/new.db` | Read-write | — | |
+| `sqlite-shop` | `/sqlite/shop.db` | Read-write | `/sqlite/backups` | `staging` |
+| `sqlite-corrupt` | `/sqlite/corrupt.db` | Read-write | `/sqlite/backups` | `demo` |
+| `sqlite-reference` | `/sqlite/reference.db` | Read-only | — | `demo` |
+| `sqlite-new` | `/sqlite/new.db` | Read-write | — | `demo` |
+
+`reports` and `shop` share `backups/`; backup files are prefixed with the database's base name and
+each connection's history only lists its own records, so they don't mix.
+
+- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. Everything
+  lands in the `sqlite-demo` volume, mounted at `/sqlite`; the app gets `SBC_SQLITE_ROOTS=/sqlite`
+  and `SBC_DEMO_CONNECTIONS=/demo/connections.json`.
+  Reset the files with `docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite`
+  (then restart the app if it has a file open). Resetting files doesn't touch the saved
+  connections; to recreate those too, drop the app's volume (`docker compose --profile app down -v`
+  removes `sbconsole-data` along with the others) and start again.
+- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo` (add `--force` to rebuild).
+  In `launchSettings.json` set `SBC_SQLITE_ROOTS` to the absolute path of `.sqlite-demo`. For the
+  demo connections, copy `docker/sqlite/demo-connections.json` somewhere outside the repo (e.g.
+  `.sqlite-demo/demo-connections.json`), replace every `/sqlite` in it with that absolute path, and
+  set `SBC_DEMO_CONNECTIONS` to the copy. Without it, add connections by hand with the paths above
+  (`<that path>/…` instead of `/sqlite/…`).
 
 `sqlite-reports` with the `prod` tag exercises the typed confirmations (write mode, Run in
 transaction, Drop table, Prune, Restore). A retention dry run to paste into the Query page in

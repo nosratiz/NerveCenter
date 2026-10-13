@@ -1,0 +1,32 @@
+[
+  {
+    "name": "sqlite-reports",
+    "kind": "sqlite",
+    "secret": "Path=/sqlite/reports.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30;BackupDir=/sqlite/backups",
+    "tags": ["prod"]
+  },
+  {
+    "name": "sqlite-shop",
+    "kind": "sqlite",
+    "secret": "Path=/sqlite/shop.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30;BackupDir=/sqlite/backups",
+    "tags": ["staging"]
+  },
+  {
+    "name": "sqlite-corrupt",
+    "kind": "sqlite",
+    "secret": "Path=/sqlite/corrupt.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30;BackupDir=/sqlite/backups",
+    "tags": ["demo"]
+  },
+  {
+    "name": "sqlite-reference",
+    "kind": "sqlite",
+    "secret": "Path=/sqlite/reference.db;Mode=ReadOnly;BusyTimeoutMs=5000;StatementTimeoutS=30",
+    "tags": ["demo"]
+  },
+  {
+    "name": "sqlite-new",
+    "kind": "sqlite",
+    "secret": "Path=/sqlite/new.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30",
+    "tags": ["demo"]
+  }
+]

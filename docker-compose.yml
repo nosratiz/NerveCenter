@@ -284,8 +284,9 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------------------
-  # SQLite demo files (profile: sqlite). One-shot: builds reports.db, an empty new.db and a writable
-  # backups/ directory (the demo connections' BackupDir, /sqlite/backups) in the sqlite-demo volume,
+  # SQLite demo files (profile: sqlite). One-shot: builds reports.db, shop.db, corrupt.db,
+  # reference.db, an empty new.db and a writable backups/ directory (the demo connections'
+  # BackupDir, /sqlite/backups) in the sqlite-demo volume,
   # which the app profile mounts at /sqlite with SBC_SQLITE_ROOTS=/sqlite. Deliberately not /data:
   # that holds SbConsole's own database and data-protection keys. Idempotent; rebuild with
   #   docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite
@@ -332,9 +333,12 @@ services:
       SBC_API_KEY: ${SBC_API_KEY:-}
       # Directories the SQLite plugin may open files under (fail-closed when unset).
       SBC_SQLITE_ROOTS: /sqlite
+      # Demo connections created at startup if missing (create-only; docker/README.md "SQLite").
+      SBC_DEMO_CONNECTIONS: /demo/connections.json
     volumes:
       - sbconsole-data:/data
       - sqlite-demo:/sqlite
+      - ./docker/sqlite/demo-connections.json:/demo/connections.json:ro
 
 volumes:
   kafka-data:

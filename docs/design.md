@@ -1641,3 +1641,30 @@ names a JSON file of connections the host creates at startup:
   the copy in SbConsole's database. Use it for local/demo brokers and files (the compose stack mounts
   `docker/sqlite/demo-connections.json`, which holds file paths, not credentials) — real
   credentials go through the Connections page.
+
+### 16.1 SQLite demo databases and the compose wiring (2026-10-13)
+
+`docker/sqlite/seed.py` adds three files beside `reports.db` / `new.db` (unchanged), each created
+only when missing and all rebuilt by `--force` (`backups/` is never emptied):
+
+- `shop.db` (~6 MB, journal mode DELETE as a contrast to `reports.db`'s WAL) — the realistic
+  relational one: `order_items` → `orders` `ON DELETE CASCADE` and → `products` `ON DELETE RESTRICT`
+  so the Drop dialog's consequences show both kinds, plus `CHECK`s, JSON columns, a partial index,
+  a view, a trigger, a WITHOUT ROWID table and `ANALYZE` stats. Random data is seeded (`Random(7)`);
+  timestamps are relative to the seed run so revenue-by-month reaches "now".
+- `corrupt.db` — the only way to demo the failed-integrity paths without a real disk fault. The
+  seed writes rows with the index present, then rewrites `item-` → `ITEM-` in a few key payloads on
+  the index's root (leaf) page, leaving page headers and cell pointers intact: the b-tree stays
+  walkable, so `integrity_check` reports out-of-order/missing index entries and `REINDEX` can clear
+  and rebuild it. Three orphan `item_notes` rows (inserted with foreign keys off) feed
+  `foreign_key_check`. The seed asserts both "integrity fails" and "REINDEX on a copy → ok" and
+  exits non-zero otherwise, so a SQLite change that alters the outcome is caught at seed time.
+- `reference.db` — small lookup tables, meant for a Read-only connection.
+
+`docker/sqlite/demo-connections.json` lists the five compose connections (secrets in exactly
+`SqliteConnectionSettings.ToSecretString`'s format, pinned by `DemoConnectionsFileTests`); the app
+service mounts it read-only at `/demo/connections.json` with `SBC_DEMO_CONNECTIONS` pointing there.
+No `{root}` placeholder for `dotnet run`: the README says to copy the file and edit the paths —
+one less feature to maintain for a dev convenience. `reports` and `shop` share `/sqlite/backups`;
+that is safe because backup files are prefixed with the database's base name and history/pruning
+are per connection id.
