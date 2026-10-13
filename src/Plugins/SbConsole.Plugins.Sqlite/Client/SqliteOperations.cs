@@ -9,8 +9,8 @@ namespace SbConsole.Plugins.Sqlite.Client;
 
 /// <summary>
 /// Microsoft.Data.Sqlite implementation. Every call: parse the secret, ask IHostPathPolicy, open the
-/// *resolved* path read-only with pooling off, set busy_timeout, run the work under the statement
-/// timeout, close. Design spec §4.2.
+/// *resolved* path (read-only unless SqliteOpenOptions asks otherwise) with pooling off, set
+/// busy_timeout, run the work under the statement timeout, close. Design spec §4.2, §11.1.
 /// </summary>
 public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger<SqliteOperations>? logger = null) : ISqliteOperations, ISingletonService
 {
@@ -61,20 +61,34 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
 
     /// <summary>Runs <paramref name="work"/> off the Blazor circuit thread (Microsoft.Data.Sqlite's async API is synchronous underneath).</summary>
     internal Task<T> RunAsync<T>(string secret, Func<SqliteConnection, T> work, CancellationToken ct) =>
-        Task.Run(() => Run(secret, work, ct), ct);
+        RunAsync(secret, SqliteOpenOptions.Plugin, work, ct);
 
-    internal T Run<T>(string secret, Func<SqliteConnection, T> work, CancellationToken ct)
+    internal Task<T> RunAsync<T>(string secret, SqliteOpenOptions options, Func<SqliteConnection, T> work, CancellationToken ct) =>
+        Task.Run(() => Run(secret, options, work, ct), ct);
+
+    internal T Run<T>(string secret, Func<SqliteConnection, T> work, CancellationToken ct) =>
+        Run(secret, SqliteOpenOptions.Plugin, work, ct);
+
+    internal T Run<T>(string secret, SqliteOpenOptions options, Func<SqliteConnection, T> work, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var settings = SqliteConnectionSettings.Parse(secret);
+        // Re-read from the decrypted secret, never from anything the page sends (§11.1).
+        if (options.Writable && settings.Mode != SqliteAccessMode.ReadWrite)
+        {
+            throw new SqliteReadOnlyConnectionException();
+        }
+
         var path = pathPolicy.Check(settings.Path);
         if (!path.Allowed)
         {
             throw new SqlitePathRefusedException(path.Reason ?? "Path refused.");
         }
 
-        using var connection = Open(path.ResolvedPath!, settings);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(settings.StatementTimeoutS));
+        var limit = options.Timeout ?? TimeSpan.FromSeconds(settings.StatementTimeoutS);
+        var limitSeconds = (int)Math.Ceiling(limit.TotalSeconds);
+        using var connection = Open(path.ResolvedPath!, settings, options);
+        using var timeout = new CancellationTokenSource(limit);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
 
         // Verified 2026-10-13 (Microsoft.Data.Sqlite 10.0.12): a token passed to the provider, or
@@ -97,7 +111,7 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
                 if (linked.IsCancellationRequested)
                 {
                     ct.ThrowIfCancellationRequested();
-                    throw new SqliteStatementTimeoutException(settings.StatementTimeoutS, null);
+                    throw new SqliteStatementTimeoutException(limitSeconds, null);
                 }
 
                 return work(connection);
@@ -105,7 +119,7 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
             catch (SqliteException ex) when (ex.SqliteErrorCode == raw.SQLITE_INTERRUPT)
             {
                 ct.ThrowIfCancellationRequested();
-                throw new SqliteStatementTimeoutException(settings.StatementTimeoutS, ex);
+                throw new SqliteStatementTimeoutException(limitSeconds, ex);
             }
         }
     }
@@ -122,14 +136,15 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
         }
     }
 
-    private static SqliteConnection Open(string resolvedPath, SqliteConnectionSettings settings)
+    private static SqliteConnection Open(string resolvedPath, SqliteConnectionSettings settings, SqliteOpenOptions options)
     {
         // The resolved path is always absolute ("/..."), so SQLite can never read it as a "file:"
-        // URI carrying its own ?mode= override.
+        // URI carrying its own ?mode= override. Writable is ReadWrite, never ReadWriteCreate: a
+        // missing file is never created (§11.1).
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = resolvedPath,
-            Mode = SqliteOpenMode.ReadOnly, // phase 1: always read-only, whatever settings.Mode says (spec §2)
+            Mode = options.Writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
             Pooling = false,
             DefaultTimeout = Math.Max(1, (int)Math.Ceiling(settings.BusyTimeoutMs / 1000.0)),
         };
@@ -138,6 +153,13 @@ public sealed partial class SqliteOperations(IHostPathPolicy pathPolicy, ILogger
         try
         {
             connection.Open();
+            if (options.LimitAttach)
+            {
+                // ATTACH '/any/file' and VACUUM INTO '/any/path' would bypass IHostPathPolicy (VACUUM
+                // INTO even works read-only); with no attach slots both fail (verified 2026-10-13, §11.1).
+                raw.sqlite3_limit(connection.Handle, raw.SQLITE_LIMIT_ATTACHED, 0);
+            }
+
             SqliteSql.Execute(connection, $"PRAGMA busy_timeout = {settings.BusyTimeoutMs.ToString(CultureInfo.InvariantCulture)}");
             // Defence in depth for untrusted files: a hostile schema can't run SQL functions from views/triggers/defaults.
             SqliteSql.Execute(connection, "PRAGMA trusted_schema = OFF");

@@ -13,6 +13,7 @@ public class FriendlySqliteErrorTests
     [InlineData(11, "The file is not a valid or healthy SQLite database.")]
     [InlineData(26, "The file is not a valid or healthy SQLite database.")]
     [InlineData(14, "File not found, or not readable by the SbConsole container user.")]
+    [InlineData(13, "The disk or volume is full.")]
     public void Maps_sqlite_error_codes(int code, string expected)
     {
         FriendlySqliteError.From(new SqliteException("raw engine noise", code)).Should().Be(expected);
@@ -24,6 +25,9 @@ public class FriendlySqliteErrorTests
         FriendlySqliteError.From(new SqlitePathRefusedException("outside the roots")).Should().Be("outside the roots");
         FriendlySqliteError.From(new SqliteObjectNotFoundException("events"))
             .Should().Be("No table or view named 'events' — it may have been dropped since the page loaded.");
+        FriendlySqliteError.From(new SqliteReadOnlyConnectionException())
+            .Should().Be("This connection is read-only — set Default mode to Read-write in Connections.");
+        FriendlySqliteError.From(new SqliteScriptRefusedException("The script is empty.")).Should().Be("The script is empty.");
     }
 
     [Fact]
