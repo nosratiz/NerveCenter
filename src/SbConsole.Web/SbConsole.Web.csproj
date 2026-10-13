@@ -20,6 +20,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- The Web SDK only infers this from .razor files it can see at restore time. The Dockerfile
+         restores from project files alone (before COPY src/), so without it the image ships with no
+         _framework/blazor.web.js and no page ever goes interactive. -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
 </Project>

@@ -29,7 +29,7 @@ dotnet test --filter "FullyQualifiedName~PeekPageTests.SomeTestName"   # one tes
 Gate before every commit: `dotnet build -warnaserror` and `dotnet test` green (per §8 of the design doc). TDD is the house style — write the failing test first, per task.
 
 Run the app (needs the local broker stack below, and a `launchSettings.json` — copy
-`src/SbConsole.Web/Properties/launchSettings.json.example`, which documents the required env vars: `SBC_DATA_KEY`, `SBC_DB_PATH`, `SBC_ADMIN_PASSWORD`, `SBC_API_KEY`, `SBC_BIND`, `SBC_SQLITE_ROOTS`):
+`src/SbConsole.Web/Properties/launchSettings.json.example`, which documents the required env vars: `SBC_DATA_KEY`, `SBC_DB_PATH`, `SBC_ADMIN_PASSWORD`, `SBC_API_KEY`, `SBC_BIND`, `SBC_SQLITE_ROOTS`, optional `SBC_DEMO_CONNECTIONS`):
 
 ```bash
 dotnet run --project src/SbConsole.Web --launch-profile http   # also `.claude/launch.json`'s "sbconsole-web" config
@@ -41,7 +41,7 @@ Local dev stack (brokers the plugins talk to — see [docker/README.md](docker/R
 docker compose up -d                              # Kafka (KRaft, seeded topics) + Kafka UI
 docker compose --profile servicebus up -d         # + Azure Service Bus emulator (SQL Server-backed)
 docker compose --profile rabbitmq up -d           # + RabbitMQ 3.13 (management + shovel), seeded vhost /orders, AMQP on 5673
-docker compose --profile sqlite --profile app up -d --build   # + SQLite demo files + backups/ at /sqlite (SBC_SQLITE_ROOTS)
+docker compose --profile sqlite --profile app up -d --build   # + SQLite demo DBs (reports, shop, corrupt, reference, new) at /sqlite; demo connections auto-created (SBC_DEMO_CONNECTIONS)
 docker compose --profile app up -d --build        # SbConsole itself, containerized (needs .env, see .env.example)
 docker compose --profile servicebus --profile app down -v   # full reset, drops volumes
 ```
