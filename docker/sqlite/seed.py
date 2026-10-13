@@ -2,11 +2,12 @@
 
 Usage:  python3 -I docker/sqlite/seed.py [target-dir]      (default: /sqlite)
 
-Creates <target-dir>/reports.db (~50 MB) once; a re-run leaves an existing file alone. Shape follows
+Creates <target-dir>/reports.db (~35 MB) once; a re-run leaves an existing file alone. Shape follows
 mockup 1b: tenants, users, sessions, events with JSON props and unix-ms timestamps, a WITHOUT ROWID
 event_props table with an FK to events, two indexes on events, two views, a trigger and a
-migrations table. ANALYZE runs last so sqlite_stat1 row estimates exist, and every tenth event is
-deleted first so the Overview has free pages to show. Journal mode is left as WAL.
+migrations table. ANALYZE runs last so sqlite_stat1 row estimates exist, and the oldest 20% of
+events are deleted first (a contiguous id range, so whole pages empty out) so the Overview has
+free pages to show. Journal mode is left as WAL.
 """
 import json
 import os
@@ -79,10 +80,12 @@ def main() -> None:
                    [(v, f"migration_{v:04d}", "2026-09-25T14:22:00Z") for v in range(1, 39)])
     db.commit()
 
+    # Delete a contiguous range, not a scatter: deleting every Nth row leaves each page partly full,
+    # so SQLite frees nothing. The oldest 20% of events empties whole pages onto the freelist.
     # Cascade the event_props rows too, so the demo file has no FK violations of its own.
     # (Python's sqlite3 leaves foreign_keys OFF by default, unlike SbConsole's connections.)
     db.execute("PRAGMA foreign_keys = ON")
-    db.execute("DELETE FROM events WHERE id % 10 = 0")
+    db.execute(f"DELETE FROM events WHERE id <= {EVENTS // 5}")
     db.commit()
     db.execute("ANALYZE")
     db.execute("PRAGMA journal_mode = WAL")

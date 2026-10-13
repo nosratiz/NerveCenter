@@ -200,7 +200,7 @@ journal mode`, "PRAGMA Ns ago", **Refresh**.
 | Source | Fields |
 |---|---|
 | `FileInfo` on resolved path | file size, last modified; `-wal` size if present |
-| PRAGMAs | `page_size`, `page_count`, `freelist_count`, `journal_mode`, `synchronous`, `wal_autocheckpoint`, `cache_size`, `busy_timeout`, `foreign_keys` |
+| PRAGMAs | `page_size`, `page_count`, `freelist_count`, `journal_mode`, `synchronous`, `wal_autocheckpoint`, `cache_size`, `busy_timeout` |
 | `sqlite_version()` | version |
 
 Tiles:
@@ -211,7 +211,10 @@ Tiles:
 - **Journal**: journal mode, `synchronous`, checkpoint every N pages.
 - **Page cache**: `cache_size` rendered as pages and bytes (negative
   `cache_size` means KiB, per SQLite). No hit ratio.
-- **Settings strip**: `busy_timeout`, `foreign_keys`.
+- **Settings strip**: `busy_timeout` is read from the connection; `foreign_keys` is static copy
+  ("per-connection · on for this console's connections"), because it is a per-connection setting
+  that is always ON for this console's connections, so reading it back would add nothing. The
+  `foreign_keys` PRAGMA is not read.
 
 **`GetTableSizesQueryHandler`** — loaded separately so the tiles never wait
 on it: `SELECT name, SUM(pgsize) FROM dbstat GROUP BY name` (full b-tree walk;
@@ -326,7 +329,7 @@ SQLite.
 - `docs/design.md`: dated section on the path-policy seam, fail-closed
   rationale, and the temp-file test exception (§9).
 
-**Local dev stack:** `docker/sqlite/seed.py` builds a ~50 MB demo
+**Local dev stack:** `docker/sqlite/seed.py` builds a ~34 MB demo
 `reports.db` (tenants, sessions, events with JSON `props`, event_props with an
 FK, an index on `events.ts`, a view, `ANALYZE` run so `sqlite_stat1` exists).
 Mounted at `/sqlite` for the `app` profile with
@@ -375,8 +378,15 @@ creating new database files.
 - **Dashboard problems** gained a Warning "Foreign key violations" (§8 listed two).
 - **Connection form** shows field-level validation errors (empty path, `;` in the path,
   timeouts below 1) instead of silently keeping the last good secret.
+- **Known limitation:** the path check is check-then-open. Opening the *resolved* path removes
+  symlinks that existed at check time, but someone who can write under a root can still race a new
+  symlink in between the check and the open.
+- **Operational rule:** roots must never contain SbConsole's own data directory (the folder of
+  `SBC_DB_PATH`, which also holds the data-protection keys).
+- **Hardening:** every connection also runs `PRAGMA trusted_schema = OFF`, so a hostile schema in
+  an untrusted file can't run SQL functions from views, triggers or defaults.
 - **Known limitation:** a hard link to SbConsole's own database placed under a root is not
   detected (the policy compares resolved paths, not file identity); it needs write access
   to both locations.
-- The demo file is ~35 MB, not 50 MB, and the compose volume is writable (SQLite needs to
+- The demo file is ~34 MB, not 50 MB, and the compose volume is writable (SQLite needs to
   create `-shm` beside a WAL file even for read-only connections).

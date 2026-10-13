@@ -8,7 +8,7 @@ SbConsole: a team-hosted Blazor web app that acts as a **plugin host platform**.
 (`SbConsole.Web` + `SbConsole.Core`) provides the chassis — shell UI, auth, saved connections,
 encrypted secrets, settings, audit log, plugin storage. Plugins provide domain features:
 `SbConsole.Plugins.ServiceBus` (Azure Service Bus), `SbConsole.Plugins.Kafka` (Apache Kafka),
-`SbConsole.Plugins.Aws` (AWS SQS/SNS), `SbConsole.Plugins.RabbitMq` (RabbitMQ) and
+`SbConsole.Plugins.Aws` (AWS SQS/SNS), `SbConsole.Plugins.RabbitMq` (RabbitMQ), `SbConsole.Plugins.Redis` (Redis) and
 `SbConsole.Plugins.Sqlite` (SQLite files, read-only).
 Full architecture and decision history: [docs/design.md](docs/design.md) — read it before making
 any non-trivial change; it documents *why* things are shaped the way they are, not just what
@@ -96,7 +96,7 @@ The seam every plugin is built against — read `docs/design.md` §3 for the ful
 
 - Core handlers: xUnit + FluentAssertions + NSubstitute (substitute `IAuditWriter`, stores, clock via `Microsoft.Extensions.TimeProvider.Testing`).
 - Blazor components: bUnit.
-- Plugins (Service Bus, Kafka, AWS, RabbitMQ): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further.
+- Plugins (Service Bus, Kafka, AWS, RabbitMQ): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further. Deliberate exception: SQLite plugin operations are tested against real temp-file databases (no Docker, no network); handlers and pages still use a substituted operations interface (see docs/design.md §15).
 - `SbConsole.IntegrationTests` (Testcontainers + real/emulated brokers) is planned but not yet built.
 
 ### Stack (non-negotiable, per design doc §9)

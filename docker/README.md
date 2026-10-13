@@ -424,5 +424,9 @@ WITHOUT ROWID table, two views, a trigger, `ANALYZE` stats and some free pages).
 resolved (`..` collapsed, every symlink followed) before the check, and SbConsole's own database and
 its `-wal`/`-shm`/`-journal` files are always refused. Known limitations: the bundled SQLite has no
 `dbstat`, so the Overview ranks the largest tables by `sqlite_stat1` row estimates instead of bytes;
-and a *hard link* to SbConsole's own database placed under a root is not detected, because the policy
+a *symlink race*: the path check is check-then-open, and while opening the resolved path defeats
+symlinks that already existed at check time, someone with write access under a root can still race
+a new one in; and a *hard link* to SbConsole's own database placed under a root is not detected, because the policy
 compares resolved paths, not file identity (creating one needs write access to both locations).
+Roots must never contain SbConsole's own data directory (the folder of `SBC_DB_PATH`, which also
+holds the data-protection keys).

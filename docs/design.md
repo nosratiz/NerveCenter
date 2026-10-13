@@ -1503,6 +1503,15 @@ browser; write mode / Query (phase 2) and backups (phase 3) follow.
   on before the cascading delete.
 - **`dbstat` is absent** from the bundled `e_sqlite3`, so size-by-table falls back to
   `sqlite_stat1` row estimates; sizes appear automatically if a future build includes it.
+- **`trusted_schema = OFF`.** Every connection runs `PRAGMA trusted_schema = OFF` right after
+  `busy_timeout`, as defence in depth against hostile schemas (views/triggers/defaults calling
+  SQL functions) in untrusted files; the full suite passes with it.
+- **Secret lookup failures** (e.g. a rotated `SBC_DATA_KEY`) in the two command handlers go through
+  `HandlerRunner.TryResolveSecretAsync`: logged, returned as a friendly `PluginResult.Fail`, and
+  *not* audited, because nothing ran (same as "Connection not found").
+- **Path policy limits.** The check is check-then-open; opening the resolved path removes symlinks
+  that existed at check time but not a new symlink raced in by someone with write access under a
+  root. Roots must never contain SbConsole's own data directory.
 - **Testing exception.** `SqliteOperations` is tested against temp-file databases (no Docker, no
   network) — the only honest way to test PRAGMA parsing, read-only mode and interrupts. Handlers and
   pages still use a substituted `ISqliteOperations`, as every other plugin does.
