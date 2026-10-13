@@ -1,0 +1,27 @@
+@* The header bar every SQLite page opens with (mockup 1a-1e): title, connection chips, mono meta,
+   right-aligned actions. Also links the plugin stylesheet, so a page that renders a header gets the
+   sql-* classes with no host wiring (same approach as RedisPageHeader). *@
+<HeadContent>
+    <link rel="stylesheet" href="_content/SbConsole.Plugins.Sqlite/sqlite.css" />
+</HeadContent>
+
+<div class="sql-header">
+    <span class="sql-title">@Title</span>
+    @Chips
+    @if (Meta is not null)
+    {
+        <span class="sql-meta">@Meta</span>
+    }
+    <span class="sql-spacer"></span>
+    <div class="sql-actions">@Actions</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    [Parameter] public RenderFragment? Chips { get; set; }
+
+    [Parameter] public RenderFragment? Meta { get; set; }
+
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

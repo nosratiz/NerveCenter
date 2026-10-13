@@ -1,0 +1,93 @@
+@using Microsoft.AspNetCore.WebUtilities
+@inject IConnectionProvider Connections
+@inject NavigationManager Navigation
+
+@* Header chips: the connection menu, then the file + mode (mockup 1a: "the connection is the file,
+   so the page picker shows the file and its mode"). The choice lives in ?connectionId= so links
+   stay shareable, matching RedisConnectionDatabasePicker minus the database axis. *@
+@if (!_loaded)
+{
+    <MudProgressCircular Class="picker-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connections.Count == 0)
+{
+    <span class="sql-muted sqlite-no-connections">No SQLite connections yet — add one under Connections.</span>
+}
+else
+{
+    <MudMenu Class="sqlite-connection-menu" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+        <ActivatorContent>
+            <span class="sql-chip">
+                <span class="sqlite-selected-connection">@_connection?.Name</span>
+                @if (_connection?.IsProd == true)
+                {
+                    <span class="sql-prod sqlite-prod-chip">prod</span>
+                }
+                <span class="sql-chip-caret">▾</span>
+            </span>
+        </ActivatorContent>
+        <ChildContent>
+            @foreach (var connection in _connections)
+            {
+                <MudMenuItem Class="sqlite-connection-option" OnClick="@(() => SelectAsync(connection))">@connection.Name</MudMenuItem>
+            }
+        </ChildContent>
+    </MudMenu>
+
+    @if (_connection is { } selected && selected.Summary.TryGetValue("File", out var file))
+    {
+        <span class="sql-chip sql-chip-static sqlite-file-chip">
+            <span class="sql-mono">@file</span>
+            <span class="sql-chip-label">@selected.Summary.GetValueOrDefault("Mode")</span>
+        </span>
+    }
+
+    @if (Loading)
+    {
+        <MudProgressCircular Class="page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+}
+
+@code {
+    public const string Kind = "sqlite";
+
+    /// <summary>Raised once after the initial selection resolves, then on every change. Never raised when there are no connections.</summary>
+    [Parameter] public EventCallback<ConnectionInfo> SelectionChanged { get; set; }
+
+    [Parameter] public bool Loading { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private ConnectionInfo? _connection;
+    private bool _loaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync(Kind);
+        _loaded = true;
+        if (_connections.Count == 0)
+        {
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        ConnectionInfo? fromQuery = null;
+        if (query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id))
+        {
+            fromQuery = _connections.FirstOrDefault(c => c.Id == id);
+        }
+
+        await SelectAsync(fromQuery ?? _connections[0]);
+    }
+
+    private async Task SelectAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        var uri = Navigation.GetUriWithQueryParameter("connectionId", connection.Id.ToString());
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await SelectionChanged.InvokeAsync(connection);
+    }
+}

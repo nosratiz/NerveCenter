@@ -1,0 +1,158 @@
+/* SQLite plugin styles (mockup "SbConsole SQLite.dc.html"). Colors derive only from MudBlazor's
+   --mud-palette-* tokens (CLAUDE.md theming rule) so light and dark both stay correct. Every class
+   is prefixed sql- to stay out of other plugins' way. */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+.sql-page {
+    --sql-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sql-line: var(--mud-palette-lines-default);
+    --sql-faint: color-mix(in srgb, var(--mud-palette-text-primary) 7%, transparent);
+    --sql-panel: color-mix(in srgb, var(--mud-palette-background) 55%, var(--mud-palette-surface));
+    --sql-muted: var(--mud-palette-text-secondary);
+    --sql-accent: var(--mud-palette-primary);
+    --sql-warn: var(--mud-palette-warning);
+    --sql-danger: var(--mud-palette-error);
+    --sql-ok: var(--mud-palette-success);
+    background: var(--sql-panel);
+    border: 1px solid var(--sql-line);
+    border-radius: 10px;
+    overflow: hidden;
+    color: var(--mud-palette-text-primary);
+    font-size: 14px;
+}
+
+.sql-mono { font-family: var(--sql-mono); }
+.sql-muted { color: var(--sql-muted); }
+.sql-warn { color: var(--sql-warn); }
+.sql-danger { color: var(--sql-danger); }
+.sql-ok { color: var(--sql-ok); }
+.sql-spacer { flex: 1 1 auto; }
+.sql-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- header ---- */
+.sql-header {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px;
+    min-height: 56px; padding: 8px 20px; border-bottom: 1px solid var(--sql-line);
+}
+.sql-title { font-size: 18px; font-weight: 500; margin-right: 4px; }
+.sql-meta { font-family: var(--sql-mono); font-size: 13px; color: var(--sql-muted); overflow-wrap: anywhere; }
+.sql-actions { display: flex; align-items: center; gap: 12px; }
+.sql-chip {
+    display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px;
+    border: 1px solid var(--sql-line); border-radius: 6px; background: var(--mud-palette-background);
+    font-family: var(--sql-mono); font-size: 14px; cursor: pointer; user-select: none;
+}
+.sql-chip:hover { border-color: color-mix(in srgb, var(--sql-accent) 60%, transparent); }
+.sql-chip-static { cursor: default; }
+.sql-chip-static:hover { border-color: var(--sql-line); }
+.sql-chip-label { font-size: 12px; color: var(--sql-muted); }
+.sql-chip-caret { font-size: 10px; color: var(--sql-muted); }
+.sql-prod {
+    display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px;
+    font-family: "Inter", system-ui, sans-serif; font-size: 12px;
+    color: var(--sql-warn); background: color-mix(in srgb, var(--sql-warn) 16%, transparent);
+}
+
+/* ---- buttons & links ---- */
+.sql-btn {
+    display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 12px;
+    border-radius: 6px; border: 1px solid var(--sql-line); background: transparent;
+    color: var(--mud-palette-text-primary); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.sql-btn:hover { background: var(--sql-faint); }
+.sql-btn:disabled { opacity: .45; cursor: not-allowed; }
+.sql-link { border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--sql-accent); cursor: pointer; }
+.sql-link:hover { text-decoration: underline; }
+
+/* ---- tiles ---- */
+.sql-tiles { display: grid; gap: 12px; padding: 16px 20px 0; }
+.ov-tiles { grid-template-columns: 2fr 1fr 1fr; }
+.sql-tile { background: var(--mud-palette-surface); border-radius: 8px; padding: 12px 16px; min-width: 0; }
+.sql-tile-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sql-overline { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--sql-muted); }
+.sql-tile-aside { font-family: var(--sql-mono); font-size: 12px; color: var(--sql-muted); }
+.sql-tile-value { font-size: 26px; font-weight: 500; margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
+.sql-tile-value small { font-size: 13px; font-weight: 400; margin-left: 6px; }
+.sql-tile-caption { font-size: 12px; color: var(--sql-muted); }
+
+/* ---- bars: used part (span) then free/remaining part (i) ---- */
+.sql-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sql-faint); margin: 6px 0; }
+.sql-bar > span { background: var(--sql-accent); }
+.sql-bar > i { background: color-mix(in srgb, var(--sql-warn) 45%, transparent); }
+.sql-bar-thin { height: 4px; margin: 0; flex: 1 1 auto; min-width: 40px; }
+
+/* ---- body, strips, banners, cards ---- */
+.sql-body { padding: 16px 20px 20px; display: grid; gap: 12px; }
+.sql-strip {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px;
+    border-radius: 8px; background: var(--mud-palette-surface); border-left: 3px solid var(--sql-line);
+}
+.sql-strip-ok { border-left-color: var(--sql-ok); }
+.sql-strip-danger { border-left-color: var(--sql-danger); }
+.sql-banner { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; }
+.sql-banner-danger { background: color-mix(in srgb, var(--sql-danger) 12%, transparent); }
+.sql-error-list {
+    margin: 0; padding: 10px 14px; border-radius: 8px; font-family: var(--sql-mono); font-size: 12px;
+    white-space: pre-wrap; background: color-mix(in srgb, var(--sql-danger) 8%, transparent);
+}
+.sql-cards { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.sql-card { background: var(--mud-palette-surface); border-radius: 8px; padding: 12px 16px; min-width: 0; }
+.sql-card-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.sql-card-title { font-weight: 500; }
+.sql-card-sub { font-family: var(--sql-mono); font-size: 12px; color: var(--sql-muted); }
+.sql-size-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; font-size: 13px; }
+.sql-size-name { width: 30%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sql-size-bytes, .sql-size-rows { width: 90px; flex: none; }
+.sql-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+.sql-kv dt { font-family: var(--sql-mono); color: var(--sql-muted); }
+.sql-kv dd { margin: 0; }
+.sql-footnote { font-size: 12px; color: var(--sql-muted); margin-top: 8px; }
+
+/* ---- tables browser ---- */
+.sql-split { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; min-height: 480px; }
+.sql-list { border-right: 1px solid var(--sql-line); padding: 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sql-filter {
+    height: 32px; padding: 0 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--sql-line);
+    background: var(--mud-palette-background); color: var(--mud-palette-text-primary); font: inherit; font-size: 13px;
+}
+.sql-list-group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--sql-muted); margin: 10px 4px 4px; }
+.sql-list-row {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px;
+    background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.sql-list-row:hover { background: var(--sql-faint); }
+.sql-list-row.is-selected { background: color-mix(in srgb, var(--sql-accent) 14%, transparent); }
+.sql-list-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sql-detail { padding: 16px 20px; min-width: 0; }
+.sql-detail-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sql-detail-title { font-size: 18px; }
+.sql-detail-meta { font-size: 13px; color: var(--sql-muted); margin: 4px 0 12px; }
+.sql-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--sql-line); margin-bottom: 12px; overflow-x: auto; }
+.sql-tab {
+    border: 0; border-bottom: 2px solid transparent; background: none; color: var(--sql-muted);
+    font: inherit; font-size: 13px; padding: 8px 10px; cursor: pointer; white-space: nowrap;
+}
+.sql-tab.is-active { color: var(--mud-palette-text-primary); border-bottom-color: var(--sql-accent); }
+.sql-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sql-table th { text-align: left; font-weight: 500; color: var(--sql-muted); padding: 6px 8px; border-bottom: 1px solid var(--sql-line); }
+.sql-table td { padding: 6px 8px; border-bottom: 1px solid var(--sql-faint); vertical-align: top; }
+.sql-grid-wrap { overflow-x: auto; }
+.sql-grid td { white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.sql-cell-null, .sql-cell-blob { color: var(--sql-muted); font-style: italic; }
+.sql-hint { display: block; font-size: 11px; }
+.sql-badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-right: 4px; }
+.sql-badge-pk { color: var(--sql-accent); background: color-mix(in srgb, var(--sql-accent) 14%, transparent); }
+.sql-badge-fk { color: var(--sql-warn); background: color-mix(in srgb, var(--sql-warn) 14%, transparent); }
+.sql-ddl {
+    margin: 0; padding: 12px; border-radius: 8px; background: var(--mud-palette-surface);
+    font-family: var(--sql-mono); font-size: 12px; white-space: pre-wrap; overflow-x: auto;
+}
+.sql-caption { font-size: 12px; color: var(--sql-muted); margin-bottom: 8px; overflow-wrap: anywhere; }
+.sql-empty { padding: 48px 20px; text-align: center; display: grid; gap: 8px; }
+.sql-empty-title { font-size: 16px; font-weight: 500; }
+
+@media (max-width: 900px) {
+    .ov-tiles, .sql-cards, .sql-split { grid-template-columns: 1fr; }
+    .sql-list { border-right: 0; border-bottom: 1px solid var(--sql-line); }
+    .sql-header, .sql-tiles, .sql-body, .sql-detail { padding-left: 16px; padding-right: 16px; }
+}

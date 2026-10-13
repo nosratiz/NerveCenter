@@ -1,0 +1,34 @@
+@* One stat tile (mockup 1a's File / Journal / Page cache row). *@
+<div class="sql-tile @Class">
+    <div class="sql-tile-head">
+        <span class="sql-overline @LabelClass">@Label</span>
+        @if (Aside is not null)
+        {
+            <span class="sql-tile-aside">@Aside</span>
+        }
+    </div>
+    <div class="sql-tile-value @ValueClass">@Value</div>
+    @ChildContent
+    @if (Caption is not null)
+    {
+        <div class="sql-tile-caption">@Caption</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+
+    [Parameter] public string? LabelClass { get; set; }
+
+    [Parameter] public RenderFragment? Value { get; set; }
+
+    [Parameter] public string? ValueClass { get; set; }
+
+    [Parameter] public string? Aside { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter] public RenderFragment? Caption { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+}
