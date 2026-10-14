@@ -29,7 +29,9 @@ public static partial class FriendlyPostgresError
         switch (ex)
         {
             case PostgresException pg:
-                return DescribePg(pg, sql);
+                return DescribePg(pg, sql, 0);
+            case PgQueryException wrapped:
+                return DescribePg(wrapped.Inner, sql, wrapped.StatementStart);
             case PgSqlRefusedException refused:
                 return Plain(FriendlyError.Truncate(refused.Message));
             case FormatException format:
@@ -56,14 +58,16 @@ public static partial class FriendlyPostgresError
 
     private static PgErrorInfo Failure(string message) => new(message, null, null, null, null, null, true);
 
-    private static PgErrorInfo DescribePg(PostgresException pg, string? sql)
+    private static PgErrorInfo DescribePg(PostgresException pg, string? sql, int offset)
     {
         Conditions.TryGetValue(pg.SqlState, out var condition);
         int? line = null;
         int? column = null;
-        if (sql is not null && pg.Position > 0)
+        // Position is 1-based and relative to the statement the server parsed; offset shifts it into the full text.
+        var absolute = pg.Position + offset;
+        if (sql is not null && pg.Position > 0 && absolute >= 1)
         {
-            (var l, var c) = PgSqlLexer.LineAndColumn(sql, pg.Position);
+            (var l, var c) = PgSqlLexer.LineAndColumn(sql, absolute);
             line = l;
             column = c;
         }

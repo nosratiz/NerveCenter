@@ -135,4 +135,35 @@ public class FriendlyPostgresErrorTests
     [Fact]
     public void Other_exceptions_use_FriendlyError() =>
         FriendlyPostgresError.From(new InvalidOperationException("boom")).Should().Be("boom");
+
+    [Fact]
+    public void Wrapped_script_error_maps_the_position_into_the_full_script()
+    {
+        const string script = "SELECT 1;\nSELECT 2;\nSELECT   nope FROM t";
+        var start = script.IndexOf("SELECT   nope", StringComparison.Ordinal);
+        var inner = Pg("42703", "column \"nope\" does not exist", position: 10);
+
+        var info = FriendlyPostgresError.Describe(new PgQueryException(inner, start), script);
+
+        info.Line.Should().Be(3);
+        info.Column.Should().Be(10);
+        info.SqlState.Should().Be("42703");
+        info.Message.Should().Be("Column `nope` doesn't exist.");
+    }
+
+    [Fact]
+    public void Wrapped_error_from_unwraps_without_a_script()
+    {
+        var wrapped = new PgQueryException(Pg("42P01", "relation \"foo\" does not exist", position: 5), 20);
+
+        FriendlyPostgresError.From(wrapped).Should().Be("Table `foo` doesn't exist.");
+        FriendlyPostgresError.Describe(wrapped).Line.Should().BeNull();
+    }
+
+    [Fact]
+    public void Wrapped_error_before_the_start_of_the_text_has_no_line()
+    {
+        var info = FriendlyPostgresError.Describe(new PgQueryException(Pg("42601", "syntax error", position: 3), -22), "SELECT");
+        info.Line.Should().BeNull();
+    }
 }
