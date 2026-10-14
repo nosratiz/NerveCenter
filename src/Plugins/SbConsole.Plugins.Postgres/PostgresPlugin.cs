@@ -76,4 +76,78 @@ public sealed class PostgresPlugin : IPlugin
 
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
+    public Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PluginDashboardMetric>>([new PluginDashboardMetric("Servers", 1)]);
+
+    public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
+        Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default) =>
+        _operations is null ? [] : ComputeProblems(await _operations.GetOverviewAsync(connectionString, ct));
+
+    /// <summary>The blocked-session count on Activity; every other page, and any failure, shows no badge.</summary>
+    public async Task<int?> GetNavBadgeAsync(string navItemHref, string connectionString, CancellationToken ct = default)
+    {
+        if (_operations is null || navItemHref != ActivityHref)
+        {
+            return null;
+        }
+
+        try
+        {
+            var blocked = await _operations.GetBlockedCountAsync(connectionString, ct);
+            return blocked > 0 ? blocked : null;
+        }
+        catch (Exception)
+        {
+            // No logger on the plugin instance; a badge is decoration, so a broken probe just hides it.
+            return null;
+        }
+    }
+
+    internal static IReadOnlyList<PluginDashboardProblem> ComputeProblems(PgOverview o)
+    {
+        var problems = new List<PluginDashboardProblem>();
+        var a = o.Attention;
+
+        if (a.LongestBlockedFor is { } blockedFor && blockedFor > TimeSpan.FromMinutes(1))
+        {
+            var detail = a.TopBlockerPid is { } pid
+                ? a.TopBlockerRelation is { } rel ? $"blocker pid {pid} on {rel}" : $"blocker pid {pid}"
+                : "blocker unknown";
+            problems.Add(new PluginDashboardProblem("Error",
+                a.BlockedCount == 1 ? "1 session blocked" : $"{a.BlockedCount} sessions blocked", detail, ActivityHref));
+        }
+
+        if (a.IdleInTransaction.Count > 0)
+        {
+            var first = a.IdleInTransaction[0];
+            var detail = $"pid {first.Pid} for {PgFormat.Duration(first.Age)}";
+            if (a.IdleInTransaction.Count > 1)
+            {
+                detail += $" and {a.IdleInTransaction.Count - 1} more";
+            }
+
+            problems.Add(new PluginDashboardProblem("Warning", "Idle in transaction", detail, ActivityHref));
+        }
+
+        if (o.MaxConnections > 0 && (long)o.Connections * 100 / o.MaxConnections >= 90)
+        {
+            var pct = (long)o.Connections * 100 / o.MaxConnections;
+            problems.Add(new PluginDashboardProblem("Warning", $"Connections at {pct}%",
+                $"{o.Connections} / {o.MaxConnections} max_connections", OverviewHref));
+        }
+
+        if (o.Replication.MaxLag is { } lag && lag > TimeSpan.FromSeconds(30))
+        {
+            problems.Add(new PluginDashboardProblem("Warning", "Replication lag",
+                $"{PgFormat.Duration(lag)} on {o.Replication.LaggiestName ?? "replica"}", OverviewHref));
+        }
+
+        if (o.OldestXidAge > 1_500_000_000)
+        {
+            problems.Add(new PluginDashboardProblem("Error", "Transaction ID wraparound",
+                $"oldest xid age {PgFormat.Count(o.OldestXidAge)}", MaintenanceHref));
+        }
+
+        return problems;
+    }
 }
