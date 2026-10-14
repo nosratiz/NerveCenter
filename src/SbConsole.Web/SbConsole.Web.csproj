@@ -3,13 +3,13 @@
   <ItemGroup>
     <ProjectReference Include="..\SbConsole.Core\SbConsole.Core.csproj" />
     <ProjectReference Include="..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Aws\SbConsole.Plugins.Aws.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Redis\SbConsole.Plugins.Redis.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Postgres\SbConsole.Plugins.Postgres.csproj" />
-    <ProjectReference Include="..\Plugins\SbConsole.Plugins.Sqlite\SbConsole.Plugins.Sqlite.csproj" />
+    <ProjectReference Include="..\Plugins\Messaging\SbConsole.Plugins.ServiceBus\SbConsole.Plugins.ServiceBus.csproj" />
+    <ProjectReference Include="..\Plugins\Messaging\SbConsole.Plugins.Kafka\SbConsole.Plugins.Kafka.csproj" />
+    <ProjectReference Include="..\Plugins\Messaging\SbConsole.Plugins.Aws\SbConsole.Plugins.Aws.csproj" />
+    <ProjectReference Include="..\Plugins\Messaging\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
+    <ProjectReference Include="..\Plugins\Databases\SbConsole.Plugins.Redis\SbConsole.Plugins.Redis.csproj" />
+    <ProjectReference Include="..\Plugins\Databases\SbConsole.Plugins.Postgres\SbConsole.Plugins.Postgres.csproj" />
+    <ProjectReference Include="..\Plugins\Databases\SbConsole.Plugins.Sqlite\SbConsole.Plugins.Sqlite.csproj" />
   </ItemGroup>
 
   <ItemGroup>

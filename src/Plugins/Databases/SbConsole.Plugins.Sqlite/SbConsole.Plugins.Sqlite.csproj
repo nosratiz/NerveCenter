@@ -1,15 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="SbConsole.Plugins.Postgres.Tests" />
+    <!-- SqliteOperations' helpers and parsers are exercised directly by unit tests against
+         temp-file databases (design spec §9). -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.Sqlite.Tests" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <!-- Same version Core gets transitively through Microsoft.EntityFrameworkCore.Sqlite, so the
+         process loads one e_sqlite3 native build. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageReference Include="MudBlazor" Version="9.9.0" />
   </ItemGroup>
 

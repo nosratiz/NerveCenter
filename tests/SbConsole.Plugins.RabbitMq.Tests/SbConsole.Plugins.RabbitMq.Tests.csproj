@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
+    <ProjectReference Include="..\..\src\Plugins\Messaging\SbConsole.Plugins.RabbitMq\SbConsole.Plugins.RabbitMq.csproj" />
   </ItemGroup>
 
 </Project>

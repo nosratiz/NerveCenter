@@ -1,18 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\SbConsole.Sdk\SbConsole.Sdk.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Internal seams (connection factory, parsers) are exercised directly by unit tests,
-         since there is no live Redis server in the unit-test run. -->
-    <InternalsVisibleTo Include="SbConsole.Plugins.Redis.Tests" />
+    <!-- Internal seams (probe/handler factories, mapping helpers) are exercised directly by unit
+         tests, since there is no broker in the unit-test run - same reason Aws.Tests needs this. -->
+    <InternalsVisibleTo Include="SbConsole.Plugins.RabbitMq.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="9.9.0" />
-    <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
   </ItemGroup>
 
   <ItemGroup>

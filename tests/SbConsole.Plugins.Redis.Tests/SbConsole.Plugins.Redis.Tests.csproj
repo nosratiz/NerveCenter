@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.Redis\SbConsole.Plugins.Redis.csproj" />
+    <ProjectReference Include="..\..\src\Plugins\Databases\SbConsole.Plugins.Redis\SbConsole.Plugins.Redis.csproj" />
   </ItemGroup>
 
 </Project>

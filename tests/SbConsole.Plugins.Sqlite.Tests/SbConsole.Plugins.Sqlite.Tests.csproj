@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Plugins\SbConsole.Plugins.Sqlite\SbConsole.Plugins.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\Plugins\Databases\SbConsole.Plugins.Sqlite\SbConsole.Plugins.Sqlite.csproj" />
   </ItemGroup>
 
 </Project>

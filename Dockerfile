@@ -9,13 +9,13 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY src/SbConsole.Sdk/SbConsole.Sdk.csproj                             src/SbConsole.Sdk/
 COPY src/SbConsole.Core/SbConsole.Core.csproj                           src/SbConsole.Core/
-COPY src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj src/Plugins/SbConsole.Plugins.ServiceBus/
-COPY src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj           src/Plugins/SbConsole.Plugins.Kafka/
-COPY src/Plugins/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj               src/Plugins/SbConsole.Plugins.Aws/
-COPY src/Plugins/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq.csproj     src/Plugins/SbConsole.Plugins.RabbitMq/
-COPY src/Plugins/SbConsole.Plugins.Redis/SbConsole.Plugins.Redis.csproj           src/Plugins/SbConsole.Plugins.Redis/
-COPY src/Plugins/SbConsole.Plugins.Sqlite/SbConsole.Plugins.Sqlite.csproj         src/Plugins/SbConsole.Plugins.Sqlite/
-COPY src/Plugins/SbConsole.Plugins.Postgres/SbConsole.Plugins.Postgres.csproj     src/Plugins/SbConsole.Plugins.Postgres/
+COPY src/Plugins/Messaging/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj src/Plugins/Messaging/SbConsole.Plugins.ServiceBus/
+COPY src/Plugins/Messaging/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj           src/Plugins/Messaging/SbConsole.Plugins.Kafka/
+COPY src/Plugins/Messaging/SbConsole.Plugins.Aws/SbConsole.Plugins.Aws.csproj               src/Plugins/Messaging/SbConsole.Plugins.Aws/
+COPY src/Plugins/Messaging/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq.csproj     src/Plugins/Messaging/SbConsole.Plugins.RabbitMq/
+COPY src/Plugins/Databases/SbConsole.Plugins.Redis/SbConsole.Plugins.Redis.csproj           src/Plugins/Databases/SbConsole.Plugins.Redis/
+COPY src/Plugins/Databases/SbConsole.Plugins.Sqlite/SbConsole.Plugins.Sqlite.csproj         src/Plugins/Databases/SbConsole.Plugins.Sqlite/
+COPY src/Plugins/Databases/SbConsole.Plugins.Postgres/SbConsole.Plugins.Postgres.csproj     src/Plugins/Databases/SbConsole.Plugins.Postgres/
 COPY src/SbConsole.Web/SbConsole.Web.csproj                             src/SbConsole.Web/
 RUN dotnet restore src/SbConsole.Web/SbConsole.Web.csproj
 

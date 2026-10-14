@@ -1836,3 +1836,18 @@ plugin only. This section records the decisions and the places review changed th
   pinned by the Postgres `DemoConnectionsFileTests`; the SQLite test now only checks `kind ==
   "sqlite"` entries. For `dotnet run` the README says to copy the file and change Host/Port to
   `localhost`/`5433`.
+
+## 19. Plugin folders grouped by purpose (2026-10-14)
+
+With seven plugins, the flat `src/Plugins/` listing stopped saying what each one is for. Plugin
+projects now sit one level deeper, in a folder per purpose:
+
+- `src/Plugins/Messaging/` — message brokers and queues: ServiceBus, Kafka, Aws (SQS/SNS), RabbitMq.
+- `src/Plugins/Databases/` — data stores: Postgres, Sqlite, Redis.
+
+Only paths changed: project names, assembly names, namespaces, plugin ids and `/p/{pluginId}`
+routes are untouched, and the Sdk-only dependency rule (§3) still holds. `SbConsole.slnx` mirrors
+the grouping as solution folders; the `Dockerfile` restore layer, `SbConsole.Web.csproj` and the
+plugin test projects' `ProjectReference`s point at the new paths. Test projects stay flat under
+`tests/`. A new plugin goes in the folder matching its purpose; add a new category folder only
+when a plugin fits neither.
