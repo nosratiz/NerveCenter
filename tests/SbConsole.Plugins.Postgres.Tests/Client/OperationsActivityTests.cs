@@ -78,11 +78,22 @@ public sealed class OperationsActivityTests(PostgresFixture fx)
         {
             await ExecAsync(a, $"UPDATE {table} SET v = 'x' WHERE id = 1");
             var blockerPid = a.ProcessID;
-            var bPid = new TaskCompletionSource<int>();
+            var bPid = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
             waiter = Task.Run(async () =>
             {
-                await using var b = await OpenAsync(fx.AdminConnectionString());
-                bPid.SetResult(b.ProcessID);
+                NpgsqlConnection b;
+                try
+                {
+                    b = await OpenAsync(fx.AdminConnectionString());
+                }
+                catch (Exception e)
+                {
+                    bPid.TrySetException(e);
+                    throw;
+                }
+
+                await using var _ = b;
+                bPid.TrySetResult(b.ProcessID);
                 await using var txB = await b.BeginTransactionAsync();
                 try
                 {
@@ -96,7 +107,7 @@ public sealed class OperationsActivityTests(PostgresFixture fx)
                     try { await txB.RollbackAsync(); } catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { }
                 }
             });
-            var victim = await bPid.Task;
+            var victim = await bPid.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
             var v = await PollAsync(victim, x => x.BlockedBy.Count > 0 && x.WaitingOnRelation is not null);
 
@@ -111,6 +122,20 @@ public sealed class OperationsActivityTests(PostgresFixture fx)
             await txA.RollbackAsync();
             await ExecAsync(setup, $"DROP TABLE IF EXISTS {table}");
         }
+    }
+
+    [DockerFact]
+    public async Task An_idle_session_has_no_duration_and_a_client_address()
+    {
+        await using var conn = await OpenAsync(fx.AdminConnectionString());
+        await ExecAsync(conn, "SELECT 1");
+
+        var b = await PollAsync(conn.ProcessID, x => x.State == "idle");
+
+        b.Should().NotBeNull();
+        b!.State.Should().Be("idle");
+        b.Duration.Should().BeNull();
+        b.Client.Should().NotBeNull();
     }
 
     [DockerFact]
@@ -155,17 +180,24 @@ public sealed class OperationsActivityTests(PostgresFixture fx)
         await ExecAsync(y, "SELECT 1");
 
         (await fx.Operations.TerminateBackendAsync(fx.Secret(PgAccessMode.ReadWrite), pid)).Should().BeTrue();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await fx.Operations.GetBackendAsync(fx.Secret(), pid) is not null && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
 
+        (await fx.Operations.GetBackendAsync(fx.Secret(), pid)).Should().BeNull();
         var act = () => ExecAsync(y, "SELECT 1");
-        var ex = await act.Should().ThrowAsync<Exception>();
-        (ex.Which is NpgsqlException || ex.Which is PostgresException { SqlState: "57P01" }).Should().BeTrue();
+        await act.Should().ThrowAsync<NpgsqlException>();
     }
 
     [DockerFact]
     public async Task Cancel_and_terminate_are_refused_on_a_read_only_connection()
     {
-        var cancel = () => fx.Operations.CancelBackendAsync(fx.Secret(), 1);
-        var terminate = () => fx.Operations.TerminateBackendAsync(fx.Secret(), 1);
+        // Unreachable port: the refusal must happen before any connection attempt.
+        var unreachable = new PostgresConnectionSettings("127.0.0.1", 1, "app", "postgres", "postgres", SslMode: "Disable").ToSecretString();
+        var cancel = () => fx.Operations.CancelBackendAsync(unreachable, 1);
+        var terminate = () => fx.Operations.TerminateBackendAsync(unreachable, 1);
 
         await cancel.Should().ThrowAsync<PgSqlRefusedException>().WithMessage("*read-only*");
         await terminate.Should().ThrowAsync<PgSqlRefusedException>().WithMessage("*read-only*");
