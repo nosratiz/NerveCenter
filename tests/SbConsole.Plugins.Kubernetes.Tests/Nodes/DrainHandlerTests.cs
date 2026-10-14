@@ -110,7 +110,16 @@ public class DrainHandlerTests
 
         var run = Handler().HandleAsync(Command(), _progress);
 
-        await WaitForAsync(() => EvictCalls() == 5);
+        // NSubstitute records a call before the Returns callback adds its pending entry, so wait on the entries themselves.
+        int Pending()
+        {
+            lock (pending)
+            {
+                return pending.Count;
+            }
+        }
+
+        await WaitForAsync(() => Pending() == 5);
         await Task.Delay(50);
         EvictCalls().Should().Be(5);
 
@@ -119,7 +128,7 @@ public class DrainHandlerTests
             pending["api-1"].SetResult(K8sEvictionOutcome.Evicted);
         }
 
-        await WaitForAsync(() => EvictCalls() == 6);
+        await WaitForAsync(() => Pending() == 6);
         lock (pending)
         {
             foreach (var tcs in pending.Values)
@@ -128,7 +137,7 @@ public class DrainHandlerTests
             }
         }
 
-        await WaitForAsync(() => EvictCalls() == 7);
+        await WaitForAsync(() => Pending() == 7);
         lock (pending)
         {
             pending["api-7"].TrySetResult(K8sEvictionOutcome.Evicted);
@@ -284,7 +293,13 @@ public class DrainHandlerTests
         using var cts = new CancellationTokenSource();
 
         var run = Handler().HandleAsync(Command(), _progress, cts.Token);
-        await WaitForAsync(() => EvictCalls() == 5);
+        await WaitForAsync(() =>
+        {
+            lock (pending)
+            {
+                return pending.Count == 5; // not EvictCalls(): the call is recorded before the callback adds its entry
+            }
+        });
         await cts.CancelAsync();
         lock (pending)
         {

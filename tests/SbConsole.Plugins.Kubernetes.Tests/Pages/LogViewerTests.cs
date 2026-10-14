@@ -329,6 +329,49 @@ public class LogViewerTests : K8sPageTestBase
     }
 
     [Fact]
+    public async Task A_line_from_a_superseded_stream_never_lands_in_the_new_buffer()
+    {
+        var releaseOld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var oldDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Operations.FollowLogsAsync(Secret, Ns, PodName, Arg.Any<K8sLogRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => IgnoresCancellation(releaseOld.Task, oldDone), _ => New());
+        var cut = StartFollowing();
+        Time.Advance(TimeSpan.FromMilliseconds(250));
+        cut.WaitForAssertion(() => cut.FindAll("pre.k8s-log .k8s-log-line").Select(l => l.TextContent).Should().Equal("old 0"));
+
+        // Reconfigure while following: the old stream is cancelled but (like a slow HTTP read) still yields one more line.
+        var tail = cut.FindComponents<MudSelect<int>>().Single(t => t.Instance.Class!.Contains("k8s-log-tail"));
+        await cut.InvokeAsync(() => tail.Instance.ValueChanged.InvokeAsync(100));
+        Time.Advance(TimeSpan.FromMilliseconds(250));
+        cut.WaitForAssertion(() => cut.FindAll("pre.k8s-log .k8s-log-line").Select(l => l.TextContent).Should().Equal("new 0"));
+        releaseOld.SetResult();
+        await oldDone.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Time.Advance(TimeSpan.FromMilliseconds(250));
+
+        cut.WaitForAssertion(() => cut.FindAll("pre.k8s-log .k8s-log-line").Select(l => l.TextContent).Should().Equal("new 0"));
+
+        static async IAsyncEnumerable<string> IgnoresCancellation(Task release, TaskCompletionSource done)
+        {
+            yield return "old 0";
+            await release;
+            try
+            {
+                yield return "stale";
+            }
+            finally
+            {
+                done.TrySetResult();
+            }
+        }
+
+        static async IAsyncEnumerable<string> New([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return "new 0";
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+    }
+
+    [Fact]
     public async Task Turning_follow_off_cancels_the_stream()
     {
         var stream = SetupFollow();

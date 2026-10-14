@@ -145,7 +145,7 @@
     private string ForceLabel(DrainPlan plan)
     {
         var names = plan.Pods.Where(p => p.Group == DrainGroup.BlockedByPdb).Select(p => p.Pod.Name).ToList();
-        return names.Count == 0 ? "Force past PDBs" : $"Force past PDBs (evicts {JoinAnd(names)})";
+        return names.Count == 0 ? "Force past PDBs" : $"Force past PDBs (deletes {JoinAnd(names)})";
     }
 
     private static string JoinAnd(IReadOnlyList<string> items) =>

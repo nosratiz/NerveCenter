@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Kubernetes.Pods;
 /// <summary>
 /// Follows a container's current log. Unlike the other queries this does not return a <see cref="PluginResult"/>: an
 /// unknown connection throws <see cref="InvalidOperationException"/>(<see cref="HandlerRunner.ConnectionNotFound"/>) and
-/// stream failures propagate (after being logged) — the log viewer shows them through <see cref="FriendlyKubernetesError"/>.
+/// stream failures propagate (logged unless the caller cancelled, when the torn-down stream's error is expected) — the log viewer shows them through <see cref="FriendlyKubernetesError"/>.
 /// </summary>
 public sealed class FollowPodLogsQueryHandler(
     IKubernetesOperations operations, IConnectionProvider connections, ILogger<FollowPodLogsQueryHandler> logger) : IScopedService
@@ -27,7 +27,7 @@ public sealed class FollowPodLogsQueryHandler(
             {
                 more = await lines.MoveNextAsync();
             }
-            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 logger.LogError(ex, "Following the log of {Namespace}/{Pod} container {Container} failed", ns, pod, request.Container);
                 throw;

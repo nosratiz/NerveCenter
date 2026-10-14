@@ -105,7 +105,7 @@ public class DrainDialogTests : K8sPageTestBase
     {
         var (cut, _) = await ShowAsync();
 
-        cut.Find(".k8s-drain-force").TextContent.Should().Contain("Force past PDBs (evicts ledger-1 and kafka-2)");
+        cut.Find(".k8s-drain-force").TextContent.Should().Contain("Force past PDBs (deletes ledger-1 and kafka-2)");
         cut.Find(".k8s-drain-emptydir").TextContent.Should().Contain("Delete emptyDir data");
         cut.Find(".k8s-drain-grace input").GetAttribute("value").Should().Be("30");
 

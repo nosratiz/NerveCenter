@@ -328,10 +328,10 @@
 
     private static string Plural(int n, string one, string many) => n == 1 ? $"{n} {one}" : $"{n} {many}";
 
-    private static string StuckText(StuckRollout s)
+    internal static string StuckText(StuckRollout s)
     {
         var text = $"Revision {s.NewRevision} has been progressing for {K8sFormat.Age(s.ProgressingFor)}; "
-                   + $"{s.CrashLoopingPods} of the new pods are crash-looping{(s.Reason is null ? "" : " on " + s.Reason)}.";
+                   + $"{s.CrashLoopingPods} of the new pods {(s.CrashLoopingPods == 1 ? "is" : "are")} crash-looping{(s.Reason is null ? "" : " on " + s.Reason)}.";
         if (s.ServingRevision is { } serving)
         {
             text += $" Revision {serving} is still serving {Plural(s.ServingPods, "pod", "pods")}.";

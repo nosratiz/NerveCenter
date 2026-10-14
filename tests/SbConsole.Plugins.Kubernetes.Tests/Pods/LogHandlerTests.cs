@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using FluentAssertions;
 using k8s.Autorest;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -153,6 +154,65 @@ public class LogHandlerTests
 
         await run.Should().ThrowAsync<OperationCanceledException>();
         observed.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Follow_does_not_log_an_error_when_the_caller_cancelled()
+    {
+        using var cts = new CancellationTokenSource();
+        _ops.FollowLogsAsync(Secret, Ns, PodName, Request, Arg.Any<CancellationToken>())
+            .Returns(_ => AbortedAfterCancel(cts));
+        var logger = new ListLogger<FollowPodLogsQueryHandler>();
+        var handler = new FollowPodLogsQueryHandler(_ops, _connections, logger);
+
+        var run = async () =>
+        {
+            await foreach (var _ in handler.StreamAsync(_id, Ns, PodName, Request, cts.Token))
+            {
+            }
+        };
+
+        await run.Should().ThrowAsync<IOException>();
+        logger.Levels.Should().NotContain(LogLevel.Error);
+
+        // Cancelling the caller tears the HTTP stream down, which surfaces as an IOException rather than a cancellation.
+        static async IAsyncEnumerable<string> AbortedAfterCancel(CancellationTokenSource cts)
+        {
+            yield return "x";
+            await Task.Yield();
+            await cts.CancelAsync();
+            throw new IOException("The response ended prematurely.");
+        }
+    }
+
+    [Fact]
+    public async Task Follow_logs_an_error_when_the_stream_fails_on_its_own()
+    {
+        _ops.FollowLogsAsync(Secret, Ns, PodName, Request, Arg.Any<CancellationToken>())
+            .Returns(ci => Lines(["x"], new IOException("reset"), ci.ArgAt<CancellationToken>(4)));
+        var logger = new ListLogger<FollowPodLogsQueryHandler>();
+
+        var run = async () =>
+        {
+            await foreach (var _ in new FollowPodLogsQueryHandler(_ops, _connections, logger).StreamAsync(_id, Ns, PodName, Request, CancellationToken.None))
+            {
+            }
+        };
+
+        await run.Should().ThrowAsync<IOException>();
+        logger.Levels.Should().Contain(LogLevel.Error);
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<LogLevel> Levels { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Levels.Add(logLevel);
     }
 
     [Fact]

@@ -298,7 +298,7 @@
     /// <summary>Cancels whatever is running (a load or the follow stream) and stops the repaint timer.</summary>
     private void StopRun()
     {
-        _generation++;
+        Interlocked.Increment(ref _generation);
         _repaint?.Dispose();
         _repaint = null;
         if (_run is not null)
@@ -392,6 +392,13 @@
             {
                 lock (_gate)
                 {
+                    // A superseded stream can still produce a line after its cancellation (a read already in flight);
+                    // checked under the lock that StartFollow clears the buffer with, so it never lands in the new one.
+                    if (generation != Volatile.Read(ref _generation))
+                    {
+                        return;
+                    }
+
                     _lines.Enqueue(line);
                     while (_lines.Count > request.TailLines)
                     {

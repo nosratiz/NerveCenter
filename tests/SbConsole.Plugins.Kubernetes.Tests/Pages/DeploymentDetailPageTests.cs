@@ -79,6 +79,14 @@ public class DeploymentDetailPageTests : K8sPageTestBase
         cut.Find(".k8s-rollback-stuck").TextContent.Trim().Should().Be("Rollback to 22");
     }
 
+    [Theory]
+    [InlineData(1, "1 of the new pods is crash-looping on OOM.")]
+    [InlineData(2, "2 of the new pods are crash-looping on OOM.")]
+    public void Stuck_text_agrees_with_the_crash_looping_count(int pods, string expected) =>
+        SbConsole.Plugins.Kubernetes.Pages.DeploymentDetail.StuckText(
+                new SbConsole.Plugins.Kubernetes.Deployments.StuckRollout(23, TimeSpan.FromMinutes(38), pods, "OOM", 22, 2))
+            .Should().Contain(expected);
+
     [Fact]
     public async Task Stuck_rollback_button_rolls_back_to_the_serving_revision()
     {
