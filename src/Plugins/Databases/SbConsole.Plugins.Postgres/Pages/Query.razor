@@ -1,4 +1,4 @@
-@* Mockup 1c (read-only run with history, and Write on PROD with a marked error line). *@
+@* Mockup 1c (read-only run with history, and Write on PROD with a marked error line). Completion (§16): postgres-completion.js asks GetCompletions (PgCompletionEngine) against the per-database schema. *@
 @page "/p/postgres/query"
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
@@ -10,6 +10,7 @@
 @inject ExplainQueryQueryHandler ExplainQuery
 @inject ExportQueryCsvCommandHandler ExportQuery
 @inject ListQueryHistoryQueryHandler ListHistory
+@inject GetCompletionSchemaQueryHandler CompletionSchemaQuery
 @inject IConfirmationService Confirmation
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Navigation
@@ -185,6 +186,10 @@
 @code {
     private const string ModulePath = "./_content/SbConsole.Plugins.Postgres/postgres.js";
     private const string QueryPath = "/p/postgres/query";
+    private const string CompletionModulePath = "./_content/SbConsole.Plugins.Postgres/postgres-completion.js";
+
+    // A committed write whose statements start with one of these may have changed the schema (§16).
+    private static readonly HashSet<string> DdlKeywords = new(["CREATE", "ALTER", "DROP", "COMMENT", "TRUNCATE"], StringComparer.Ordinal);
     private const int GridPreviewRows = 200;
     private static readonly int[] RowCaps = [100, 1_000, 10_000];
     private static readonly int[] Timeouts = [10, 30, 60, 300];
@@ -226,6 +231,12 @@
     private bool _disposed;
     private IJSObjectReference? _module;
     private DotNetObjectReference<Query>? _self;
+    private IJSObjectReference? _completionModule;
+    private DotNetObjectReference<Query>? _completionRef;
+    private bool _completionAttached;
+    private bool _attachingCompletion;
+    private PgCompletionSchema _schema = PgCompletionSchema.Empty;
+    private int _schemaGen;
 
     private bool WriteAllowed => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
     private int LineCount => _sql.Count(c => c == '\n') + 1;
@@ -244,7 +255,18 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_shortcutRegistered || _registering || _disposed || _connection is null)
+        if (_disposed || _connection is null)
+        {
+            return;
+        }
+
+        await RegisterShortcutAsync();
+        await AttachCompletionAsync();
+    }
+
+    private async Task RegisterShortcutAsync()
+    {
+        if (_shortcutRegistered || _registering || _disposed)
         {
             return;
         }
@@ -289,6 +311,89 @@
         }
     }
 
+    // ---- completion (§16) ------------------------------------------------------------------------------------
+
+    private async Task AttachCompletionAsync()
+    {
+        if (_completionAttached || _attachingCompletion || _disposed)
+        {
+            return;
+        }
+
+        _attachingCompletion = true;
+        DotNetObjectReference<Query>? reference = null;
+        try
+        {
+            var module = _completionModule ?? await JS.InvokeAsync<IJSObjectReference>("import", CompletionModulePath);
+            if (_disposed)
+            {
+                if (!ReferenceEquals(module, _completionModule))
+                {
+                    await module.DisposeAsync();
+                }
+
+                return;
+            }
+
+            _completionModule = module;
+            reference = DotNetObjectReference.Create(this);
+            await module.InvokeVoidAsync("attach", _editorWrap, reference);
+            if (_disposed)
+            {
+                return;
+            }
+
+            _completionRef = reference;
+            reference = null;
+            _completionAttached = true;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or OperationCanceledException)
+        {
+            // No completion popup (script failed to load, or the page is already gone): the editor still works.
+        }
+        finally
+        {
+            reference?.Dispose();
+            _attachingCompletion = false;
+        }
+    }
+
+    /// <summary>Called by postgres-completion.js for every (debounced) request; the engine is pure and fast.</summary>
+    [JSInvokable]
+    public PgCompletionResult GetCompletions(string text, int caret) => PgCompletionEngine.Complete(text ?? "", caret, _schema);
+
+    /// <summary>
+    /// Loads the selected database's completion schema. Never shows an error (the handler logs it):
+    /// completion just works without tables. keepCurrent keeps the old schema until the new one arrives (DDL refresh).
+    /// </summary>
+    private async Task LoadSchemaAsync(bool keepCurrent)
+    {
+        if (!keepCurrent)
+        {
+            _schema = PgCompletionSchema.Empty;
+        }
+
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_schemaGen;
+        var token = _cts.Token;
+        try
+        {
+            var result = await CompletionSchemaQuery.HandleAsync(connection.Id, DatabaseArg, token);
+            if (generation == _schemaGen && !_disposed && result is { IsSuccess: true, Value: { } schema })
+            {
+                _schema = schema;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Switched connection/database or left the page: a newer load (or nothing) takes over.
+        }
+    }
+
     [JSInvokable]
     public Task RunFromShortcut() => InvokeAsync(async () =>
     {
@@ -316,6 +421,8 @@
             _write = false;
             _toggleKey++;
             _history = [];
+            _schema = PgCompletionSchema.Empty;
+            _schemaGen++;
             ClearResults();
             _connection = connection;
             UpdateUrl();
@@ -352,6 +459,7 @@
 
         _database = database;
         UpdateUrl();
+        await LoadSchemaAsync(keepCurrent: false);
     }
 
     // Composed from tracked state, never from Navigation.Uri: it lags a NavigateTo on Blazor Server. sql is carried only while the editor still holds the prefill:
@@ -525,6 +633,12 @@
 
         _result = run.Result;
         _status = BuildStatus(run, write);
+        if (write && PgSqlLexer.Split(sql).Any(s => DdlKeywords.Contains(s.FirstKeyword)))
+        {
+            // Not awaited: Run is released now; the popup picks the new tables up when the load lands.
+            _ = LoadSchemaAsync(keepCurrent: true);
+        }
+
         await LoadHistoryAsync();
     }
 
@@ -914,6 +1028,24 @@
             }
         }
 
+        if (_completionModule is not null)
+        {
+            try
+            {
+                if (_completionAttached)
+                {
+                    await _completionModule.InvokeVoidAsync("detach", _editorWrap);
+                }
+
+                await _completionModule.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException)
+            {
+                // The circuit is already gone; nothing to release.
+            }
+        }
+
         _self?.Dispose();
+        _completionRef?.Dispose();
     }
 }
