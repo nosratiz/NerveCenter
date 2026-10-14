@@ -74,6 +74,9 @@ else
 
     [Parameter] public bool Loading { get; set; }
 
+    /// <summary>True (default): the picker keeps ?connectionId= in sync itself. False: the host page owns the URL.</summary>
+    [Parameter] public bool ManageUrl { get; set; } = true;
+
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private ConnectionInfo? _connection;
     private HashSet<Guid> _unreachable = [];
@@ -131,10 +134,13 @@ else
     private async Task SelectAsync(ConnectionInfo connection)
     {
         _connection = connection;
-        var uri = Navigation.GetUriWithQueryParameter("connectionId", connection.Id.ToString());
-        if (uri != Navigation.Uri)
+        if (ManageUrl)
         {
-            Navigation.NavigateTo(uri, replace: true);
+            var uri = Navigation.GetUriWithQueryParameter("connectionId", connection.Id.ToString());
+            if (uri != Navigation.Uri)
+            {
+                Navigation.NavigateTo(uri, replace: true);
+            }
         }
 
         await SelectionChanged.InvokeAsync(connection);

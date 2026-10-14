@@ -75,6 +75,26 @@ public class BrowsePageTests : PgPageTestBase
     private static void SelectTab(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut, string text) =>
         cut.FindAll(".mud-tab").First(t => t.TextContent.Contains(text)).Click();
 
+    // Lets continuations released by a TaskCompletionSource run through the renderer's dispatcher before asserting.
+    private static async Task FlushAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            await cut.InvokeAsync(() => Task.CompletedTask);
+            await Task.Yield();
+        }
+    }
+
+    private void Pick(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut, string cssClass, string text)
+    {
+        cut.Find(cssClass).MouseDown();
+        cut.WaitForElement(".mud-popover-open .mud-list-item");
+        cut.FindAll(".mud-popover-open .mud-list-item").First(i => i.TextContent.Trim() == text).Click();
+    }
+
+    private static void OpenGroup(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut, string title) =>
+        cut.FindAll(".pg-tree-group").First(g => g.TextContent.Contains(title)).Click();
+
     private PgRowsRequest LastRequest() =>
         Operations.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IPostgresOperations.PreviewRowsAsync))
             .Select(c => (PgRowsRequest)c.GetArguments()[2]!).Last();
@@ -117,7 +137,9 @@ public class BrowsePageTests : PgPageTestBase
         cut.WaitForElement(".pg-tree-item");
 
         cut.Find(".pg-tree-filter input").Input("ORD");
+        Time.Advance(TimeSpan.FromMilliseconds(250)); // the filter is debounced on the injected TimeProvider
 
+        cut.WaitForAssertion(() => cut.FindAll(".pg-tree-schema").Should().HaveCount(1));
         cut.FindAll(".pg-tree-item").Select(e => e.TextContent).Should().Satisfy(
             a => a.Contains("orders"), b => b.Contains("order_items"), c => c.Contains("v_order_totals"));
         cut.Find(".pg-tree-schema").TextContent.Should().Contain("3 of 5");
@@ -276,6 +298,7 @@ public class BrowsePageTests : PgPageTestBase
         cut.Find(".pg-index-summary").TextContent.Should().Contain("pg_stat_user_indexes").And.Contain("stats reset 41 days ago").And.Contain("1 unused").And.Contain("6 GB");
         var rows = cut.FindAll(".pg-index-row");
         rows.Should().HaveCount(4);
+        cut.FindAll("tr tr").Should().BeEmpty("MudTable already wraps the row template in a <tr>");
         rows[0].TextContent.Should().Contain("primary").And.Contain("unique");
         rows[1].TextContent.Should().Contain("unused 41d");
         rows[2].TextContent.Should().Contain("partial");
@@ -333,9 +356,7 @@ public class BrowsePageTests : PgPageTestBase
 
         var href = cut.Find(".pg-open-in-query").GetAttribute("href")!;
 
-        href.Should().StartWith("/p/postgres/query?connectionId=" + ConnectionId);
-        href.Should().Contain("db=app");
-        href.Should().Contain("sql=" + Uri.EscapeDataString("SELECT * FROM \"public\".\"orders\" LIMIT 100"));
+        href.Should().Be($"/p/postgres/query?connectionId={ConnectionId}&db=app&sql=" + Uri.EscapeDataString("SELECT * FROM \"public\".\"orders\" LIMIT 100"));
     }
 
     [Fact]
@@ -379,7 +400,7 @@ public class BrowsePageTests : PgPageTestBase
     }
 
     [Fact]
-    public void A_slow_older_detail_load_cannot_overwrite_a_newer_selection()
+    public async Task A_slow_older_detail_load_cannot_overwrite_a_newer_selection()
     {
         var slow = new TaskCompletionSource<PgObjectDetail?>();
         Operations.GetObjectDetailAsync(Secret, "app", Customers, Arg.Any<CancellationToken>()).Returns(_ => slow.Task);
@@ -390,8 +411,122 @@ public class BrowsePageTests : PgPageTestBase
         cut.FindAll(".pg-tree-item").First(e => e.TextContent.Trim().StartsWith("orders")).Click();
         cut.WaitForAssertion(() => cut.Find(".pg-object-title").TextContent.Should().Be("public.orders"));
         slow.SetResult(OrdersDetail() with { Oid = Customers, Name = "customers" });
-        Thread.Sleep(100);
+        await FlushAsync(cut);
 
         cut.Find(".pg-object-title").TextContent.Should().Be("public.orders");
+    }
+
+    [Fact]
+    public void Changing_database_clears_the_selection_and_reloads_the_tree_for_the_new_database()
+    {
+        Operations.ListSchemaAsync(Secret, "analytics", Arg.Any<CancellationToken>())
+            .Returns(new PgSchemaTree("analytics", [new PgSchemaNode("public", [Table(900, "events", 5)], [], [], [])]));
+        var cut = RenderOrders();
+
+        Pick(cut, ".pg-database-picker", "analytics");
+
+        cut.WaitForAssertion(() => cut.FindAll(".pg-tree-item").Should().ContainSingle().Which.TextContent.Should().Contain("events"));
+        cut.FindAll(".pg-object-title").Should().BeEmpty();
+        cut.Markup.Should().Contain("Select a table, view or function");
+        Operations.Received().ListSchemaAsync(Secret, "analytics", Arg.Any<CancellationToken>());
+        Nav.Uri.Should().Contain("db=analytics").And.NotContain("oid=");
+    }
+
+    [Fact]
+    public void An_oid_from_another_database_is_dropped_when_the_resolved_database_differs_from_the_url()
+    {
+        var cut = RenderBrowse($"&db=nope&oid={Orders}");
+
+        cut.WaitForElement(".pg-tree-item");
+        cut.FindAll(".pg-object-title").Should().BeEmpty();
+        Operations.DidNotReceive().GetObjectDetailAsync(Secret, Arg.Any<string>(), Orders, Arg.Any<CancellationToken>());
+        Nav.Uri.Should().NotContain("oid=");
+    }
+
+    [Fact]
+    public void Tab_indexes_in_the_url_restores_the_indexes_tab()
+    {
+        var cut = RenderOrders("&tab=indexes");
+
+        cut.WaitForElement(".pg-index-summary");
+        cut.FindAll(".pg-data-grid").Should().BeEmpty();
+    }
+
+    private void ArrangeFunction()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", 60, Arg.Any<CancellationToken>()).Returns(new PgObjectDetail(
+            60, "public", "fn_total", PgObjectKind.Function, null, 0, 0, "app_rw", [], [], [], null));
+        Operations.GetDdlAsync(Secret, "app", 60, Arg.Any<CancellationToken>()).Returns("CREATE FUNCTION public.fn_total() ...");
+    }
+
+    [Fact]
+    public void Selecting_a_function_switches_to_ddl_and_the_next_table_restores_the_previous_tab()
+    {
+        ArrangeFunction();
+        var cut = RenderOrders();
+        cut.WaitForElement(".pg-data-grid");
+
+        OpenGroup(cut, "Functions");
+        cut.FindAll(".pg-tree-item").First(e => e.TextContent.Contains("fn_total")).Click();
+        cut.WaitForElement("pre.pg-ddl").TextContent.Should().Contain("CREATE FUNCTION");
+        Nav.Uri.Should().Contain("tab=ddl");
+
+        cut.FindAll(".pg-tree-item").First(e => e.TextContent.Trim().StartsWith("orders")).Click();
+        cut.WaitForElement(".pg-data-grid");
+        cut.FindAll("pre.pg-ddl").Should().BeEmpty();
+        Nav.Uri.Should().NotContain("tab=");
+    }
+
+    [Fact]
+    public void Open_in_query_and_export_are_hidden_for_functions_but_shown_for_views()
+    {
+        ArrangeFunction();
+        Operations.GetObjectDetailAsync(Secret, "app", 50, Arg.Any<CancellationToken>()).Returns(new PgObjectDetail(
+            50, "public", "v_order_totals", PgObjectKind.View, null, 0, 0, "app_rw", [new PgColumn(1, "id", "bigint", true, null, false, null, null)], [], [], null));
+        var cut = RenderOrders();
+        OpenGroup(cut, "Views");
+        cut.FindAll(".pg-tree-item").First(e => e.TextContent.Contains("v_order_totals")).Click();
+        cut.WaitForAssertion(() => cut.Find(".pg-object-title").TextContent.Should().Be("public.v_order_totals"));
+        cut.FindAll(".pg-open-in-query").Should().HaveCount(1);
+        cut.FindAll(".pg-export-csv").Should().HaveCount(1);
+
+        OpenGroup(cut, "Functions");
+        cut.FindAll(".pg-tree-item").First(e => e.TextContent.Contains("fn_total")).Click();
+
+        cut.WaitForAssertion(() => cut.Find(".pg-object-title").TextContent.Should().Be("public.fn_total"));
+        cut.FindAll(".pg-open-in-query").Should().BeEmpty();
+        cut.FindAll(".pg-export-csv").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_failed_export_shows_an_error_alert_and_changing_database_clears_it()
+    {
+        Operations.ExportTableCsvAsync(Secret, "app", Arg.Any<PgRowsRequest>(), Arg.Any<CancellationToken>())
+            .Returns<CsvExport>(_ => throw new TimeoutException());
+        var cut = RenderOrders();
+
+        cut.Find(".pg-export-csv").Click();
+
+        var alert = cut.WaitForElement(".pg-export-status");
+        alert.ClassName.Should().Contain("error");
+        alert.TextContent.Should().NotBeNullOrWhiteSpace();
+
+        Pick(cut, ".pg-database-picker", "analytics");
+        cut.WaitForAssertion(() => cut.FindAll(".pg-export-status").Should().BeEmpty());
+    }
+
+    [Fact]
+    public void Blurring_a_filter_value_applies_it()
+    {
+        var cut = RenderOrders();
+        cut.WaitForElement(".pg-filter-value-1");
+        var input = cut.Find(".pg-filter-value-1 input");
+
+        input.Change("pending");
+        input.Blur();
+
+        cut.WaitForAssertion(() => LastRequest().Filters.Should().Equal(new PgFilter("status", PgFilterOp.Eq, "pending")));
+        Operations.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IPostgresOperations.PreviewRowsAsync)
+                                              && ((PgRowsRequest)c.GetArguments()[2]!).Filters.Count == 1).Should().Be(1, "blur after the commit must not reload");
     }
 }

@@ -46,7 +46,7 @@ public class PgDatabasePickerTests : PgPageTestBase
     }
 
     [Fact]
-    public void A_slow_older_response_cannot_overwrite_a_newer_connection_list()
+    public async Task A_slow_older_response_cannot_overwrite_a_newer_connection_list()
     {
         var slow = new TaskCompletionSource<IReadOnlyList<string>>();
         Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns(Secret + "first");
@@ -58,7 +58,11 @@ public class PgDatabasePickerTests : PgPageTestBase
         cut.Render(p => p.Add(c => c.ConnectionId, _other));
         cut.WaitForAssertion(() => selected.Should().Equal("fresh"));
         slow.SetResult(["stale"]);
-        Thread.Sleep(100);
+        for (var i = 0; i < 10; i++)
+        {
+            await cut.InvokeAsync(() => Task.CompletedTask);
+            await Task.Yield();
+        }
 
         selected.Should().Equal("fresh");
         cut.Instance.Should().NotBeNull();
@@ -93,6 +97,23 @@ public class PgDatabasePickerTests : PgPageTestBase
 
         cut.WaitForAssertion(() => selected.Should().Equal("app", ""));
         Services.GetService<NavigationManager>()!.Uri.Should().NotContain("db=");
+    }
+
+    [Fact]
+    public void A_picker_that_does_not_manage_the_url_never_navigates()
+    {
+        Arrange(ConnectionId, "app", "analytics");
+        var nav = Services.GetService<NavigationManager>()!;
+        nav.NavigateTo("/p/postgres/browse?x=1");
+        var selected = new List<string>();
+        Render<PgDatabasePicker>(p => p
+            .Add(c => c.ConnectionId, ConnectionId)
+            .Add(c => c.Default, "analytics")
+            .Add(c => c.ManageUrl, false)
+            .Add(c => c.SelectedChanged, EventCallback.Factory.Create<string>(this, selected.Add)));
+
+        selected.Should().Equal("analytics");
+        nav.Uri.Should().NotContain("db=");
     }
 
     [Fact]

@@ -19,15 +19,15 @@
 <div class="pg-page">
     <PgPageHeader Title="Browse">
         <Chips>
-            <PgConnectionPicker Loading="Busy" SelectionChanged="OnConnectionChangedAsync" />
+            <PgConnectionPicker Loading="Busy" ManageUrl="false" SelectionChanged="OnConnectionChangedAsync" />
             @if (_connection is not null)
             {
                 <PgDatabasePicker ConnectionId="_connection.Id" Default="@(_connection.Summary.GetValueOrDefault("Database"))"
-                                  SelectedChanged="OnDatabaseChangedAsync" />
+                                  ManageUrl="false" SelectedChanged="OnDatabaseChangedAsync" />
             }
         </Chips>
         <Actions>
-            @if (_detail is { } current)
+            @if (_detail is { } current && current.Kind != PgObjectKind.Function)
             {
                 <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-open-in-query" Href="@OpenInQueryHref(current)">Open in Query</MudButton>
                 <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-export-csv" Disabled="_exporting" OnClick="ExportAsync">@(_exporting ? "Exporting…" : "Export CSV")</MudButton>
@@ -58,7 +58,7 @@
         {
             <div class="pg-browse">
                 <div class="pg-tree-panel">
-                    <MudTextField T="string" Class="pg-tree-filter" Value="_filter" ValueChanged="OnFilterChanged" Immediate="true"
+                    <MudTextField T="string" Class="pg-tree-filter" Value="_filter" ValueChanged="OnFilterChanged" Immediate="true" DebounceInterval="250"
                                   Placeholder="Filter objects…" Variant="Variant.Outlined" Margin="Margin.Dense"
                                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
                     @if (_tree is null)
@@ -72,11 +72,11 @@
                     }
                     else
                     {
-                        <div class="pg-tree" role="tree">
+                        <div class="pg-tree">
                             @foreach (var schema in VisibleSchemas)
                             {
                                 var schemaOpen = IsOpen(SchemaKey(schema.Name), schema.Match > 0);
-                                <button type="button" class="pg-tree-schema" role="treeitem" aria-expanded="@(schemaOpen ? "true" : "false")"
+                                <button type="button" class="pg-tree-schema" aria-expanded="@(schemaOpen ? "true" : "false")"
                                         @onclick="() => Toggle(SchemaKey(schema.Name))">
                                     <MudIcon Icon="@(schemaOpen ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                                     <MudIcon Icon="@(schemaOpen ? Icons.Material.Filled.FolderOpen : Icons.Material.Filled.Folder)" Size="Size.Small" />
@@ -90,7 +90,7 @@
                                         var groupKey = GroupKey(schema.Name, group.Title);
                                         var groupOpen = IsOpen(groupKey, true);
                                         var shown = _showAll.Contains(groupKey) ? group.Items.Count : Math.Min(group.Items.Count, MaxItems);
-                                        <button type="button" class="pg-tree-group" role="treeitem" aria-expanded="@(groupOpen ? "true" : "false")"
+                                        <button type="button" class="pg-tree-group" aria-expanded="@(groupOpen ? "true" : "false")"
                                                 @onclick="() => Toggle(groupKey)">
                                             <MudIcon Icon="@(groupOpen ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                                             @group.Title
@@ -101,8 +101,8 @@
                                             @foreach (var node in group.Items.Take(shown))
                                             {
                                                 var nodeOid = node.Oid;
-                                                <button type="button" class="@("pg-tree-item" + (node.Oid == _selectedOid ? " pg-selected" : ""))" role="treeitem"
-                                                        aria-selected="@(node.Oid == _selectedOid ? "true" : "false")" @onclick="() => SelectObjectAsync(nodeOid)">
+                                                <button type="button" class="@("pg-tree-item" + (node.Oid == _selectedOid ? " pg-selected" : ""))"
+                                                        aria-current="@(node.Oid == _selectedOid ? "true" : null)" @onclick="() => SelectObjectAsync(nodeOid)">
                                                     <MudIcon Icon="@KindIcon(node.Kind)" Size="Size.Small" />
                                                     <span class="pg-tree-name">@node.Name</span>
                                                     @if (node.RowEstimate is { } estimate and >= 0)
@@ -236,6 +236,7 @@
 
 @code {
     private const int MaxItems = 50;
+    private const string BrowsePath = "/p/postgres/browse";
     private static readonly string[] TabNames = ["data", "columns", "indexes", "constraints", "ddl"];
     private static readonly int[] PageSizes = [25, 50, 100];
 
@@ -269,6 +270,11 @@
     private bool _detailMissing;
     private string? _detailError;
     private string _tab = "data";
+    private string _userTab = "data";
+    private string? _urlDb;
+    private string _lastUrl = "";
+    private (string Filter, PgSchemaTree Tree)? _viewKey;
+    private IReadOnlyList<TreeSchema> _view = [];
     private PgRowPage? _rows;
     private bool _rowsLoading;
     private string? _rowsError;
@@ -297,15 +303,22 @@
 
     protected override void OnInitialized()
     {
+        _lastUrl = Navigation.Uri;
         var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
         if (query.TryGetValue("oid", out var oid) && uint.TryParse(oid.ToString(), out var parsed))
         {
             _pendingOid = parsed;
         }
 
+        if (query.TryGetValue("db", out var urlDb))
+        {
+            _urlDb = urlDb.ToString();
+        }
+
         if (query.TryGetValue("tab", out var tab) && TabNames.Contains(tab.ToString()))
         {
             _tab = tab.ToString();
+            _userTab = _tab;
         }
     }
 
@@ -317,6 +330,7 @@
         _rowsGen++;
         _ddlGen++;
         _selectedOid = null;
+        _exportMessage = null;
         _detail = null;
         _detailLoading = false;
         _detailMissing = false;
@@ -353,8 +367,10 @@
             _treeKey = null;
             _treeError = null;
             _pendingOid = null;
+            _urlDb = null;
             ResetSelection();
-            UpdateUrl(null);
+            _connection = connection;
+            UpdateUrl();
         }
 
         _connection = connection;
@@ -377,6 +393,7 @@
             _treeKey = null;
             _treeError = null;
             ResetSelection();
+            UpdateUrl();
             return;
         }
 
@@ -385,7 +402,8 @@
             return;
         }
 
-        var first = _treeKey is null && _pendingOid is not null;
+        // Object ids are per-database: a ?oid= only survives when the resolved database is the one the URL named.
+        var first = _treeKey is null && _pendingOid is not null && database == _urlDb;
         _database = database;
         _treeKey = (connection.Id, database);
         if (!first)
@@ -393,7 +411,7 @@
             // Changing database clears the selection (object ids are per-database).
             _pendingOid = null;
             ResetSelection();
-            UpdateUrl(null);
+            UpdateUrl();
         }
 
         await LoadTreeAsync();
@@ -494,6 +512,11 @@
             }
 
             var needle = _filter.Trim();
+            if (_viewKey == (needle, _tree))
+            {
+                return _view;
+            }
+
             bool Matches(PgObjectNode n) => needle.Length == 0 || n.Name.Contains(needle, StringComparison.OrdinalIgnoreCase);
             var schemas = new List<TreeSchema>();
             foreach (var s in _tree.Schemas)
@@ -513,6 +536,8 @@
                 schemas.Add(new TreeSchema(s.Name, total, match, groups));
             }
 
+            _viewKey = (needle, _tree);
+            _view = schemas;
             return schemas;
         }
     }
@@ -554,7 +579,7 @@
         ResetObjectState();
         if (updateUrl)
         {
-            UpdateUrl(oid);
+            UpdateUrl();
         }
 
         StateHasChanged();
@@ -587,10 +612,12 @@
         }
 
         _detail = detail;
-        if (detail.Kind == PgObjectKind.Function && _tab == "data")
+        // A function has no Data tab, so it opens on DDL; any other object returns to the tab the user last chose.
+        var wanted = detail.Kind == PgObjectKind.Function && _userTab == "data" ? "ddl" : _userTab;
+        if (wanted != _tab)
         {
-            _tab = "ddl";
-            UpdateUrl(oid);
+            _tab = wanted;
+            UpdateUrl();
         }
 
         await EnsureTabDataAsync();
@@ -599,7 +626,8 @@
     private async Task OnTabChangedAsync(int index)
     {
         _tab = TabNames[Math.Clamp(index, 0, TabNames.Length - 1)];
-        UpdateUrl(_selectedOid);
+        _userTab = _tab;
+        UpdateUrl();
         await EnsureTabDataAsync();
     }
 
@@ -620,15 +648,25 @@
         }
     }
 
-    private void UpdateUrl(uint? oid)
+    // Composed from tracked state, never from Navigation.Uri: on Blazor Server that lags a NavigateTo until the client
+    // round-trips, so deriving from it would resurrect a stale ?db= or ?oid=.
+    private void UpdateUrl()
     {
-        var uri = Navigation.GetUriWithQueryParameters(new Dictionary<string, object?>
+        if (_connection is not { } connection || _disposed)
         {
-            ["oid"] = oid?.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["tab"] = oid is null || _tab == "data" ? null : _tab,
+            return;
+        }
+
+        var uri = Navigation.GetUriWithQueryParameters(Navigation.ToAbsoluteUri(BrowsePath).ToString(), new Dictionary<string, object?>
+        {
+            ["connectionId"] = connection.Id.ToString(),
+            ["db"] = string.IsNullOrEmpty(_database) ? null : _database,
+            ["oid"] = _selectedOid?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["tab"] = _selectedOid is null || _tab == "data" ? null : _tab,
         });
-        if (uri != Navigation.Uri)
+        if (uri != _lastUrl)
         {
+            _lastUrl = uri;
             Navigation.NavigateTo(uri, replace: true);
         }
     }
@@ -1039,13 +1077,12 @@
         <div class="pg-index-summary">
             <span>From <span class="pg-mono">pg_stat_user_indexes</span>@(days is { } n ? $" · stats reset {n} {(n == 1 ? "day" : "days")} ago" : "") · @unused.Count unused · @PgFormat.Bytes(unused.Sum(i => i.Bytes))</span>
         </div>
-        <MudTable T="PgIndex" Class="pg-indexes" Items="d.Indexes" Dense="true" Hover="true" Elevation="0">
+        <MudTable T="PgIndex" Class="pg-indexes" RowClass="pg-index-row" Items="d.Indexes" Dense="true" Hover="true" Elevation="0">
             <HeaderContent>
                 <MudTh>Index</MudTh><MudTh>Columns</MudTh><MudTh>Type</MudTh><MudTh Class="pg-num">Size</MudTh>
                 <MudTh Class="pg-num">Scans</MudTh><MudTh Class="pg-num">Tuples read</MudTh><MudTh>Flags</MudTh><MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTr Class="pg-index-row">
                     <MudTd Class="pg-mono">@context.Name</MudTd>
                     <MudTd Class="pg-mono">@context.ColumnsText</MudTd>
                     <MudTd Class="pg-mono">@context.Method</MudTd>
@@ -1067,7 +1104,6 @@
                             @* Task 14 adds REINDEX CONCURRENTLY and Drop index… here (confirmation-gated). *@
                         </MudMenu>
                     </MudTd>
-                </MudTr>
             </RowTemplate>
         </MudTable>
         <div class="pg-footnote">Unused is "0 scans since stats reset" for a non-unique, non-primary index — check how old the window is before dropping anything.</div>

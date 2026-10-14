@@ -24,6 +24,12 @@
     /// <summary>Raised with the chosen database, or with an empty string when the selection was dropped (empty list or failed load).</summary>
     [Parameter] public EventCallback<string> SelectedChanged { get; set; }
 
+    /// <summary>
+    /// True (default): the picker keeps ?db= in sync itself. False: the host page owns the URL and composes it from its own
+    /// state; the picker then reads ?db= only for its first load (Navigation.Uri can lag a NavigateTo on Blazor Server).
+    /// </summary>
+    [Parameter] public bool ManageUrl { get; set; } = true;
+
     private IReadOnlyList<string> _databases = [];
     private string? _selected;
     private Guid _loadedFor;
@@ -36,6 +42,7 @@
             return;
         }
 
+        var firstLoad = _loadedFor == Guid.Empty;
         _loadedFor = ConnectionId;
         var generation = ++_generation;
         _databases = [];
@@ -50,18 +57,26 @@
         if (_databases.Count == 0)
         {
             // The selection was dropped (empty list or failed load): tell the parent and take ?db= off the URL.
-            var cleared = Navigation.GetUriWithQueryParameter("db", (string?)null);
-            if (cleared != Navigation.Uri)
+            if (ManageUrl)
             {
-                Navigation.NavigateTo(cleared, replace: true);
+                var cleared = Navigation.GetUriWithQueryParameter("db", (string?)null);
+                if (cleared != Navigation.Uri)
+                {
+                    Navigation.NavigateTo(cleared, replace: true);
+                }
             }
 
             await SelectedChanged.InvokeAsync("");
             return;
         }
 
-        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
-        var wanted = query.TryGetValue("db", out var db) ? db.ToString() : null;
+        string? wanted = null;
+        if (ManageUrl || firstLoad)
+        {
+            var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+            wanted = query.TryGetValue("db", out var db) ? db.ToString() : null;
+        }
+
         var pick = _databases.FirstOrDefault(d => d == wanted)
                    ?? _databases.FirstOrDefault(d => d == Default)
                    ?? _databases[0];
@@ -71,10 +86,13 @@
     private async Task SelectAsync(string name)
     {
         _selected = name;
-        var uri = Navigation.GetUriWithQueryParameter("db", name);
-        if (uri != Navigation.Uri)
+        if (ManageUrl)
         {
-            Navigation.NavigateTo(uri, replace: true);
+            var uri = Navigation.GetUriWithQueryParameter("db", name);
+            if (uri != Navigation.Uri)
+            {
+                Navigation.NavigateTo(uri, replace: true);
+            }
         }
 
         await SelectedChanged.InvokeAsync(name);
