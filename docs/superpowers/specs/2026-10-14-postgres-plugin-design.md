@@ -371,8 +371,8 @@ aliases. User-defined functions, types and enum labels stay out of scope.
 - **Engine** — `PgCompletionEngine.Complete(text, caret, schema)` (pure, static, no I/O) →
   `PgCompletionResult(ReplaceFrom, ReplaceTo, Items)`, item = `Label`, `InsertText`, `Kind`
   (Keyword, Function, Schema, Table, View, Column, Alias), `Detail` (column type + table,
-  function signature, object kind). A schema of `null` (not loaded / load failed) offers keywords
-  and functions only. Tokenizing follows `PgSqlLexer`'s quoting rules (single quotes, `E''` with
+  function signature, object kind). `PgCompletionSchema.Empty` (not loaded yet / load failed)
+  offers keywords and functions only. Tokenizing follows `PgSqlLexer`'s quoting rules (single quotes, `E''` with
   backslash escapes, `$tag$…$tag$`, `"…"` identifiers, `--` and nested `/* */` comments); the
   current statement is the one containing the caret, split on top-level `;`. Context rules:
   - caret inside a string, dollar-quoted body, quoted identifier or comment (an unterminated one
@@ -389,7 +389,9 @@ aliases. User-defined functions, types and enum labels stay out of scope.
   - Unqualified table references resolve via the search path (first schema in path order that
     has the name).
   - Filtering on the identifier prefix before the caret: case-insensitive prefix matches first,
-    then substring matches, kind order kept within each group; max 50 items.
+    then substring matches, kind order kept within each group; max 50 items. An item whose
+    insert text equals the word already typed (ignoring case) is left out, so Enter after a
+    fully typed `select` is a newline, not a no-op accept.
   - Insertion: keywords upper-case; identifiers bare when they are lower-case `[a-z_][a-z0-9_$]*`
     and not a reserved keyword, otherwise `PgIdent.Quote`d; a table/view whose schema is not on
     the search path is inserted `schema.name` (each part quoted as needed) unless the user already
