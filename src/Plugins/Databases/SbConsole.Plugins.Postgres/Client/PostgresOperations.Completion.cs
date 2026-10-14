@@ -4,21 +4,23 @@ namespace SbConsole.Plugins.Postgres.Client;
 
 public sealed partial class PostgresOperations
 {
-    // Partitions are left out as in ListSchemaAsync; the parent covers them.
+    // Partitions are left out as in ListSchemaAsync; the parent covers them. When MaxObjects truncates, schemas on the
+    // search path win (in path order), then the rest alphabetically. The outer ORDER BY repeats the same key, so each
+    // object's column rows stay consecutive -- the reader below groups on consecutive (schema, name).
     private static readonly string CompletionObjectsSql = $"""
         WITH objs AS (
             SELECT c.oid, n.nspname, c.relname, c.relkind
               FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE c.relkind IN ('r','v','m','p','f') AND n.nspname NOT IN ({SystemSchemas}) AND n.nspname NOT LIKE 'pg\_%'
                AND NOT c.relispartition
-             ORDER BY n.nspname, c.relname
+             ORDER BY array_position(current_schemas(false), n.nspname) NULLS LAST, n.nspname, c.relname
              LIMIT {PgCompletionSchema.MaxObjects.ToString(CultureInfo.InvariantCulture)})
         SELECT o.nspname, o.relname, o.relkind, a.attname, format_type(a.atttypid, a.atttypmod),
                COALESCE(a.attnum = ANY (pk.indkey), false)
           FROM objs o
-          LEFT JOIN pg_attribute a ON a.attrelid = o.oid AND a.attnum > 0 AND NOT a.attisdropped
+          LEFT JOIN pg_attribute a ON a.attrelid = o.oid AND a.attnum > 0 AND a.attnum <= {PgCompletionSchema.MaxColumns.ToString(CultureInfo.InvariantCulture)} AND NOT a.attisdropped
           LEFT JOIN pg_index pk ON pk.indrelid = o.oid AND pk.indisprimary
-         ORDER BY o.nspname, o.relname, a.attnum
+         ORDER BY array_position(current_schemas(false), o.nspname) NULLS LAST, o.nspname, o.relname, a.attnum
         """;
 
     public Task<PgCompletionSchema> GetCompletionSchemaAsync(string secret, string? database, CancellationToken ct = default) =>

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Npgsql;
 using SbConsole.Plugins.Postgres.Client;
 using SbConsole.Plugins.Postgres.Tests.Infrastructure;
 
@@ -42,11 +43,29 @@ public sealed class OperationsCompletionTests(PostgresFixture fx)
     [DockerFact]
     public async Task Completion_objects_list_search_path_schemas_first()
     {
-        var schema = await fx.Operations.GetCompletionSchemaAsync(fx.Secret(), null);
+        // "aaa_early" sorts before "public" alphabetically; the search path must still win.
+        await using (var conn = new NpgsqlConnection(fx.AdminConnectionString()))
+        {
+            await conn.OpenAsync();
+            await using var create = new NpgsqlCommand("CREATE SCHEMA aaa_early; CREATE TABLE aaa_early.t (x int)", conn);
+            await create.ExecuteNonQueryAsync();
+        }
 
-        var firstReporting = schema.Objects.ToList().FindIndex(o => o.Schema == "reporting");
-        var lastPublic = schema.Objects.ToList().FindLastIndex(o => o.Schema == "public");
-        firstReporting.Should().BeGreaterThanOrEqualTo(0);
-        lastPublic.Should().BeLessThan(firstReporting);
+        try
+        {
+            var schema = await fx.Operations.GetCompletionSchemaAsync(fx.Secret(), null);
+
+            var objects = schema.Objects.ToList();
+            var lastPublic = objects.FindLastIndex(o => o.Schema == "public");
+            objects.FindIndex(o => o.Schema == "aaa_early").Should().BeGreaterThan(lastPublic);
+            objects.FindIndex(o => o.Schema == "reporting").Should().BeGreaterThan(lastPublic);
+        }
+        finally
+        {
+            await using var conn = new NpgsqlConnection(fx.AdminConnectionString());
+            await conn.OpenAsync();
+            await using var drop = new NpgsqlCommand("DROP SCHEMA aaa_early CASCADE", conn);
+            await drop.ExecuteNonQueryAsync();
+        }
     }
 }
