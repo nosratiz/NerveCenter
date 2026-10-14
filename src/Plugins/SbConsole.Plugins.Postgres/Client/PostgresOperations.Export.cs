@@ -9,7 +9,7 @@ public sealed partial class PostgresOperations
         ReadAsync(secret, database, async (conn, tx) =>
         {
             var (detail, columns) = await RequireRelationAsync(conn, tx, request.Oid, ct);
-            var (sql, parameters) = PgRowsSql.BuildExport(PgIdent.Qualified(detail.Schema, detail.Name), columns, request);
+            var (sql, parameters) = PgRowsSql.BuildExport(PgIdent.Qualified(detail.Schema, detail.Name), columns, request, CsvExport.EffectiveMaxRows);
 
             await using var cmd = Command(conn, tx, sql, parameters);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -23,11 +23,12 @@ public sealed partial class PostgresOperations
         NpgsqlDataReader reader, int maxRows, long maxBytes, CancellationToken ct)
     {
         maxRows = Math.Max(0, maxRows);
+        var encoding = new UTF8Encoding(false);
         await using var stream = new MemoryStream();
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true);
-        await writer.WriteAsync(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)));
-        await writer.WriteAsync("\r\n");
-        await writer.FlushAsync(ct);
+        await using var writer = new StreamWriter(stream, encoding, 4096, leaveOpen: true);
+        var header = CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)) + "\r\n";
+        await writer.WriteAsync(header);
+        long bytes = encoding.GetByteCount(header);
 
         var count = 0;
         var truncated = false;
@@ -39,20 +40,23 @@ public sealed partial class PostgresOperations
                 break;
             }
 
-            var before = stream.Length;
-            await writer.WriteAsync(CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(i => PgCellFormatter.RawText(reader, i))));
-            await writer.WriteAsync("\r\n");
-            await writer.FlushAsync(ct);
-            if (stream.Length > maxBytes)
+            var line = CsvFormat.Row(Enumerable.Range(0, reader.FieldCount).Select(i => PgCellFormatter.RawText(reader, i))) + "\r\n";
+            bytes += encoding.GetByteCount(line);
+            if (bytes > maxBytes)
             {
-                stream.SetLength(before);
                 truncated = true;
                 break;
             }
 
+            await writer.WriteAsync(line);
             count++;
+            if (count % 1000 == 0)
+            {
+                await writer.FlushAsync(ct);
+            }
         }
 
+        await writer.FlushAsync(ct);
         return (stream.ToArray(), count, truncated);
     }
 

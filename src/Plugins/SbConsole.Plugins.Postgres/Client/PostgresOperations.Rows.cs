@@ -19,7 +19,7 @@ public sealed partial class PostgresOperations
             {
                 for (var i = 0; i < r.FieldCount; i++)
                 {
-                    resultColumns.Add(new PgResultColumn(r.GetName(i), r.GetDataTypeName(i)));
+                    resultColumns.Add(new PgResultColumn(r.GetName(i), columns[i].CastType));
                 }
 
                 while (await r.ReadAsync(ct))
@@ -51,13 +51,11 @@ public sealed partial class PostgresOperations
         }
 
         using var doc = JsonDocument.Parse(json);
-        return doc.RootElement[0].GetProperty("Plan").GetProperty("Plan Rows").GetDouble() is var rows
-            ? (long)Math.Round(rows)
-            : null;
+        return (long)Math.Round(doc.RootElement[0].GetProperty("Plan").GetProperty("Plan Rows").GetDouble());
     }
 
     /// <summary>The relation's detail plus its (name, type) columns; the browse page may only ask about tables, views and matviews.</summary>
-    private static async Task<(PgObjectDetail Detail, IReadOnlyList<(string Name, string Type)> Columns)> RequireRelationAsync(
+    private static async Task<(PgObjectDetail Detail, IReadOnlyList<PgRowColumn> Columns)> RequireRelationAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, uint oid, CancellationToken ct)
     {
         var detail = await ReadDetailAsync(conn, tx, oid, ct);
@@ -66,7 +64,7 @@ public sealed partial class PostgresOperations
             throw new PgSqlRefusedException("That object no longer exists, or has no rows to browse. Refresh the tree.");
         }
 
-        return (detail, detail.Columns.Select(c => (c.Name, c.Type)).ToList());
+        return (detail, detail.Columns.Select(c => new PgRowColumn(c.Name, c.Type, c.BaseType)).ToList());
     }
 
     /// <summary>Unnamed positional parameters ($1, $2 ...); the server infers each type from its ::cast.</summary>

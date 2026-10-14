@@ -111,7 +111,7 @@ public sealed class OperationsRowsTests(PostgresFixture fx)
         blob.Display.Should().Be("\\x000102030405060708090a0b0c0d0e0f… (18 bytes)");
 
         first[Col(page, "day")].Display.Should().Be("2024-03-05");
-        first[Col(page, "ts")].Display.Should().Be("2024-03-05 10:11:12");
+        first[Col(page, "ts")].Display.Should().Be("2024-03-05 10:11:12+00");
         first[Col(page, "tags")].Display.Should().Be("{a,b}");
 
         var longText = first[Col(page, "long_text")];
@@ -193,5 +193,61 @@ public sealed class OperationsRowsTests(PostgresFixture fx)
         {
             CsvExport.MaxRowsOverride = null;
         }
+    }
+
+    [DockerFact]
+    public async Task Unreadable_values_fall_back_to_the_servers_text_form_in_preview()
+    {
+        var page = await fx.Operations.PreviewRowsAsync(fx.Secret(), null, Req(await OidAsync("oddities")));
+        var row = page.Rows[0];
+        row[Col(page, "span")].Display.Should().Be("1 mon 2 days");
+        row[Col(page, "num")].Display.Should().Be("NaN");
+        row[Col(page, "big")].Display.Should().Be("10000000000000000000000000000000000000000");
+        row[Col(page, "bc")].Display.Should().Be("0044-03-15 BC");
+        page.Rows[1][Col(page, "num")].Display.Should().Be("Infinity");
+        page.Columns[Col(page, "span")].TypeName.Should().Be("interval");
+        page.Columns[Col(page, "code")].TypeName.Should().Be("character varying");
+    }
+
+    [DockerFact]
+    public async Task Unreadable_values_do_not_fail_the_export()
+    {
+        var csv = await fx.Operations.ExportTableCsvAsync(fx.Secret(), null, Req(await OidAsync("oddities")));
+        var text = Encoding.UTF8.GetString(csv.Content);
+        text.Should().Contain("1 mon 2 days").And.Contain("NaN").And.Contain("0044-03-15 BC").And.Contain("Infinity");
+    }
+
+    [DockerFact]
+    public async Task Filter_value_is_not_truncated_by_a_varchar_typmod_cast()
+    {
+        var oid = await OidAsync("oddities");
+        (await fx.Operations.PreviewRowsAsync(fx.Secret(), null, Req(oid, new PgFilter("code", PgFilterOp.Eq, "ABCDEFG")))).Rows
+            .Should().BeEmpty();
+        (await fx.Operations.PreviewRowsAsync(fx.Secret(), null, Req(oid, new PgFilter("code", PgFilterOp.Eq, "ABCDE")))).Rows
+            .Should().HaveCount(1);
+    }
+
+    [DockerFact]
+    public async Task Export_over_the_cap_still_reports_truncated_with_a_bounded_query()
+    {
+        CsvExport.MaxRowsOverride = 10;
+        try
+        {
+            var csv = await fx.Operations.ExportTableCsvAsync(fx.Secret(), null, Req(await OidAsync("orders")));
+            csv.RowCount.Should().Be(10);
+            csv.Truncated.Should().BeTrue();
+        }
+        finally
+        {
+            CsvExport.MaxRowsOverride = null;
+        }
+    }
+
+    [DockerFact]
+    public async Task Json_pretty_form_keeps_non_ascii_and_html_characters()
+    {
+        var page = await fx.Operations.PreviewRowsAsync(fx.Secret(), null, Req(await OidAsync("oddities")));
+        var cell = page.Rows[0][Col(page, "j")];
+        cell.Full.Should().Contain("José").And.Contain("<b>").And.Contain("it's");
     }
 }

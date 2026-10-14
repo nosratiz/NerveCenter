@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Npgsql;
 
@@ -12,7 +13,38 @@ internal static class PgCellFormatter
     public const int FullChars = 10_000;
     private const int ByteSample = 16;
 
+    private static readonly JsonSerializerOptions PrettyJson = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     public static PgCell Format(NpgsqlDataReader r, int ordinal)
+    {
+        try
+        {
+            return FormatCore(r, ordinal);
+        }
+        catch (Exception ex) when (ex is InvalidCastException or OverflowException)
+        {
+            // Backstop: the SELECT list already reads risky types as text, but never fail a page over one cell.
+            return new PgCell(PgCellKind.Text, SafeString(r, ordinal));
+        }
+    }
+
+    private static string SafeString(NpgsqlDataReader r, int ordinal)
+    {
+        try
+        {
+            return r.GetFieldValue<string>(ordinal);
+        }
+        catch (Exception)
+        {
+            return "(unreadable)";
+        }
+    }
+
+    private static PgCell FormatCore(NpgsqlDataReader r, int ordinal)
     {
         if (r.IsDBNull(ordinal))
         {
@@ -58,7 +90,16 @@ internal static class PgCellFormatter
             return "\\x" + Convert.ToHexStringLower(r.GetFieldValue<byte[]>(ordinal));
         }
 
-        var value = r.GetValue(ordinal);
+        object value;
+        try
+        {
+            value = r.GetValue(ordinal);
+        }
+        catch (Exception ex) when (ex is InvalidCastException or OverflowException)
+        {
+            return SafeString(r, ordinal);
+        }
+
         if (type == "date" && value is DateTime d)
         {
             return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -73,7 +114,7 @@ internal static class PgCellFormatter
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            var pretty = Cap(JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }));
+            var pretty = Cap(JsonSerializer.Serialize(root, PrettyJson));
             switch (root.ValueKind)
             {
                 case JsonValueKind.Object:

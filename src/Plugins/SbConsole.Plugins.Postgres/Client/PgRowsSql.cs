@@ -14,25 +14,25 @@ internal static class PgRowsSql
 
     /// <summary>The page query, or (<paramref name="forCount"/>) the same filters without ORDER BY / LIMIT / OFFSET for EXPLAIN.</summary>
     public static (string Sql, IReadOnlyList<string?> Parameters) Build(string qualifiedName,
-        IReadOnlyList<(string Name, string Type)> columns, PgRowsRequest request, bool forCount = false) =>
+        IReadOnlyList<PgRowColumn> columns, PgRowsRequest request, bool forCount = false) =>
         Compose(qualifiedName, columns, request, order: !forCount, page: !forCount);
 
-    /// <summary>The export query: filters and sort, but every row.</summary>
+    /// <summary>The export query: filters and sort, bounded to one row past the cap so truncation is detectable without draining the table.</summary>
     public static (string Sql, IReadOnlyList<string?> Parameters) BuildExport(string qualifiedName,
-        IReadOnlyList<(string Name, string Type)> columns, PgRowsRequest request) =>
-        Compose(qualifiedName, columns, request, order: true, page: false);
+        IReadOnlyList<PgRowColumn> columns, PgRowsRequest request, int maxRows) =>
+        Compose(qualifiedName, columns, request, order: true, page: false, exportLimit: (long)Math.Max(0, maxRows) + 1);
 
     private static (string Sql, IReadOnlyList<string?> Parameters) Compose(string qualifiedName,
-        IReadOnlyList<(string Name, string Type)> columns, PgRowsRequest request, bool order, bool page)
+        IReadOnlyList<PgRowColumn> columns, PgRowsRequest request, bool order, bool page, long? exportLimit = null)
     {
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (name, type) in columns)
+        foreach (var column in columns)
         {
-            types[name] = type;
+            types[column.Name] = column.CastType;
         }
 
         var parameters = new List<string?>();
-        var sql = new StringBuilder("SELECT * FROM ").Append(qualifiedName);
+        var sql = new StringBuilder("SELECT ").Append(SelectList(columns)).Append(" FROM ").Append(qualifiedName);
 
         var clauses = new List<string>();
         foreach (var filter in request.Filters)
@@ -66,8 +66,36 @@ internal static class PgRowsSql
             var offset = Math.Max(0, request.Offset);
             sql.Append(CultureInfo.InvariantCulture, $" LIMIT {limit} OFFSET {offset}");
         }
+        else if (exportLimit is { } cap)
+        {
+            sql.Append(CultureInfo.InvariantCulture, $" LIMIT {cap}");
+        }
 
         return (sql.ToString(), parameters);
+    }
+
+    private static readonly HashSet<string> SafeTypes = new(StringComparer.Ordinal)
+    {
+        "smallint", "integer", "bigint", "real", "double precision", "boolean", "text", "character varying", "character",
+        "uuid", "json", "jsonb", "bytea", "name", "\"char\"",
+    };
+
+    /// <summary>
+    /// Explicit select list. Types Npgsql cannot always materialise (interval with months, NaN / huge numeric, BC dates)
+    /// and anything not known to be safe are read as the server's own text form.
+    /// </summary>
+    private static string SelectList(IReadOnlyList<PgRowColumn> columns)
+    {
+        if (columns.Count == 0)
+        {
+            return "*";
+        }
+
+        return string.Join(", ", columns.Select(c =>
+        {
+            var q = PgIdent.Quote(c.Name);
+            return SafeTypes.Contains(c.CastType.Replace("[]", "", StringComparison.Ordinal)) ? q : $"{q}::text AS {q}";
+        }));
     }
 
     private static string Clause(PgFilter filter, string type, List<string?> parameters)
@@ -109,4 +137,10 @@ internal static class PgRowsSql
     }
 
     private static string Clip(string s) => s.Length <= 60 ? s : s[..60] + "…";
+}
+
+/// <summary>A browsable column: <see cref="Type"/> is the display text (with typmod), <see cref="BaseType"/> the typmod-free type used for casts.</summary>
+internal sealed record PgRowColumn(string Name, string Type, string? BaseType = null)
+{
+    public string CastType => BaseType ?? Type;
 }
