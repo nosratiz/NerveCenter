@@ -54,9 +54,11 @@ public static partial class K8sFormat
     {
         if (string.IsNullOrWhiteSpace(quantity)) return 0;
         var q = quantity.Trim();
-        if (q.EndsWith('m'))
+        // metrics.k8s.io reports node/pod usage in nanocores ("58600000n") or microcores ("250000u").
+        var perMilli = q[^1] switch { 'm' => 1d, 'u' => 1e3, 'n' => 1e6, _ => 0d };
+        if (perMilli > 0)
         {
-            return (long)Math.Round(ParseNumber(q[..^1]), MidpointRounding.AwayFromZero);
+            return (long)Math.Round(ParseNumber(q[..^1]) / perMilli, MidpointRounding.AwayFromZero);
         }
 
         return (long)Math.Round(ParseNumber(q) * 1000, MidpointRounding.AwayFromZero);

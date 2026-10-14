@@ -86,6 +86,7 @@ public class KubernetesPluginTests
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(Substitute.For<IConnectionProvider>()); // host-provided; handlers depend on it
+        services.AddKeyedScoped<IPluginStore>(KubernetesPlugin.PluginId, (_, _) => new InMemoryPluginStore()); // host-provided, keyed
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         new KubernetesPlugin().ConfigureServices(services);

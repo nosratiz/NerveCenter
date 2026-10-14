@@ -12,7 +12,6 @@ namespace SbConsole.Plugins.Kubernetes.Client;
 public sealed partial class KubernetesOperations(KubernetesClientFactory clients, TimeProvider clock, ILogger<KubernetesOperations> logger)
     : IKubernetesOperations, ISingletonService
 {
-    // Used by later partials (overview capture time, events window).
     private readonly TimeProvider _clock = clock;
 
     private IKubernetes Client(string secret) => clients.Get(secret);
@@ -64,9 +63,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
     }
 
     // ---- Not implemented yet: each later task replaces its own. ----
-
-    public Task<K8sOverview> GetOverviewAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
-        throw new NotImplementedException();
 
     public Task<IReadOnlyList<K8sWorkload>> ListWorkloadsAsync(string secret, K8sWorkloadKind kind, IReadOnlyList<string> namespaces, string? labelSelector, CancellationToken ct = default) =>
         throw new NotImplementedException();

@@ -56,6 +56,10 @@ public class K8sFormatTests
     [InlineData("250m", 250)]
     [InlineData("2", 2000)]
     [InlineData("0.5", 500)]
+    [InlineData("58600000n", 59)]
+    [InlineData("1500000000n", 1500)]
+    [InlineData("250000u", 250)]
+    [InlineData("0n", 0)]
     [InlineData(null, 0)]
     [InlineData("", 0)]
     public void ParseCpuMilli_parses(string? q, long expected) => K8sFormat.ParseCpuMilli(q).Should().Be(expected);
