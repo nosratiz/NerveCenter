@@ -40,5 +40,17 @@
     "kind": "postgres",
     "secret": "Host=postgres;Port=5432;Database=app;Username=sbconsole;Password=sbconsole;SSL Mode=Prefer;Timeout=5;Mode=ReadOnly;StatementTimeoutS=30",
     "tags": ["demo"]
+  },
+  {
+    "name": "pg-local-limited",
+    "kind": "postgres",
+    "secret": "Host=postgres;Port=5432;Database=app;Username=app_ro;Password=app_ro;SSL Mode=Prefer;Timeout=5;Mode=ReadOnly;StatementTimeoutS=30",
+    "tags": ["demo"]
+  },
+  {
+    "name": "pg-offline",
+    "kind": "postgres",
+    "secret": "Host=pg-offline.invalid;Port=5432;Database=analytics;Username=sbconsole;Password=sbconsole;SSL Mode=Prefer;Timeout=5;Mode=ReadOnly;StatementTimeoutS=30",
+    "tags": ["staging"]
   }
 ]
