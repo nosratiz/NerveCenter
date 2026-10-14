@@ -104,6 +104,16 @@ public class DrainPlannerTests
     }
 
     [Fact]
+    public void An_ownerless_pod_under_a_blocking_pdb_stays_blocked_but_the_note_says_it_has_no_controller()
+    {
+        var labels = new Dictionary<string, string> { ["app"] = "ledger" };
+        var plan = DrainPlanner.Plan(Inputs([Pod("payments", "ledger-debug", null, null, labels)], [LedgerPdb()]), 30);
+
+        plan.Pods.Single().Group.Should().Be(DrainGroup.BlockedByPdb);
+        plan.Pods.Single().Note.Should().Be("PDB ledger minAvailable 3 · now 3 · no controller");
+    }
+
+    [Fact]
     public void Mirror_pods_are_excluded_entirely()
     {
         var plan = DrainPlanner.Plan(Inputs(

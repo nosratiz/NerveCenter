@@ -301,6 +301,112 @@ public class DrainHandlerTests
         AuditDetail().Should().StartWith("grace 30s · force false · emptyDir false · evicted 5 · deleted 0 · blocked 0 · skipped 0 · cancelled after 5 of 7 · pods: ");
     }
 
+    private static K8sPodSummary Ledger(int i) =>
+        Pod("payments", $"ledger-{i}", "StatefulSet", "ledger", new Dictionary<string, string> { ["app"] = "ledger" });
+
+    private static readonly K8sPdb LedgerPdb =
+        new("payments", "ledger", new Dictionary<string, string> { ["app"] = "ledger" }, 0, "minAvailable 5", 5, 5);
+
+    private async Task AdvanceUntilAsync(Task run, TimeSpan limit)
+    {
+        for (var elapsed = TimeSpan.Zero; !run.IsCompleted && elapsed <= limit; elapsed += DrainNodeCommandHandler.PdbRetryInterval)
+        {
+            _time.Advance(DrainNodeCommandHandler.PdbRetryInterval);
+            await Task.Delay(5);
+        }
+    }
+
+    [Fact]
+    public async Task Five_pdb_blocked_pods_never_starve_an_evictable_pod()
+    {
+        Arrange([.. Enumerable.Range(1, 5).Select(Ledger), Api(1)], [LedgerPdb]);
+        _ops.EvictPodAsync(Secret, "payments", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(K8sEvictionOutcome.BlockedByPdb);
+
+        var run = Handler().HandleAsync(Command(), _progress);
+
+        await WaitForAsync(() => EvictCalls("api-1") == 1); // no clock advance: well before the deadline
+        _progress.Reports.Should().Contain(r => r.Last != null && r.Last.Name == "api-1" && r.Last.Outcome == DrainPodOutcome.Evicted);
+
+        await AdvanceUntilAsync(run, TimeSpan.FromMinutes(6));
+        var result = await run;
+
+        result.Value!.TimedOut.Should().BeTrue();
+        result.Value.Pods.Single(p => p.Name == "api-1").Outcome.Should().Be(DrainPodOutcome.Evicted);
+        result.Value.Pods.Where(p => p.Namespace == "payments").Should().HaveCount(5).And.OnlyContain(p => p.Outcome == DrainPodOutcome.Blocked);
+    }
+
+    [Fact]
+    public async Task A_blocked_pod_gives_up_its_slot_while_waiting_so_a_sixth_blocked_pod_is_tried()
+    {
+        Arrange(Enumerable.Range(1, 6).Select(Ledger).ToArray(), [LedgerPdb]);
+        _ops.EvictPodAsync(Secret, "payments", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(K8sEvictionOutcome.BlockedByPdb);
+
+        var run = Handler().HandleAsync(Command(), _progress);
+
+        await WaitForAsync(() => EvictCalls() == 6);
+        await AdvanceUntilAsync(run, TimeSpan.FromMinutes(6));
+        (await run).Value!.Pods.Should().HaveCount(6).And.OnlyContain(p => p.Outcome == DrainPodOutcome.Blocked);
+    }
+
+    [Fact]
+    public async Task An_ownerless_pod_under_a_blocking_pdb_is_never_evicted_without_force()
+    {
+        var labels = new Dictionary<string, string> { ["app"] = "debug" };
+        var pdb = new K8sPdb("default", "debug", labels, 0, "maxUnavailable 0", 1, 1);
+        Arrange([Pod("default", "debug-shell", null, null, labels)], [pdb]);
+        _ops.EvictPodAsync(Secret, "default", "debug-shell", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(K8sEvictionOutcome.BlockedByPdb);
+
+        var skipped = await Handler().HandleAsync(Command(), _progress).WaitAsync(TimeSpan.FromSeconds(10)); // a retry loop would never end
+
+        skipped.Value!.Pods.Single().Should().Be(new DrainPodResult("default", "debug-shell", DrainPodOutcome.Skipped, "no controller — use force"));
+        await _ops.DidNotReceiveWithAnyArgs().EvictPodAsync(default!, default!, default!, default, default);
+
+        var forced = await Handler().HandleAsync(Command(force: true), _progress).WaitAsync(TimeSpan.FromSeconds(10));
+
+        forced.Value!.Pods.Single().Outcome.Should().Be(DrainPodOutcome.Deleted);
+        await _ops.Received(1).DeletePodAsync(Secret, "default", "debug-shell", 30, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_eviction_in_flight_when_stopped_completes_and_is_counted()
+    {
+        Arrange(Api(1), Api(2));
+        var gate = new TaskCompletionSource<K8sEvictionOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ops.EvictPodAsync(Secret, "checkout", "api-1", Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(ci => gate.Task.WaitAsync(ci.ArgAt<CancellationToken>(4)));
+        _ops.EvictPodAsync(Secret, "checkout", "api-2", Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(ci => gate.Task.WaitAsync(ci.ArgAt<CancellationToken>(4)));
+        using var cts = new CancellationTokenSource();
+
+        var run = Handler().HandleAsync(Command(), _progress, cts.Token);
+        await WaitForAsync(() => EvictCalls() == 2);
+        await cts.CancelAsync();
+        await Task.Delay(20);
+        gate.SetResult(K8sEvictionOutcome.Evicted);
+        var result = await run;
+
+        result.Value!.Cancelled.Should().BeTrue();
+        result.Value.Pods.Should().HaveCount(2).And.OnlyContain(p => p.Outcome == DrainPodOutcome.Evicted);
+        AuditDetail().Should().Be("grace 30s · force false · emptyDir false · evicted 2 · deleted 0 · blocked 0 · skipped 0 · cancelled after 2 of 2 · pods: checkout/api-1, checkout/api-2");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task A_grace_period_under_one_second_is_rejected_and_not_audited(int grace)
+    {
+        Arrange(Api(1));
+
+        var result = await Handler().HandleAsync(Command(grace: grace), _progress);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Be("Grace period must be at least 1 s.");
+        await _ops.DidNotReceiveWithAnyArgs().SetUnschedulableAsync(default!, default!, default, default);
+        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
+    }
+
     [Fact]
     public async Task Pod_list_in_the_audit_detail_is_capped_at_fifty_names()
     {

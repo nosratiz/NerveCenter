@@ -22,11 +22,16 @@ public sealed record DrainProgress(int Done, int Total, DrainPodResult? Last);
 public sealed record DrainResult(IReadOnlyList<DrainPodResult> Pods, bool Cancelled, bool TimedOut);
 
 /// <summary>
-/// kubectl drain through the Eviction API (spec §10.1): cordon, plan, then evict every non-DaemonSet pod
-/// <see cref="DrainPlanner.Parallelism"/> at a time. A PDB refusal (429) is retried every <see cref="PdbRetryInterval"/>
-/// until the overall <see cref="Deadline"/>, or with Force the pod is deleted instead. A caller stop schedules nothing
-/// more and leaves the node cordoned. One <c>k8s.node.drain</c> audit row (Destructive) is written at the end, whatever
-/// happened; it succeeds only when every pod went and nothing was stopped. Confirmation is the dialog's job.
+/// kubectl drain through the Eviction API (spec §10.1): cordon, plan, then evict every non-DaemonSet pod, at most
+/// <see cref="DrainPlanner.Parallelism"/> API calls at a time. Evictable and unmanaged pods are scheduled before
+/// PDB-blocked ones, and a slot is held only around each eviction/delete call — never during the
+/// <see cref="PdbRetryInterval"/> wait between PDB retries — so blocked pods can't starve the rest. A PDB refusal (429)
+/// is retried until the overall <see cref="Deadline"/>, or with Force the pod is deleted instead. A pod without a
+/// controller is skipped unless Force, whichever preview group it is in. A caller stop (or the deadline) schedules
+/// nothing more and ends retry waits but lets an eviction/delete call already in flight finish, so a pod the API server
+/// did remove is reported and audited as such (those calls are bounded by the client's HTTP timeout). The node stays
+/// cordoned. One <c>k8s.node.drain</c> audit row (Destructive) is written at the end, whatever happened; it succeeds only
+/// when every pod went and nothing was stopped. Confirmation is the dialog's job.
 /// </summary>
 public sealed class DrainNodeCommandHandler(
     IKubernetesOperations operations, IConnectionProvider connections, IAuditScope audit, TimeProvider clock,
@@ -44,6 +49,11 @@ public sealed class DrainNodeCommandHandler(
     {
         var t = cmd.Target;
         var options = cmd.Options;
+        if (options.GracePeriodSeconds < 1)
+        {
+            return PluginResult<DrainResult>.Fail("Grace period must be at least 1 s.");
+        }
+
         var (secret, secretError) = await HandlerRunner.TryResolveSecretAsync(connections, logger, t.ConnectionId, $"{Action} on {t.AuditTarget}", ct);
         if (secret is null)
         {
@@ -74,41 +84,27 @@ public sealed class DrainNodeCommandHandler(
             return PluginResult<DrainResult>.Fail(friendly);
         }
 
-        var work = plan.Pods.Where(p => p.Group != DrainGroup.DaemonSet).ToList();
-        var results = new DrainPodResult?[work.Count];
+        // Plan order is for display; drain order puts PDB-blocked pods last so they can't hold up the evictable ones.
+        var work = plan.Pods.Select((p, i) => (Plan: p, Index: i))
+            .Where(w => w.Plan.Group != DrainGroup.DaemonSet)
+            .OrderBy(w => w.Plan.Group == DrainGroup.BlockedByPdb ? 1 : 0)
+            .ToList();
+        var results = new DrainPodResult?[plan.Pods.Count];
         var done = 0;
         progress?.Report(new DrainProgress(0, work.Count, null));
 
         using (var gate = new SemaphoreSlim(DrainPlanner.Parallelism))
         {
-            var running = new List<Task>(work.Count);
-            for (var i = 0; i < work.Count; i++)
+            // Every pod gets a task up front; the gate (FIFO for async waiters) bounds the concurrent API calls.
+            await Task.WhenAll(work.Select(RunOneAsync));
+
+            async Task RunOneAsync((DrainPodPlan Plan, int Index) w)
             {
-                try
+                var result = await DrainPodAsync(secret, w.Plan, options, gate, token, deadline.Token);
+                if (result is not null)
                 {
-                    await gate.WaitAsync(token);
-                }
-                catch (OperationCanceledException)
-                {
-                    break; // stopped or out of time: schedule nothing more
-                }
-
-                running.Add(RunOneAsync(i));
-            }
-
-            await Task.WhenAll(running);
-
-            async Task RunOneAsync(int index)
-            {
-                try
-                {
-                    var result = await DrainPodAsync(secret, work[index], options, token, deadline.Token);
-                    results[index] = result;
+                    results[w.Index] = result;
                     progress?.Report(new DrainProgress(Interlocked.Increment(ref done), work.Count, result));
-                }
-                finally
-                {
-                    gate.Release();
                 }
             }
         }
@@ -119,7 +115,12 @@ public sealed class DrainNodeCommandHandler(
         return PluginResult<DrainResult>.Ok(drain);
     }
 
-    private async Task<DrainPodResult> DrainPodAsync(string secret, DrainPodPlan plan, DrainOptions options, CancellationToken token, CancellationToken deadline)
+    /// <summary>
+    /// One pod. Returns null when the pod was never started because of a stop or the deadline. <paramref name="token"/>
+    /// (stop or deadline) cancels waiting for a slot and the PDB retry wait, never an API call already sent.
+    /// </summary>
+    private async Task<DrainPodResult?> DrainPodAsync(
+        string secret, DrainPodPlan plan, DrainOptions options, SemaphoreSlim gate, CancellationToken token, CancellationToken deadline)
     {
         var (ns, name) = (plan.Pod.Namespace, plan.Pod.Name);
         if (plan.HasEmptyDir && !options.DeleteEmptyDirData)
@@ -127,18 +128,24 @@ public sealed class DrainNodeCommandHandler(
             return new DrainPodResult(ns, name, DrainPodOutcome.Skipped, "has emptyDir data");
         }
 
-        if (plan.Group == DrainGroup.Unmanaged && !options.Force)
+        if (plan.Pod.Owner is null && !options.Force)
         {
+            // Also when a PDB covers it: nothing would recreate the pod, so it only goes with Force.
             return new DrainPodResult(ns, name, DrainPodOutcome.Skipped, "no controller — use force");
         }
 
         var blocked = false;
-        try
+        while (true)
         {
-            while (true)
+            if (!await TryEnterAsync(gate, token))
             {
-                token.ThrowIfCancellationRequested();
-                switch (await operations.EvictPodAsync(secret, ns, name, options.GracePeriodSeconds, token))
+                return Stopped();
+            }
+
+            try
+            {
+                // CancellationToken.None: once sent, the call finishes and its real outcome is reported.
+                switch (await operations.EvictPodAsync(secret, ns, name, options.GracePeriodSeconds, CancellationToken.None))
                 {
                     case K8sEvictionOutcome.Evicted:
                         return new DrainPodResult(ns, name, DrainPodOutcome.Evicted, null);
@@ -149,25 +156,55 @@ public sealed class DrainNodeCommandHandler(
                 blocked = true;
                 if (options.Force)
                 {
-                    await operations.DeletePodAsync(secret, ns, name, options.GracePeriodSeconds, token);
+                    await operations.DeletePodAsync(secret, ns, name, options.GracePeriodSeconds, CancellationToken.None);
                     return new DrainPodResult(ns, name, DrainPodOutcome.Deleted, "forced past a PodDisruptionBudget");
                 }
-
-                await Task.Delay(PdbRetryInterval, clock, token);
             }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Draining pod {Namespace}/{Name} failed.", ns, name);
+                return new DrainPodResult(ns, name, DrainPodOutcome.Failed, FriendlyKubernetesError.From(ex));
+            }
+            finally
+            {
+                gate.Release();
+            }
+
+            try
+            {
+                await Task.Delay(PdbRetryInterval, clock, token); // slot released: other pods go meanwhile
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return Stopped();
+            }
+        }
+
+        DrainPodResult? Stopped() => blocked
+            ? new DrainPodResult(ns, name, DrainPodOutcome.Blocked,
+                $"PodDisruptionBudget still blocking ({(deadline.IsCancellationRequested ? "timed out" : "stopped")})")
+            : null;
+    }
+
+    /// <summary>Takes a slot unless stopped or out of time (also when the stop raced the slot being granted).</summary>
+    private static async Task<bool> TryEnterAsync(SemaphoreSlim gate, CancellationToken token)
+    {
+        try
+        {
+            await gate.WaitAsync(token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            var why = deadline.IsCancellationRequested ? "timed out" : "stopped";
-            return blocked
-                ? new DrainPodResult(ns, name, DrainPodOutcome.Blocked, $"PodDisruptionBudget still blocking ({why})")
-                : new DrainPodResult(ns, name, DrainPodOutcome.Failed, why);
+            return false;
         }
-        catch (Exception ex)
+
+        if (!token.IsCancellationRequested)
         {
-            logger.LogError(ex, "Draining pod {Namespace}/{Name} failed.", ns, name);
-            return new DrainPodResult(ns, name, DrainPodOutcome.Failed, FriendlyKubernetesError.From(ex));
+            return true;
         }
+
+        gate.Release();
+        return false;
     }
 
     private Task AuditAsync(K8sTarget target, DrainOptions options, DrainResult result, int total)

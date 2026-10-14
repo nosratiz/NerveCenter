@@ -115,6 +115,32 @@ public class DrainDialogTests : K8sPageTestBase
     }
 
     [Fact]
+    public async Task Delete_emptyDir_data_defaults_to_unchecked_like_kubectl()
+    {
+        Operations.GetDrainInputsAsync(Secret, NodeName, Arg.Any<CancellationToken>())
+            .Returns(Inputs([Pod("checkout", "cache-1", "Deployment", "cache", emptyDir: true)]) with { Node = NotReadyNode });
+        var (cut, _) = await ShowAsync(prod: false);
+
+        ((AngleSharp.Html.Dom.IHtmlInputElement)cut.Find(".k8s-drain-emptydir input")).IsChecked.Should().BeFalse();
+
+        cut.Find(".k8s-drain-run").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".k8s-drain-summary").TextContent.Should().Contain("1 skipped"), TimeSpan.FromSeconds(5));
+        await Operations.DidNotReceiveWithAnyArgs().EvictPodAsync(default!, default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task Grace_period_cannot_go_below_one_second()
+    {
+        var (cut, _) = await ShowAsync();
+
+        cut.Find(".k8s-drain-grace input").GetAttribute("min").Should().Be("1");
+        cut.Find(".k8s-drain-grace input").Input("0");
+
+        cut.WaitForAssertion(() => Tile(cut, "k8s-drain-time").Should().Be("~7s"));
+    }
+
+    [Fact]
     public async Task On_prod_the_drain_button_stays_disabled_until_the_exact_node_name_is_typed()
     {
         var (cut, _) = await ShowAsync(prod: true);
@@ -182,14 +208,18 @@ public class DrainDialogTests : K8sPageTestBase
             .Returns(_ => gate.Task);
         var (cut, _) = await ShowAsync(prod: false);
 
+        cut.FindAll(".mud-dialog .mud-button-close").Should().HaveCount(1, "the title-bar close is there before the drain starts");
+
         cut.Find(".k8s-drain-run").Click();
         cut.WaitForAssertion(() => cut.FindAll(".k8s-drain-stop").Should().HaveCount(1));
         cut.FindAll(".k8s-drain-cancel").Should().BeEmpty();
+        cut.WaitForAssertion(() => cut.FindAll(".mud-dialog .mud-button-close").Should().BeEmpty("closing mid-drain would cancel it without a summary"));
 
         cut.Find(".k8s-drain-stop").Click();
         gate.SetResult(K8sEvictionOutcome.Evicted);
 
         cut.WaitForAssertion(() => cut.Find(".k8s-drain-summary").TextContent.Should().Contain("Stopped"), TimeSpan.FromSeconds(5));
+        cut.WaitForAssertion(() => cut.FindAll(".mud-dialog .mud-button-close").Should().HaveCount(1));
         await Audit.Received(1).RecordAsync("k8s.node.drain", Arg.Any<string>(), ActionRisk.Destructive, false,
             Arg.Is<string?>(d => d!.Contains("cancelled after 5 of 33")), Arg.Any<CancellationToken>());
     }

@@ -10,7 +10,8 @@
 @* Drain (mockup 3h, spec §10.1): the eviction preview grouped by what will happen, PDB-blocked pods on top, the options,
    and — on PROD — type-the-node-name. This dialog is the confirmation: it does not also call IConfirmationService.
    "Cordon only" is the Mutating escape hatch. While draining it shows per-pod progress; Stop cancels (the node stays
-   cordoned). *@
+   cordoned). The title-bar close and Escape are off while draining: closing would dispose the dialog and stop the drain
+   with no summary, so Stop is the only way out. *@
 <MudDialog Class="k8s-drain-dialog">
     <TitleContent>
         <div class="k8s-drain-title">
@@ -101,7 +102,7 @@
     private DrainPlan? _plan;
     private string? _error;
     private string _filter = "";
-    private bool _emptyDir = true; // mockup 3h ships it checked
+    private bool _emptyDir; // kubectl's default (mockup 3h showed it checked): emptyDir data is lost, so opt in
     private bool _force;
     private int _grace = DefaultGraceSeconds;
     private string _confirm = "";
@@ -190,7 +191,7 @@
             <MudCheckBox T="bool" Class="k8s-drain-emptydir" @bind-Value="_emptyDir" Label="Delete emptyDir data" Dense="true" />
             <MudCheckBox T="bool" Class="k8s-drain-force" @bind-Value="_force" Label="@ForceLabel(plan)" Color="Color.Error" Dense="true" />
             <MudNumericField T="int" Class="k8s-drain-grace" Label="Grace period (s)" Value="_grace" ValueChanged="OnGraceChanged"
-                             Min="0" Max="3600" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                             Min="1" Max="3600" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
         </div>
         @if (IsProd)
         {
@@ -271,7 +272,7 @@
         }
     }
 
-    private void OnGraceChanged(int value) => _grace = Math.Clamp(value, 0, 3600);
+    private void OnGraceChanged(int value) => _grace = Math.Clamp(value, 1, 3600);
 
     private async Task CordonOnlyAsync()
     {
@@ -311,6 +312,8 @@
         _running = true;
         _error = null;
         _total = _plan.Pods.Count(p => p.Group != DrainGroup.DaemonSet);
+        var closable = MudDialog.Options;
+        await MudDialog.SetOptionsAsync(closable with { CloseButton = false, CloseOnEscapeKey = false });
         var progress = new UiProgress(p => InvokeAsync(() => OnProgress(p)));
         try
         {
@@ -338,6 +341,10 @@
         {
             _running = false;
             _busy = false;
+            if (!_disposed)
+            {
+                await MudDialog.SetOptionsAsync(closable);
+            }
         }
     }
 

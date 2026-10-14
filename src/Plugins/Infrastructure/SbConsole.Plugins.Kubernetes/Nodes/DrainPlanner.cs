@@ -62,6 +62,11 @@ public static class DrainPlanner
             var note = pdb.Rule.StartsWith("minAvailable", StringComparison.Ordinal)
                 ? $"PDB {pdb.Name} {pdb.Rule} · now {pdb.CurrentHealthy.ToString(CultureInfo.InvariantCulture)}"
                 : $"PDB {pdb.Name} {pdb.Rule}";
+            if (pod.Owner is null)
+            {
+                note += " · no controller"; // the drain skips it without Force whatever the PDB says
+            }
+
             return new DrainPodPlan(pod, DrainGroup.BlockedByPdb, note, pod.HasEmptyDir);
         }
 

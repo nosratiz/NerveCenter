@@ -144,7 +144,7 @@ public class DrainOperationsTests(K3sFixture k3s)
             var handler = Handler(ScopedOperations(), id);
             handler.Deadline = TimeSpan.FromSeconds(20);
 
-            var blocked = await handler.HandleAsync(new DrainCommand(target, new DrainOptions(false, false, 0)), null);
+            var blocked = await handler.HandleAsync(new DrainCommand(target, new DrainOptions(false, false, 1)), null);
 
             blocked.IsSuccess.Should().BeTrue();
             blocked.Value!.TimedOut.Should().BeTrue();
@@ -152,7 +152,7 @@ public class DrainOperationsTests(K3sFixture k3s)
             (await k3s.Admin.CoreV1.ReadNodeAsync(node)).Spec.Unschedulable.Should().BeTrue("drain cordons first");
 
             var forced = await Handler(ScopedOperations(), id)
-                .HandleAsync(new DrainCommand(target, new DrainOptions(false, true, 0)), null);
+                .HandleAsync(new DrainCommand(target, new DrainOptions(false, true, 1)), null);
 
             forced.Value!.Pods.Should().HaveCount(2).And.OnlyContain(p => p.Outcome == DrainPodOutcome.Deleted);
             forced.Value.TimedOut.Should().BeFalse();
