@@ -23,7 +23,7 @@ public class OverviewSnapshotStoreTests
             problemWorkloads: [Job(), Deployment(available: 1, conditions: [new K8sCondition("Available", "False", "MinimumReplicasUnavailable", "m", T0)])],
             warnings: [Warning(), Warning(reason: "FailedScheduling")]) with
         {
-            CpuUsageFraction = 0.42, MemUsageFraction = 0.17, CpuLimitsMilli = 1200, MemLimitsBytes = 1L << 31,
+            CpuUsageFraction = 0.42, MemUsageFraction = 0.17, CpuLimitsMilli = 1200, MemLimitsBytes = 1L << 31, NodesForbidden = true,
         };
         var snapshot = new OverviewSnapshot(overview, T0.AddMinutes(1), ["checkout", "payments"]);
 
@@ -35,6 +35,7 @@ public class OverviewSnapshotStoreTests
         state.LastGood.Should().BeEquivalentTo(snapshot);
         state.LastGood!.Overview.ProblemWorkloads[1].IsUnhealthy.Should().BeTrue();
         state.LastGood.Overview.Nodes[1].Labels["agentpool"].Should().Be("system");
+        state.LastGood.Overview.NodesForbidden.Should().BeTrue();
         state.LastFailureAt.Should().BeNull();
     }
 

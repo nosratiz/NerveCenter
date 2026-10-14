@@ -143,9 +143,21 @@ public sealed class K3sFixture : IAsyncLifetime
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 409)
         {
-            var existing = await Admin.AppsV1.ReadNamespacedDeploymentAsync(deployment.Metadata.Name, ns);
-            deployment.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-            return await Admin.AppsV1.ReplaceNamespacedDeploymentAsync(deployment, deployment.Metadata.Name, ns);
+            // Already exists: replace it. The controller keeps bumping the resourceVersion (status updates) of a freshly
+            // created Deployment, so a read-then-replace can itself hit 409; re-read and retry a few times.
+            for (var attempt = 1; ; attempt++)
+            {
+                var existing = await Admin.AppsV1.ReadNamespacedDeploymentAsync(deployment.Metadata.Name, ns);
+                deployment.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+                try
+                {
+                    return await Admin.AppsV1.ReplaceNamespacedDeploymentAsync(deployment, deployment.Metadata.Name, ns);
+                }
+                catch (HttpOperationException conflict) when ((int)conflict.Response.StatusCode == 409 && attempt < 10)
+                {
+                    await Task.Delay(100);
+                }
+            }
         }
     }
 

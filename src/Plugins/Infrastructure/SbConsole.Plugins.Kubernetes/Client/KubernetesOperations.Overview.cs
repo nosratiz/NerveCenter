@@ -45,7 +45,8 @@ public sealed partial class KubernetesOperations
         // A cluster-wide pod list has every pod (node requests stay accurate); counts use only the selected namespaces.
         var allPods = podsTask.Result;
         var summaries = allPods.Select(K8sMappers.Pod).ToList();
-        var nodes = NodesWithPods(nodesTask.Result, summaries);
+        var (nodeList, nodesForbidden) = nodesTask.Result;
+        var nodes = NodesWithPods(nodeList, summaries);
         var scoped = summaries.Where(p => InScope(p.Namespace)).ToList();
 
         var limits = allPods
@@ -85,20 +86,21 @@ public sealed partial class KubernetesOperations
             limits.Cpu,
             limits.Mem,
             usage is { } u && cpuAllocatable > 0 ? (double)u.Cpu / cpuAllocatable : null,
-            usage is { } m && memAllocatable > 0 ? (double)m.Mem / memAllocatable : null);
+            usage is { } m && memAllocatable > 0 ? (double)m.Mem / memAllocatable : null,
+            nodesForbidden);
     }
 
-    /// <summary>Nodes are cluster-scoped; an account that can't list them (e.g. the built-in "view" role) just sees none.</summary>
-    private async Task<IList<V1Node>> ListNodesOrEmptyAsync(IKubernetes client, CancellationToken ct)
+    /// <summary>Nodes are cluster-scoped; an account that can't list them (e.g. the built-in "view" role) sees none, flagged as forbidden.</summary>
+    private async Task<(IList<V1Node> Nodes, bool Forbidden)> ListNodesOrEmptyAsync(IKubernetes client, CancellationToken ct)
     {
         try
         {
-            return (await client.CoreV1.ListNodeAsync(cancellationToken: ct)).Items;
+            return ((await client.CoreV1.ListNodeAsync(cancellationToken: ct)).Items, false);
         }
         catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
         {
             logger.LogDebug("Listing nodes is forbidden; the overview shows no nodes");
-            return [];
+            return ([], true);
         }
     }
 
@@ -174,12 +176,24 @@ public sealed partial class KubernetesOperations
             // Namespace-scoped account: fall back to one list per selected namespace.
         }
 
-        var tasks = namespaces.Distinct(StringComparer.Ordinal).Select(async ns =>
+        return await PerNamespaceAsync(namespaces, one, gate, ct);
+    }
+
+    /// <summary>One list per distinct namespace through the shared <paramref name="gate"/>, concatenated.</summary>
+    internal static Task<IReadOnlyList<T>> PerNamespaceAsync<T>(
+        IReadOnlyList<string> namespaces, Func<string, Task<IList<T>>> one, SemaphoreSlim gate, CancellationToken ct) =>
+        FanOutAsync(namespaces.Distinct(StringComparer.Ordinal).ToList(), one, gate, ct);
+
+    /// <summary>Runs <paramref name="one"/> per item, at most the <paramref name="gate"/>'s count at a time, concatenating the results.</summary>
+    internal static async Task<IReadOnlyList<T>> FanOutAsync<TItem, T>(
+        IReadOnlyList<TItem> items, Func<TItem, Task<IList<T>>> one, SemaphoreSlim gate, CancellationToken ct)
+    {
+        var tasks = items.Select(async item =>
         {
             await gate.WaitAsync(ct);
             try
             {
-                return await one(ns);
+                return await one(item);
             }
             finally
             {

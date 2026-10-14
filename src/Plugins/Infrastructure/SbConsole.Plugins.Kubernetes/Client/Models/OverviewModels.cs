@@ -8,4 +8,5 @@ public sealed record K8sOverview(
     IReadOnlyList<K8sPodSummary> ProblemPods /*CrashLoopBackOff, Pending-unschedulable, Failed*/,
     IReadOnlyList<K8sWorkload> ProblemWorkloads /*unhealthy Deployments + failed Jobs*/,
     IReadOnlyList<K8sEvent> RecentWarnings /*last 1 h, newest first, max 50*/, int WarningCount,
-    long CpuLimitsMilli, long MemLimitsBytes, double? CpuUsageFraction, double? MemUsageFraction);
+    long CpuLimitsMilli, long MemLimitsBytes, double? CpuUsageFraction, double? MemUsageFraction,
+    bool NodesForbidden = false /*the account can't list nodes: node-derived figures are unknown, not zero*/);

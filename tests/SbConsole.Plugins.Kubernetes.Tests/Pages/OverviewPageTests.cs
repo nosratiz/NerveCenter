@@ -112,6 +112,24 @@ public class OverviewPageTests : K8sPageTestBase
     }
 
     [Fact]
+    public void Forbidden_nodes_show_dashes_and_not_permitted_instead_of_all_ready()
+    {
+        Arrange(TestData.OverviewWith(nodes: []) with { NodesForbidden = true });
+        var cut = RenderPage();
+
+        var nodes = cut.Find(".k8s-tile-nodes");
+        nodes.QuerySelector(".k8s-tile-number")!.TextContent.Should().Be("—");
+        nodes.TextContent.Should().Contain("not permitted for this account").And.NotContain("all ready").And.NotContain("/ 0");
+        nodes.ClassList.Should().NotContain("k8s-warning");
+        cut.FindAll(".k8s-tile-nodes .k8s-tile-meter").Should().BeEmpty();
+        cut.Find(".k8s-tile-cpu .k8s-tile-number").TextContent.Should().Be("—");
+        cut.Find(".k8s-tile-cpu").TextContent.Should().Contain("not permitted").And.NotContain("cores");
+        cut.Find(".k8s-tile-memory .k8s-tile-number").TextContent.Should().Be("—");
+        cut.Find(".k8s-tile-memory").TextContent.Should().Contain("not permitted").And.NotContain("free");
+        cut.Find(".k8s-cluster-header").TextContent.Should().NotContain("0 nodes");
+    }
+
+    [Fact]
     public void Attention_items_are_worst_first_with_links_carrying_the_connection_id()
     {
         Arrange(TestData.Overview());

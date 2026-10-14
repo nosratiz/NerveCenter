@@ -129,7 +129,7 @@ public sealed class KubernetesPlugin : IPlugin
         return (overview, error);
     }
 
-    /// <summary>Nodes ready and crash-looping pods across the whole cluster; any failure reports nothing.</summary>
+    /// <summary>Nodes ready (omitted when nodes are forbidden) and crash-looping pods across the whole cluster; any failure reports nothing.</summary>
     public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
     {
         if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { Overview: { } overview })
@@ -137,11 +137,12 @@ public sealed class KubernetesPlugin : IPlugin
             return [];
         }
 
-        return
-        [
-            new PluginDashboardMetric("Nodes ready", overview.Nodes.Count(n => n.ReadyStatus == "True")),
-            new PluginDashboardMetric("Crash loops", overview.ProblemPods.Count(p => p.Status == "CrashLoopBackOff")),
-        ];
+        var crashLoops = new PluginDashboardMetric("Crash loops", overview.ProblemPods.Count(p => p.Status == "CrashLoopBackOff"));
+
+        // An account that can't list nodes doesn't know how many are ready; reporting 0 would read as an outage.
+        return overview.NodesForbidden
+            ? [crashLoops]
+            : [new PluginDashboardMetric("Nodes ready", overview.Nodes.Count(n => n.ReadyStatus == "True")), crashLoops];
     }
 
     /// <summary>The top five Needs-attention items, linking to plain page hrefs (the host adds no connectionId).</summary>

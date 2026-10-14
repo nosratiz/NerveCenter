@@ -55,6 +55,61 @@ public class EventOperationsTests(K3sFixture k3s)
         events.First(IsCrasherBackOff).Reporter.Should().Be("kubelet");
     }
 
+    [DockerFact]
+    public async Task K3s_supports_per_object_field_selectors_on_both_event_apis()
+    {
+        await CreateCrasherAsync();
+        await K3sFixture.WaitAsync(async () =>
+            (await k3s.Admin.CoreV1.ListNamespacedEventAsync(Ns, fieldSelector: "involvedObject.kind=Pod,involvedObject.name=crasher")).Items.Count > 0,
+            TimeSpan.FromSeconds(90));
+
+        var v1 = await k3s.Admin.EventsV1.ListNamespacedEventAsync(Ns, fieldSelector: "regarding.kind=Pod,regarding.name=crasher");
+        var core = await k3s.Admin.CoreV1.ListNamespacedEventAsync(Ns, fieldSelector: "involvedObject.kind=Pod,involvedObject.name=crasher");
+        var none = await k3s.Admin.EventsV1.ListNamespacedEventAsync(Ns, fieldSelector: "regarding.kind=Pod,regarding.name=no-such-pod");
+
+        v1.Items.Should().NotBeEmpty().And.OnlyContain(e => e.Regarding.Kind == "Pod" && e.Regarding.Name == "crasher");
+        core.Items.Should().NotBeEmpty().And.OnlyContain(e => e.InvolvedObject.Kind == "Pod" && e.InvolvedObject.Name == "crasher");
+        none.Items.Should().BeEmpty();
+    }
+
+    [DockerFact]
+    public async Task Pod_detail_events_come_from_a_per_object_query_for_admin_and_viewer()
+    {
+        await CreateCrasherAsync();
+        var viewer = await k3s.ViewerSecretAsync();
+
+        foreach (var secret in new[] { k3s.AdminSecret, viewer })
+        {
+            K8sPodDetail? detail = null;
+            await K3sFixture.WaitAsync(async () =>
+            {
+                detail = await k3s.Operations.GetPodDetailAsync(secret, Ns, "crasher");
+                return detail!.Events.Any(IsCrasherBackOff);
+            }, TimeSpan.FromSeconds(90));
+
+            detail!.Events.Should().OnlyContain(e => e.Regarding.Kind == "Pod" && e.Regarding.Name == "crasher");
+        }
+    }
+
+    [DockerFact]
+    public async Task Events_for_a_selected_namespace_are_listed_per_namespace_for_admin_and_viewer()
+    {
+        await CreateCrasherAsync();
+        var viewer = await k3s.ViewerSecretAsync();
+
+        foreach (var secret in new[] { k3s.AdminSecret, viewer })
+        {
+            IReadOnlyList<K8sEvent> events = [];
+            await K3sFixture.WaitAsync(async () =>
+            {
+                events = await k3s.Operations.ListEventsAsync(secret, Scope, TimeSpan.FromHours(1));
+                return events.Any(IsCrasherBackOff);
+            }, TimeSpan.FromSeconds(90));
+
+            events.Should().OnlyContain(e => e.Namespace == Ns);
+        }
+    }
+
     private static bool IsCrasherBackOff(K8sEvent e) =>
         e is { Type: "Warning", Reason: "BackOff" } && e.Regarding.Kind == "Pod" && e.Regarding.Name == "crasher";
 
@@ -125,8 +180,21 @@ public class EventFetchTests
             .GetMethodInfo().GetParameters().Zip(substitute.ReceivedCalls().Single(c => c.GetMethodInfo().Name == method).GetArguments())
             .Single(p => p.First.Name == "fieldSelector").Second as string;
 
+    private static IReadOnlyList<string?> FieldSelectors(object substitute, string method) =>
+        substitute.ReceivedCalls().Where(c => c.GetMethodInfo().Name == method)
+            .Select(c => c.GetMethodInfo().GetParameters().Zip(c.GetArguments()).Single(p => p.First.Name == "fieldSelector").Second as string)
+            .ToList();
+
+    private static void CoreNamespacedReturns(ICoreV1Operations coreV1) =>
+        coreV1.ListNamespacedEventWithHttpMessagesAsync(default!, default, default, default, default, default, default, default, default, default,
+                default, default, default, default, default)
+            .ReturnsForAnyArgs(ci => new HttpOperationResponse<Corev1EventList>
+            {
+                Body = new Corev1EventList { Items = [CoreEvent((string)ci[0], "Warning", "BackOff")] },
+            });
+
     [Fact]
-    public async Task The_first_403_on_events_k8s_io_falls_back_to_core_v1_without_a_per_namespace_pass()
+    public async Task All_namespaces_lists_cluster_wide_and_the_first_403_falls_back_to_core_v1_cluster_wide()
     {
         var (client, eventsV1, coreV1) = Client();
         coreV1.ListEventForAllNamespacesWithHttpMessagesAsync(default, default, default, default, default, default, default, default, default, default,
@@ -137,38 +205,105 @@ public class EventFetchTests
             });
         using var gate = new SemaphoreSlim(KubernetesOperations.MaxNamespaceFanOut);
 
-        var events = await KubernetesOperations.FetchEventsAsync(client, ["checkout", "payments"], null, gate,
-            NullLogger.Instance, CancellationToken.None);
+        var events = await KubernetesOperations.FetchEventsAsync(client, [], null, gate, NullLogger.Instance, CancellationToken.None);
 
         events.Should().ContainSingle().Which.Should().Be(new K8sEvent("checkout", "Warning", "BackOff", "m",
             new K8sRef("Pod", "checkout", "api-1"), 3, Now.AddMinutes(-1), "kubelet"));
         Calls(eventsV1, nameof(IEventsV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(1);
         Calls(eventsV1, nameof(IEventsV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be(0);
         Calls(coreV1, nameof(ICoreV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(1);
+        Calls(coreV1, nameof(ICoreV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be(0);
         FieldSelector(coreV1, nameof(ICoreV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().BeNull();
     }
 
     [Fact]
-    public async Task A_type_filter_becomes_a_field_selector_and_core_v1_still_falls_back_per_namespace()
+    public async Task Selected_namespaces_are_listed_per_namespace_never_cluster_wide()
     {
         var (client, eventsV1, coreV1) = Client();
-        coreV1.ListEventForAllNamespacesWithHttpMessagesAsync(default, default, default, default, default, default, default, default, default, default,
-            default, default, default, default).ThrowsAsyncForAnyArgs(Forbidden());
-        coreV1.ListNamespacedEventWithHttpMessagesAsync(default!, default, default, default, default, default, default, default, default, default,
+        eventsV1.ListNamespacedEventWithHttpMessagesAsync(default!, default, default, default, default, default, default, default, default, default,
                 default, default, default, default, default)
-            .ReturnsForAnyArgs(ci => new HttpOperationResponse<Corev1EventList>
+            .ReturnsForAnyArgs(ci => new HttpOperationResponse<Eventsv1EventList>
             {
-                Body = new Corev1EventList { Items = [CoreEvent((string)ci[0], "Warning", "BackOff")] },
+                Body = new Eventsv1EventList
+                {
+                    Items =
+                    [
+                        new Eventsv1Event
+                        {
+                            Metadata = new V1ObjectMeta { Name = "e", NamespaceProperty = (string)ci[0] },
+                            Regarding = new V1ObjectReference { Kind = "Pod", Name = "api-1", NamespaceProperty = (string)ci[0] },
+                            Type = "Normal", Reason = "Pulled", Note = "n", EventTime = Now.UtcDateTime,
+                        },
+                    ],
+                },
             });
         using var gate = new SemaphoreSlim(KubernetesOperations.MaxNamespaceFanOut);
 
-        var events = await KubernetesOperations.FetchEventsAsync(client, ["checkout"], "Warning", gate,
+        var events = await KubernetesOperations.FetchEventsAsync(client, ["checkout", "payments"], null, gate,
             NullLogger.Instance, CancellationToken.None);
 
-        events.Should().ContainSingle().Which.Namespace.Should().Be("checkout");
-        FieldSelector(eventsV1, nameof(IEventsV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be("type=Warning");
-        FieldSelector(coreV1, nameof(ICoreV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be("type=Warning");
-        Calls(eventsV1, nameof(IEventsV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be(0);
+        events.Select(e => e.Namespace).Should().BeEquivalentTo(["checkout", "payments"]);
+        Calls(eventsV1, nameof(IEventsV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(0);
+        Calls(eventsV1, nameof(IEventsV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be(2);
+        Calls(coreV1, nameof(ICoreV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(0);
+        Calls(coreV1, nameof(ICoreV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Selected_namespaces_fall_back_to_core_v1_per_namespace_with_the_type_selector()
+    {
+        var (client, eventsV1, coreV1) = Client();
+        CoreNamespacedReturns(coreV1);
+        using var gate = new SemaphoreSlim(KubernetesOperations.MaxNamespaceFanOut);
+
+        var events = await KubernetesOperations.FetchEventsAsync(client, ["checkout", "payments"], "Warning", gate,
+            NullLogger.Instance, CancellationToken.None);
+
+        events.Select(e => e.Namespace).Should().BeEquivalentTo(["checkout", "payments"]);
+        FieldSelectors(eventsV1, nameof(IEventsV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().OnlyContain(f => f == "type=Warning");
+        FieldSelectors(coreV1, nameof(ICoreV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().Equal("type=Warning", "type=Warning");
+        Calls(eventsV1, nameof(IEventsV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(0);
+        Calls(coreV1, nameof(ICoreV1Operations.ListEventForAllNamespacesWithHttpMessagesAsync)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Object_events_use_one_regarding_selector_per_object()
+    {
+        var (client, eventsV1, _) = Client();
+        eventsV1.ListNamespacedEventWithHttpMessagesAsync(default!, default, default, default, default, default, default, default, default, default,
+                default, default, default, default, default)
+            .ReturnsForAnyArgs(new HttpOperationResponse<Eventsv1EventList> { Body = new Eventsv1EventList { Items = [] } });
+
+        await KubernetesOperations.ObjectEventsAsync(client, "checkout", [("Deployment", "web"), ("ReplicaSet", "web-1"), ("Pod", "web-1-a")],
+            NullLogger.Instance, CancellationToken.None);
+
+        FieldSelectors(eventsV1, nameof(IEventsV1Operations.ListNamespacedEventWithHttpMessagesAsync)).Should().BeEquivalentTo(
+            "regarding.kind=Deployment,regarding.name=web", "regarding.kind=ReplicaSet,regarding.name=web-1", "regarding.kind=Pod,regarding.name=web-1-a");
+    }
+
+    [Fact]
+    public async Task Object_events_fall_back_to_core_v1_involved_object_selectors()
+    {
+        var (client, _, coreV1) = Client();
+        CoreNamespacedReturns(coreV1);
+
+        var events = await KubernetesOperations.ObjectEventsAsync(client, "checkout", [("Pod", "api-1")], NullLogger.Instance, CancellationToken.None);
+
+        events.Should().ContainSingle().Which.Regarding.Should().Be(new K8sRef("Pod", "checkout", "api-1"));
+        FieldSelectors(coreV1, nameof(ICoreV1Operations.ListNamespacedEventWithHttpMessagesAsync))
+            .Should().Equal("involvedObject.kind=Pod,involvedObject.name=api-1");
+    }
+
+    [Fact]
+    public async Task Object_events_are_empty_when_both_event_apis_are_forbidden()
+    {
+        var (client, _, coreV1) = Client();
+        coreV1.ListNamespacedEventWithHttpMessagesAsync(default!, default, default, default, default, default, default, default, default, default,
+            default, default, default, default, default).ThrowsAsyncForAnyArgs(Forbidden());
+
+        var events = await KubernetesOperations.ObjectEventsAsync(client, "checkout", [("Pod", "api-1")], NullLogger.Instance, CancellationToken.None);
+
+        events.Should().BeEmpty();
     }
 
     [Fact]

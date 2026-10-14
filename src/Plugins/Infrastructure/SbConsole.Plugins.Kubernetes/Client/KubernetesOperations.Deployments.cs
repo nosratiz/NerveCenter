@@ -33,24 +33,40 @@ public sealed partial class KubernetesOperations
         var podsTask = client.CoreV1.ListNamespacedPodAsync(ns, labelSelector: selector.Length == 0 ? null : selector, cancellationToken: ct);
         var servicesTask = MatchingServicesAsync(client, ns, templateLabels, ct);
         var hpaTask = FindHpaAsync(client, K8sWorkloadKind.Deployment, ns, name, ct);
-        var eventsTask = NamespaceEventsAsync(client, ns, ct);
-        await Task.WhenAll(replicaSetsTask, podsTask, servicesTask, hpaTask, eventsTask);
 
-        var replicaSets = replicaSetsTask.Result
-            .Select(rs => K8sMappers.ReplicaSet(rs, currentRevision))
-            .OrderByDescending(r => r.Revision)
-            .ToList();
-        var rsNames = replicaSets.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
-        var pods = podsTask.Result.Items
-            .Select(K8sMappers.Pod)
-            .Where(p => p.ReplicaSet is not null && rsNames.Contains(p.ReplicaSet))
-            .OrderBy(p => p.Name, StringComparer.Ordinal)
-            .ToList();
+        // The ReplicaSets and pods this page shows, once both lists are in.
+        async Task<(List<K8sReplicaSet> ReplicaSets, List<K8sPodSummary> Pods)> OwnedAsync()
+        {
+            await Task.WhenAll(replicaSetsTask, podsTask);
+            var replicaSets = replicaSetsTask.Result
+                .Select(rs => K8sMappers.ReplicaSet(rs, currentRevision))
+                .OrderByDescending(r => r.Revision)
+                .ToList();
+            var rsNames = replicaSets.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+            var pods = podsTask.Result.Items
+                .Select(K8sMappers.Pod)
+                .Where(p => p.ReplicaSet is not null && rsNames.Contains(p.ReplicaSet))
+                .OrderBy(p => p.Name, StringComparer.Ordinal)
+                .ToList();
+            return (replicaSets, pods);
+        }
 
-        var related = new HashSet<string>(rsNames, StringComparer.Ordinal) { name };
-        related.UnionWith(pods.Select(p => p.Name));
+        // Events about the Deployment, its ReplicaSets and its pods only: one field-selected query per object instead of
+        // the whole namespace's events on every poll.
+        var ownedTask = OwnedAsync();
+        async Task<IReadOnlyList<K8sEvent>> EventsAsync()
+        {
+            var (rs, ps) = await ownedTask;
+            IReadOnlyList<(string, string)> objects =
+                [("Deployment", name), .. rs.Select(r => ("ReplicaSet", r.Name)), .. ps.Select(p => ("Pod", p.Name))];
+            return await ObjectEventsAsync(client, ns, objects, logger, ct);
+        }
+
+        var eventsTask = EventsAsync();
+        await Task.WhenAll(ownedTask, servicesTask, hpaTask, eventsTask);
+
+        var (replicaSets, pods) = ownedTask.Result;
         var events = eventsTask.Result
-            .Where(e => e.Regarding.Kind is "Deployment" or "ReplicaSet" or "Pod" && related.Contains(e.Regarding.Name))
             .OrderByDescending(e => e.LastSeen)
             .Take(MaxDeploymentEvents)
             .ToList();
@@ -142,29 +158,6 @@ public sealed partial class KubernetesOperations
         catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
         {
             logger.LogDebug("Listing Services or EndpointSlices in {Namespace} is forbidden; the detail shows no Service", ns);
-            return [];
-        }
-    }
-
-    /// <summary>All events in one namespace (events.k8s.io, core/v1 when that is forbidden; none when both are).</summary>
-    private async Task<IReadOnlyList<K8sEvent>> NamespaceEventsAsync(IKubernetes client, string ns, CancellationToken ct)
-    {
-        try
-        {
-            return (await client.EventsV1.ListNamespacedEventAsync(ns, cancellationToken: ct)).Items.Select(K8sMappers.Event).ToList();
-        }
-        catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
-        {
-            logger.LogDebug("Listing events.k8s.io events in {Namespace} is forbidden; reading core/v1 events instead", ns);
-        }
-
-        try
-        {
-            return (await client.CoreV1.ListNamespacedEventAsync(ns, cancellationToken: ct)).Items.Select(K8sMappers.Event).ToList();
-        }
-        catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
-        {
-            logger.LogDebug("Listing events in {Namespace} is forbidden; the detail shows none", ns);
             return [];
         }
     }

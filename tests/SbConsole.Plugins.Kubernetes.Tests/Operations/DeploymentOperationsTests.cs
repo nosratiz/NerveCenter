@@ -110,7 +110,9 @@ public class DeploymentOperationsTests(K3sFixture k3s)
             await K3sFixture.WaitAsync(async () =>
             {
                 detail = await k3s.Operations.GetDeploymentDetailAsync(k3s.AdminSecret, Ns, name);
-                return detail!.Pods.Select(p => p.ReplicaSet).Distinct().Count() == 2;
+                // Events are recorded asynchronously by the controllers, so wait for the Deployment's own as well.
+                return detail!.Pods.Select(p => p.ReplicaSet).Distinct().Count() == 2
+                    && detail.Events.Any(e => e.Regarding.Kind == "Deployment" && e.Reason == "ScalingReplicaSet");
             }, TimeSpan.FromMinutes(2));
 
             detail!.Deployment.Name.Should().Be(name);
@@ -131,6 +133,10 @@ public class DeploymentOperationsTests(K3sFixture k3s)
             detail.ReplicaSets.Single(r => !r.IsCurrent).Images.Should().Equal(GoodImage);
             detail.Pods.Should().OnlyContain(p => p.Namespace == Ns && detail.ReplicaSets.Any(r => r.Name == p.ReplicaSet));
             detail.Services.Select(s => s.Name).Should().Equal(name);
+            detail.Events.Should().Contain(e => e.Regarding.Kind == "Deployment" && e.Regarding.Name == name && e.Reason == "ScalingReplicaSet",
+                "Deployment events come from a per-object field selector");
+            var related = detail.ReplicaSets.Select(r => r.Name).Concat(detail.Pods.Select(p => p.Name)).Append(name).ToHashSet();
+            detail.Events.Should().OnlyContain(e => related.Contains(e.Regarding.Name));
         }
         finally
         {

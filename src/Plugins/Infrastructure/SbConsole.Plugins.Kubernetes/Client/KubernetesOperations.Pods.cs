@@ -30,11 +30,10 @@ public sealed partial class KubernetesOperations
         var ownerTask = OwnerMetaAsync(client, ns, K8sMappers.ControllerOf(pod.Metadata), ct);
         var nodeTask = NodeHealthAsync(client, pod.Spec?.NodeName, ct);
         var mapsTask = ConfigMapsAsync(client, ns, K8sMappers.ReferencedConfigMaps(pod), ct);
-        var eventsTask = NamespaceEventsAsync(client, ns, ct);
+        var eventsTask = ObjectEventsAsync(client, ns, [("Pod", name)], logger, ct);
         await Task.WhenAll(ownerTask, nodeTask, mapsTask, eventsTask);
 
         var events = eventsTask.Result
-            .Where(e => e.Regarding.Kind == "Pod" && e.Regarding.Name == name)
             .OrderByDescending(e => e.LastSeen)
             .Take(MaxPodEvents)
             .ToList();

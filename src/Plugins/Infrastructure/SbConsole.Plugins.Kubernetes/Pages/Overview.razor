@@ -77,11 +77,18 @@
             </MudPaper>
 
             <div class="k8s-tiles">
-                <K8sStatTile Class="k8s-tile-nodes" Label="Nodes ready" Value="@ready.ToString(Inv)" Unit="@($"/ {o.Nodes.Count}")"
-                             Meter="@(o.Nodes.Count > 0 ? (double)ready / o.Nodes.Count : null)"
-                             MeterColor="@(ready < o.Nodes.Count ? Color.Warning : Color.Success)"
-                             Warning="@(ready < o.Nodes.Count)" Stale="@stale"
-                             Caption="@(notReady is null ? "all ready" : NotReadyCaption(notReady))" />
+                @if (o.NodesForbidden)
+                {
+                    <K8sStatTile Class="k8s-tile-nodes" Label="Nodes ready" Value="—" Stale="@stale" Caption="not permitted for this account" />
+                }
+                else
+                {
+                    <K8sStatTile Class="k8s-tile-nodes" Label="Nodes ready" Value="@ready.ToString(Inv)" Unit="@($"/ {o.Nodes.Count}")"
+                                 Meter="@(o.Nodes.Count > 0 ? (double)ready / o.Nodes.Count : null)"
+                                 MeterColor="@(ready < o.Nodes.Count ? Color.Warning : Color.Success)"
+                                 Warning="@(ready < o.Nodes.Count)" Stale="@stale"
+                                 Caption="@(notReady is null ? "all ready" : NotReadyCaption(notReady))" />
+                }
                 <K8sStatTile Class="k8s-tile-pods" Label="Pods" Value="@o.Pods.Running.ToString(Inv)" Unit="running" Stale="@stale"
                              Caption="@($"{o.Pods.Pending} pending · {o.Pods.Failed} failed · {o.Pods.Succeeded} succeeded")" />
                 <K8sStatTile Class="@("k8s-tile-crashloop" + (crashLoops.Count > 0 ? " k8s-error-outline" : ""))" Label="CrashLoopBackOff"
@@ -92,13 +99,21 @@
                         <MudLink Class="k8s-crashloop-link" Href="@Link(KubernetesPlugin.PodHref(crashLoops[0].Namespace, crashLoops[0].Name))" Typo="Typo.caption">Open pod →</MudLink>
                     }
                 </K8sStatTile>
-                <K8sStatTile Class="k8s-tile-cpu" Label="CPU requests" Value="@(cpuFraction is { } cf ? K8sFormat.Percent(cf) : "—")"
-                             Meter="cpuFraction" MeterColor="@MeterColor(cpuFraction)" Stale="@stale"
-                             Caption="@($"{K8sFormat.Cores(cpuReq)} / {K8sFormat.Cores(cpuAlloc)} cores · limits {K8sFormat.Cores(o.CpuLimitsMilli)}"
-                                       + (o.CpuUsageFraction is { } cpuUse ? $" · usage {K8sFormat.Percent(cpuUse)}" : ""))" />
-                <K8sStatTile Class="k8s-tile-memory" Label="Memory requests" Value="@(memFraction is { } mf ? K8sFormat.Percent(mf) : "—")"
-                             Meter="memFraction" MeterColor="@MeterColor(memFraction)" Stale="@stale"
-                             Caption="@($"{K8sFormat.Bytes(memReq)} / {K8sFormat.Bytes(memAlloc)} · {roomy} {(roomy == 1 ? "node" : "nodes")} with > 8 Gi free")" />
+                @if (o.NodesForbidden)
+                {
+                    <K8sStatTile Class="k8s-tile-cpu" Label="CPU requests" Value="—" Stale="@stale" Caption="not permitted" />
+                    <K8sStatTile Class="k8s-tile-memory" Label="Memory requests" Value="—" Stale="@stale" Caption="not permitted" />
+                }
+                else
+                {
+                    <K8sStatTile Class="k8s-tile-cpu" Label="CPU requests" Value="@(cpuFraction is { } cf ? K8sFormat.Percent(cf) : "—")"
+                                 Meter="cpuFraction" MeterColor="@MeterColor(cpuFraction)" Stale="@stale"
+                                 Caption="@($"{K8sFormat.Cores(cpuReq)} / {K8sFormat.Cores(cpuAlloc)} cores · limits {K8sFormat.Cores(o.CpuLimitsMilli)}"
+                                           + (o.CpuUsageFraction is { } cpuUse ? $" · usage {K8sFormat.Percent(cpuUse)}" : ""))" />
+                    <K8sStatTile Class="k8s-tile-memory" Label="Memory requests" Value="@(memFraction is { } mf ? K8sFormat.Percent(mf) : "—")"
+                                 Meter="memFraction" MeterColor="@MeterColor(memFraction)" Stale="@stale"
+                                 Caption="@($"{K8sFormat.Bytes(memReq)} / {K8sFormat.Bytes(memAlloc)} · {roomy} {(roomy == 1 ? "node" : "nodes")} with > 8 Gi free")" />
+                }
             </div>
         }
         else
@@ -484,7 +499,9 @@
         var pools = o.Nodes.Select(n => n.Pool).Where(p => p is not null).Distinct(StringComparer.Ordinal).Count();
         var nodes = $"{o.Nodes.Count} {(o.Nodes.Count == 1 ? "node" : "nodes")}" + (pools > 0 ? $" in {pools} {(pools == 1 ? "pool" : "pools")}" : "");
         var namespaces = $"{o.Cluster.NamespaceCount} {(o.Cluster.NamespaceCount == 1 ? "namespace" : "namespaces")}";
-        return $"server {o.Cluster.ServerVersion} · {nodes} · {namespaces}";
+        return o.NodesForbidden
+            ? $"server {o.Cluster.ServerVersion} · {namespaces}"
+            : $"server {o.Cluster.ServerVersion} · {nodes} · {namespaces}";
     }
 
     private string NotReadyCaption(K8sNodeInfo node) =>

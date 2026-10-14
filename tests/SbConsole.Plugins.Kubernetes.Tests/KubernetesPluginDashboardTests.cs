@@ -45,6 +45,16 @@ public class KubernetesPluginDashboardTests
     }
 
     [Fact]
+    public async Task Metrics_omit_nodes_ready_when_nodes_are_forbidden()
+    {
+        Returns("s", Troubled() with { Nodes = [], NodesForbidden = true });
+
+        var metrics = await Plugin().GetDashboardMetricsAsync("s");
+
+        metrics.Should().Equal(new PluginDashboardMetric("Crash loops", 2));
+    }
+
+    [Fact]
     public async Task Metrics_are_empty_on_failure_or_when_not_initialized()
     {
         _ops.GetOverviewAsync("s", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).ThrowsAsync(new HttpRequestException("x"));

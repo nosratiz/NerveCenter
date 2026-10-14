@@ -20,6 +20,7 @@ public class OverviewOperationsTests(K3sFixture k3s)
         var overview = await k3s.Operations.GetOverviewAsync(k3s.AdminSecret, []);
 
         overview.Nodes.Should().ContainSingle();
+        overview.NodesForbidden.Should().BeFalse();
         overview.Nodes[0].ReadyStatus.Should().Be("True");
         overview.Nodes[0].CpuAllocatableMilli.Should().BeGreaterThan(0);
         overview.Nodes[0].MemAllocatableBytes.Should().BeGreaterThan(0);
@@ -80,6 +81,7 @@ public class OverviewOperationsTests(K3sFixture k3s)
         var overview = await k3s.Operations.GetOverviewAsync(await k3s.ViewerSecretAsync(), ["kube-system"]);
 
         overview.Nodes.Should().BeEmpty();
+        overview.NodesForbidden.Should().BeTrue();
         overview.Pods.Running.Should().BeGreaterThan(0);
         overview.CpuUsageFraction.Should().BeNull();
         overview.Cluster.Identity.Should().Be("system:serviceaccount:sbc-test:viewer");
