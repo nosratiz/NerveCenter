@@ -9,6 +9,7 @@ using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
+using SbConsole.Plugins.Kubernetes.Config;
 using SbConsole.Plugins.Kubernetes.Deployments;
 using SbConsole.Plugins.Kubernetes.Namespaces;
 using SbConsole.Plugins.Kubernetes.Nodes;
@@ -119,6 +120,12 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<PreviewDrainQueryHandler>.Instance));
         Services.AddSingleton(new DrainNodeCommandHandler(
             Operations, Connections, Audit, Time, NullLogger<DrainNodeCommandHandler>.Instance));
+        Services.AddSingleton(new ListConfigMapsQueryHandler(
+            Operations, Connections, NullLogger<ListConfigMapsQueryHandler>.Instance));
+        Services.AddSingleton(new ListSecretsQueryHandler(
+            Operations, Connections, NullLogger<ListSecretsQueryHandler>.Instance));
+        Services.AddSingleton(new UpdateConfigMapCommandHandler(
+            Operations, Connections, Audit, NullLogger<UpdateConfigMapCommandHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

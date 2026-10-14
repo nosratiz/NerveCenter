@@ -12,6 +12,9 @@ namespace SbConsole.Plugins.Kubernetes.Client;
 /// <summary>The only path raw Kubernetes client exception text takes to the UI or audit rows. Never includes request content.</summary>
 public static partial class FriendlyKubernetesError
 {
+    /// <summary>A 409: the object's resourceVersion moved on since it was read (optimistic concurrency).</summary>
+    public const string Conflict = "It changed since you loaded it — reload and try again.";
+
     public static string From(Exception ex) => Describe(ex).Message;
 
     public static K8sErrorInfo Describe(Exception ex)
@@ -61,7 +64,7 @@ public static partial class FriendlyKubernetesError
             401 => "The cluster rejected the credentials, or they have expired.",
             403 => Forbidden(status),
             404 => "It no longer exists — refresh.",
-            409 => "It changed since you loaded it — reload and try again.",
+            409 => Conflict,
             422 => "The cluster rejected the change: " + (status is null ? "invalid." : FriendlyError.Truncate(status).TrimEnd('.') + "."),
             429 => "Blocked by a PodDisruptionBudget — try again later.",
             >= 500 => $"The API server returned an error ({code}).",

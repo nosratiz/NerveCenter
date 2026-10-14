@@ -351,4 +351,57 @@ internal static class TestData
 
         return nodes;
     }
+
+    // ---- Config (mockup 3f) ----
+
+    /// <summary>gateway-config's PROVIDERS_JSON: one long single-line JSON document (collapses as "{…} {size}").</summary>
+    public static readonly string ProvidersJson =
+        "{\"providers\":[" + string.Join(",", Enumerable.Range(1, 22).Select(i =>
+            $"{{\"name\":\"provider-{i}\",\"endpoint\":\"https://p{i}.example/api/v2\",\"timeoutMs\":3000}}")) + "]}";
+
+    /// <summary>gateway-config's logging.yaml: 14 lines (collapses as "14 lines").</summary>
+    public static readonly string LoggingYaml = string.Join("\n",
+    [
+        "level: info", "format: json", "outputs:", "  - stdout", "loggers:", "  payment: debug", "  http: warn", "  redis: warn",
+        "  stripe: info", "  klarna: info", "sampling:", "  initial: 100", "  thereafter: 100", "redact: [card_number, cvv]",
+    ]) + "\n";
+
+    public static K8sConfigMap GatewayConfig() =>
+        new("checkout", "gateway-config",
+            new Dictionary<string, string>
+            {
+                ["REDIS_URL"] = "redis://cart-redis:6379/0", ["MERCHANT_CACHE_SIZE"] = "50000", ["CACHE_TTL_SECONDS"] = "900",
+                ["FEATURE_FLAGS"] = "3ds2=on,apple_pay=on,klarna=off", ["PROVIDERS_JSON"] = ProvidersJson, ["logging.yaml"] = LoggingYaml,
+            },
+            new Dictionary<string, long>(), T0.AddDays(-41), "1001");
+
+    /// <summary>
+    /// Mockup 3f's checkout ConfigMaps: gateway-config (6 keys, used by payment-gateway via env and volume),
+    /// reports-config (unused) and kube-root-ca.crt (only the automatic projected token volume references it).
+    /// </summary>
+    public static K8sConfigData ConfigData() =>
+        new(
+        [
+            GatewayConfig(),
+            new("checkout", "kube-root-ca.crt",
+                new Dictionary<string, string> { ["ca.crt"] = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n" },
+                new Dictionary<string, long>(), T0.AddDays(-41), "12"),
+            new("checkout", "reports-config",
+                new Dictionary<string, string> { ["REPORT_BUCKET"] = "reports-eu", ["SCHEDULE"] = "0 3 * * *" },
+                new Dictionary<string, long> { ["logo.png"] = 2048 }, T0.AddDays(-1), "2002"),
+        ],
+        [
+            new("checkout", "gateway-config", "payment-gateway", "env"),
+            new("checkout", "gateway-config", "payment-gateway", "volume"),
+            new("checkout", "kube-root-ca.crt", "payment-gateway", "projected"),
+        ]);
+
+    /// <summary>Mockup 3f's checkout Secrets: metadata only, checkout-tls expiring in 9 days.</summary>
+    public static IReadOnlyList<SecretSummary> Secrets() =>
+    [
+        new("checkout", "stripe-live", "Opaque", ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"], T0.AddDays(-120), null),
+        new("checkout", "pg-app-rw", "Opaque", ["DB_PASSWORD", "DB_USER"], T0.AddDays(-41), null),
+        new("checkout", "checkout-tls", "kubernetes.io/tls", ["tls.crt", "tls.key"], T0.AddDays(-80), T0.AddDays(9)),
+        new("checkout", "ghcr-pull", "kubernetes.io/dockerconfigjson", [".dockerconfigjson"], T0.AddDays(-41), null),
+    ];
 }

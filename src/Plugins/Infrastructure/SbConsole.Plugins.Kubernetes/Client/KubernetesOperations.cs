@@ -64,15 +64,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
 
     // ---- Not implemented yet: each later task replaces its own. ----
 
-    public Task<K8sConfigData> ListConfigMapsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task UpdateConfigMapAsync(string secret, string ns, string name, IReadOnlyDictionary<string, string> data, string resourceVersion, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<IReadOnlyList<SecretSummary>> ListSecretsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
     public Task<IReadOnlyList<K8sEvent>> ListEventsAsync(string secret, IReadOnlyList<string> namespaces, TimeSpan window, CancellationToken ct = default) =>
         throw new NotImplementedException();
 }

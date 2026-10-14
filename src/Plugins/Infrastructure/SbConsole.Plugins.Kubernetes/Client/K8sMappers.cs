@@ -228,6 +228,39 @@ internal static class K8sMappers
             .Order(StringComparer.Ordinal)
             .ToList();
 
+    // ---- Config ----
+
+    public static K8sConfigMap ConfigMap(V1ConfigMap map) => new(
+        map.Metadata.NamespaceProperty ?? string.Empty,
+        map.Metadata.Name,
+        Dict(map.Data),
+        (map.BinaryData ?? new Dictionary<string, byte[]>()).ToDictionary(kv => kv.Key, kv => (long)(kv.Value?.Length ?? 0), StringComparer.Ordinal),
+        Utc(map.Metadata.CreationTimestamp) ?? DateTimeOffset.MinValue,
+        map.Metadata.ResourceVersion ?? string.Empty);
+
+    /// <summary>
+    /// Every ConfigMap the pod references: env <c>configMapKeyRef</c> and <c>envFrom configMapRef</c> ("env"),
+    /// <c>volumes[].configMap</c> ("volume"), <c>volumes[].projected.sources[].configMap</c> ("projected"). The user is the
+    /// pod's top-level owner (a Deployment via its ReplicaSet), else the pod itself. Distinct.
+    /// </summary>
+    public static IReadOnlyList<K8sConfigRef> ConfigRefs(V1Pod pod)
+    {
+        var ns = pod.Metadata.NamespaceProperty ?? string.Empty;
+        var owner = Pod(pod).Owner;
+        var user = owner is { Kind: not "Node" } ? owner.Name : pod.Metadata.Name;
+        var volumes = pod.Spec?.Volumes ?? [];
+        var env = ReferencedConfigMaps(pod).Select(name => (name, Via: "env"));
+        var mounted = volumes.Select(v => v.ConfigMap?.Name).OfType<string>().Select(name => (name, Via: "volume"));
+        var projected = volumes
+            .SelectMany(v => v.Projected?.Sources ?? [])
+            .Select(s => s.ConfigMap?.Name).OfType<string>().Select(name => (name, Via: "projected"));
+        return env.Concat(mounted).Concat(projected)
+            .Where(r => r.name.Length > 0)
+            .Distinct()
+            .Select(r => new K8sConfigRef(ns, r.name, user, r.Via))
+            .ToList();
+    }
+
     /// <summary>
     /// The resolved env of every container (init first; per container <c>envFrom</c> rows, then <c>env</c> rows).
     /// <paramref name="configMaps"/> holds the maps that could be read; any other is Unresolved. Secret-sourced rows

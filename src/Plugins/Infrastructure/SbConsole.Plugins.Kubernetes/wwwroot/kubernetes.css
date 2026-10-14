@@ -234,3 +234,27 @@ pre.k8s-log mark.k8s-log-mark-current { background: var(--mud-palette-warning); 
 .k8s-drain-results { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; }
 .k8s-drain-result { display: flex; align-items: center; gap: 8px; }
 .k8s-drain-summary { font-weight: 500; }
+
+/* Config (mockup 3f) */
+.k8s-card-pad { padding: 10px 14px; }
+.k8s-cm-row { cursor: pointer; }
+.k8s-cm-caret-col { width: 32px; }
+.k8s-cm-ns, .k8s-secret-ns { font-size: 0.72rem; }
+.k8s-cm-detail { padding: 10px 14px 14px 46px !important; background: var(--mud-palette-background-gray); }
+.k8s-cm-kv { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: 4px 18px; font-size: 0.8rem; }
+.k8s-cm-key { color: var(--mud-palette-text-secondary); }
+.k8s-cm-value { min-width: 0; overflow-wrap: anywhere; }
+.k8s-cm-pre { margin: 6px 0 0; padding: 8px 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: var(--mud-default-borderradius); }
+.k8s-cm-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.k8s-cm-edit-rows { display: flex; flex-direction: column; gap: 8px; }
+.k8s-cm-edit-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr) auto; gap: 8px; align-items: start; }
+@media (max-width: 600px) { .k8s-cm-edit-row { grid-template-columns: minmax(0, 1fr) auto; } .k8s-cm-edit-value { grid-column: 1 / -1; } }
+.k8s-cm-edit-invalid { font-size: 0.8rem; margin-top: 6px; }
+.k8s-cm-edit-conflict .mud-alert-message { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.k8s-cm-edit-binary, .k8s-cm-edit-audit { margin-top: 8px; }
+.k8s-secrets-callout { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 0.8rem; color: var(--mud-palette-text-secondary);
+    border-bottom: 1px solid var(--mud-palette-divider); }
+.k8s-secret-keys { display: flex; flex-wrap: wrap; gap: 4px; }
+.k8s-secret-age-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.k8s-config-audited { margin-left: 8px; }

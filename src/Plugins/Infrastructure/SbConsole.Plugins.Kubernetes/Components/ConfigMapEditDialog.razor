@@ -1,0 +1,185 @@
+@using SbConsole.Plugins.Kubernetes.Config
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject UpdateConfigMapCommandHandler UpdateHandler
+@inject IConfirmationService Confirmation
+
+@* Edit ConfigMap (mockup 3f, spec §9.1): one row per key, Mutating, so a plain two-button confirmation on Save.
+   Optimistic concurrency: the update carries the resourceVersion the editor loaded; a 409 is shown here with a
+   Reload that brings in the current version. Closes with true once the update succeeds. *@
+<MudDialog Class="k8s-cm-edit-dialog">
+    <TitleContent>Edit ConfigMap <span class="k8s-mono">@_map.Namespace/@_map.Name</span></TitleContent>
+    <DialogContent>
+        <div class="k8s-cm-edit-rows">
+            @foreach (var row in _rows)
+            {
+                <div class="k8s-cm-edit-row" @key="row.Id">
+                    <MudTextField T="string" Class="k8s-cm-edit-key" Label="Key" Value="row.Key" ValueChanged="@(v => row.Key = v ?? "")"
+                                  Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="_busy" />
+                    <MudTextField T="string" Class="k8s-cm-edit-value" Label="Value" Value="row.Value" ValueChanged="@(v => row.Value = v ?? "")"
+                                  Lines="3" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="_busy" />
+                    <MudIconButton Class="k8s-cm-edit-remove" Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" Disabled="_busy"
+                                   aria-label="@($"Remove {row.Key}")" OnClick="@(() => _rows.Remove(row))" />
+                </div>
+            }
+        </div>
+        <MudButton Class="k8s-cm-edit-add" Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Outlined.Add" Disabled="_busy"
+                   OnClick="AddRow">Add key</MudButton>
+
+        @if (_map.BinarySizes.Count > 0)
+        {
+            <div class="k8s-meta k8s-cm-edit-binary">Binary keys stay as they are: @string.Join(", ", _map.BinarySizes.Keys.Order(StringComparer.Ordinal))</div>
+        }
+
+        @if (Invalid is { } invalid)
+        {
+            <div class="k8s-cm-edit-invalid mud-error-text">@invalid</div>
+        }
+
+        @if (_conflict)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="k8s-cm-edit-conflict">
+                @FriendlyKubernetesError.Conflict
+                <MudButton Class="k8s-cm-edit-reload" Variant="Variant.Outlined" Size="Size.Small" Disabled="_busy" OnClick="ReloadAsync">Reload</MudButton>
+            </MudAlert>
+        }
+        else if (_error is not null)
+        {
+            <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Class="k8s-cm-edit-error" />
+        }
+
+        <div class="k8s-meta k8s-cm-edit-audit">Mutating · audited as @UpdateConfigMapCommandHandler.Action (key names only)</div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Class="k8s-cm-edit-cancel" Disabled="_busy" OnClick="@(() => MudDialog.Cancel())">Cancel</MudButton>
+        <MudButton Class="k8s-cm-edit-save" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!CanSave)" OnClick="SaveAsync">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public Guid ConnectionId { get; set; }
+
+    [Parameter, EditorRequired] public string ConnectionName { get; set; } = "";
+
+    [Parameter, EditorRequired] public K8sConfigMap Map { get; set; } = default!;
+
+    /// <summary>Re-reads the map (null value = it no longer exists); used by Reload after a conflict.</summary>
+    [Parameter, EditorRequired] public Func<Task<PluginResult<K8sConfigMap?>>> Reload { get; set; } = default!;
+
+    private sealed class Row(int id, string key, string value)
+    {
+        public int Id { get; } = id;
+        public string Key { get; set; } = key;
+        public string Value { get; set; } = value;
+    }
+
+    private K8sConfigMap _map = default!;
+    private List<Row> _rows = [];
+    private int _nextId;
+    private string? _error;
+    private bool _conflict;
+    private bool _busy;
+
+    public static Task<IDialogReference> ShowAsync(IDialogService dialogs, ConnectionInfo connection, K8sConfigMap map,
+        Func<Task<PluginResult<K8sConfigMap?>>> reload) =>
+        dialogs.ShowAsync<ConfigMapEditDialog>($"Edit {map.Name}",
+            new DialogParameters<ConfigMapEditDialog>
+            {
+                { d => d.ConnectionId, connection.Id }, { d => d.ConnectionName, connection.Name },
+                { d => d.Map, map }, { d => d.Reload, reload },
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true, BackdropClick = false });
+
+    protected override void OnInitialized() => Reset(Map);
+
+    private void Reset(K8sConfigMap map)
+    {
+        _map = map;
+        _rows = map.Data.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new Row(_nextId++, kv.Key, kv.Value)).ToList();
+    }
+
+    private void AddRow() => _rows.Add(new Row(_nextId++, "", ""));
+
+    private Dictionary<string, string> Current() =>
+        _rows.GroupBy(r => r.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last().Value, StringComparer.Ordinal);
+
+    private string? Invalid
+    {
+        get
+        {
+            if (_rows.Any(r => string.IsNullOrWhiteSpace(r.Key)))
+            {
+                return "Every key needs a name.";
+            }
+
+            var duplicates = _rows.GroupBy(r => r.Key, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            if (duplicates.Count > 0)
+            {
+                return $"Duplicate key: {string.Join(", ", duplicates)}.";
+            }
+
+            var binary = _rows.Select(r => r.Key).Where(_map.BinarySizes.ContainsKey).ToList();
+            return binary.Count > 0 ? $"Already a binary key: {string.Join(", ", binary)}." : null;
+        }
+    }
+
+    private bool CanSave => !_busy && !_conflict && Invalid is null && UpdateConfigMapCommandHandler.Detail(_map.Data, Current()) is not null;
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            // Mutating: a plain two-button confirmation, never typed.
+            if (!await Confirmation.ConfirmAsync("Update ConfigMap", _map.Name, isProd: false))
+            {
+                return;
+            }
+
+            var result = await UpdateHandler.HandleAsync(new UpdateConfigMapCommand(
+                new K8sTarget(ConnectionId, ConnectionName, _map.Namespace, _map.Name), _map.Data, Current(), _map.ResourceVersion));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+                return;
+            }
+
+            _conflict = result.Error == FriendlyKubernetesError.Conflict;
+            _error = _conflict ? null : result.Error ?? "Updating the ConfigMap failed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        try
+        {
+            var result = await Reload();
+            if (result is { IsSuccess: true, Value: { } map })
+            {
+                Reset(map);
+                _conflict = false;
+                _error = null;
+                return;
+            }
+
+            _conflict = false;
+            _error = result.IsSuccess ? "It no longer exists — refresh." : result.Error ?? "Reloading failed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
