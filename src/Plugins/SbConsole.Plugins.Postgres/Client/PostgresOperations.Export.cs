@@ -13,14 +13,14 @@ public sealed partial class PostgresOperations
 
             await using var cmd = Command(conn, tx, sql, parameters);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
-            var (content, count, truncated) = await WriteCsvAsync(reader, CsvExport.EffectiveMaxRows, CsvExport.MaxBytes, ct);
+            var (content, count, truncated) = await WriteCsvAsync(reader, CsvExport.EffectiveMaxRows, CsvExport.MaxBytes, null, ct);
             return new CsvExport($"{SafeFileName(detail.Schema)}.{SafeFileName(detail.Name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv",
                 content, count, truncated);
         }, ct);
 
-    /// <summary>Header + up to maxRows rows; truncated when a row was left out by either cap. Shared with the query export.</summary>
+    /// <summary>Header + up to maxRows rows; truncated when a row was left out by either cap. Shared with the query export, which passes <paramref name="cancel"/> to stop the server streaming the rest.</summary>
     internal static async Task<(byte[] Content, int RowCount, bool Truncated)> WriteCsvAsync(
-        NpgsqlDataReader reader, int maxRows, long maxBytes, CancellationToken ct)
+        NpgsqlDataReader reader, int maxRows, long maxBytes, Action? cancel, CancellationToken ct)
     {
         maxRows = Math.Max(0, maxRows);
         var encoding = new UTF8Encoding(false);
@@ -57,6 +57,11 @@ public sealed partial class PostgresOperations
         }
 
         await writer.FlushAsync(ct);
+        if (truncated)
+        {
+            cancel?.Invoke();
+        }
+
         return (stream.ToArray(), count, truncated);
     }
 

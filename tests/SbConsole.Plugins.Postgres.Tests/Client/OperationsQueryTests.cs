@@ -243,4 +243,111 @@ public sealed class OperationsQueryTests(PostgresFixture fx)
             CsvExport.MaxRowsOverride = null;
         }
     }
+
+    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(5);
+
+    [DockerFact]
+    public async Task Read_mode_cap_on_a_huge_select_cancels_instead_of_draining()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = await fx.Operations.RunQueryAsync(fx.Secret(), null,
+            Read("SELECT g FROM generate_series(1, 50000000) g", cap: 10, timeout: 5));
+        sw.Stop();
+
+        r.Capped.Should().BeTrue();
+        r.Rows.Should().HaveCount(10);
+        sw.Elapsed.Should().BeLessThan(Quick);
+        (await fx.Operations.RunQueryAsync(fx.Secret(), null, Read("SELECT 1"))).Rows.Should().ContainSingle();
+    }
+
+    [DockerFact]
+    public async Task Query_export_cap_on_a_huge_select_cancels_instead_of_draining()
+    {
+        CsvExport.MaxRowsOverride = 10;
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var csv = await fx.Operations.ExportQueryCsvAsync(fx.Secret(), null, "SELECT g FROM generate_series(1, 50000000) g", 5);
+            sw.Stop();
+
+            csv.Truncated.Should().BeTrue();
+            csv.RowCount.Should().Be(10);
+            sw.Elapsed.Should().BeLessThan(Quick);
+        }
+        finally
+        {
+            CsvExport.MaxRowsOverride = null;
+        }
+
+        (await fx.Operations.RunQueryAsync(fx.Secret(), null, Read("SELECT 1"))).Rows.Should().ContainSingle();
+    }
+
+    [DockerFact]
+    public async Task Explain_analyze_of_a_delete_is_refused_and_changes_nothing()
+    {
+        var table = await ScratchAsync();
+
+        var ex = await FluentActions.Awaiting(() =>
+            fx.Operations.ExplainAsync(fx.Secret(PgAccessMode.ReadWrite), null, $"EXPLAIN ANALYZE DELETE FROM {table}", 30)).Should().ThrowAsync<Exception>();
+
+        SqlStateOf(ex.Which).Should().Be("25006");
+        (await CountAsync(table)).Should().Be(3);
+    }
+
+    [DockerFact]
+    public async Task Read_mode_explain_analyze_of_a_delete_is_refused_and_changes_nothing()
+    {
+        var table = await ScratchAsync();
+
+        var ex = await FluentActions.Awaiting(() =>
+            fx.Operations.RunQueryAsync(fx.Secret(PgAccessMode.ReadWrite), null, Read($"EXPLAIN ANALYZE DELETE FROM {table}"))).Should().ThrowAsync<Exception>();
+
+        SqlStateOf(ex.Which).Should().Be("25006");
+        (await CountAsync(table)).Should().Be(3);
+    }
+
+    private static string? SqlStateOf(Exception ex) =>
+        ex as PostgresException is { } pg ? pg.SqlState : (ex as PgQueryException)?.Inner.SqlState;
+
+    [DockerFact]
+    public async Task Timeout_zero_is_treated_as_one_second()
+    {
+        var r = await fx.Operations.RunQueryAsync(fx.Secret(), null, Read("SELECT 1", timeout: 0));
+        r.Rows.Should().ContainSingle();
+    }
+
+    [DockerFact]
+    public async Task Row_cap_zero_is_treated_as_one_row()
+    {
+        var r = await fx.Operations.RunQueryAsync(fx.Secret(), null, Read("SELECT g FROM generate_series(1, 5) g", cap: 0));
+        r.Rows.Should().ContainSingle();
+        r.Capped.Should().BeTrue();
+    }
+
+    [DockerFact]
+    public async Task Row_cap_above_ten_thousand_is_clamped()
+    {
+        var r = await fx.Operations.RunQueryAsync(fx.Secret(), null, Read("SELECT g FROM generate_series(1, 20000) g", cap: 50_000));
+        r.Rows.Should().HaveCount(10_000);
+        r.Capped.Should().BeTrue();
+    }
+
+    [DockerFact]
+    public async Task Unguarded_seam_clamps_the_row_cap()
+    {
+        var r = await fx.Operations.RunUnguardedForTestsAsync(fx.Secret(), null, "SELECT g FROM generate_series(1, 20000) g", rowCap: 50_000);
+        r.Rows.Should().HaveCount(10_000);
+        var one = await fx.Operations.RunUnguardedForTestsAsync(fx.Secret(), null, "SELECT g FROM generate_series(1, 5) g", rowCap: 0);
+        one.Rows.Should().ContainSingle();
+    }
+
+    [DockerFact]
+    public async Task Write_mode_refuses_a_script_containing_commit()
+    {
+        var table = await ScratchAsync();
+        await FluentActions.Awaiting(() =>
+            fx.Operations.RunQueryAsync(fx.Secret(PgAccessMode.ReadWrite), null, Write($"DELETE FROM {table}; COMMIT")))
+            .Should().ThrowAsync<PgSqlRefusedException>();
+        (await CountAsync(table)).Should().Be(3);
+    }
 }

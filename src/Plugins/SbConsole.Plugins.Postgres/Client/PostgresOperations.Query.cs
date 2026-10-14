@@ -27,7 +27,7 @@ public sealed partial class PostgresOperations
     /// <summary>Test seam: read-mode execution that skips <see cref="PgSqlGuard"/>, to prove the server itself refuses scripts.</summary>
     internal Task<PgQueryResult> RunUnguardedForTestsAsync(
         string secret, string? database, string sql, int timeoutS = 30, int rowCap = 1000, CancellationToken ct = default) =>
-        RunReadAsync(secret, database, sql, 1, null, Math.Clamp(timeoutS, 1, PostgresConnectionSettings.MaxTimeoutS), rowCap, ct);
+        RunReadAsync(secret, database, sql, 1, null, Math.Clamp(timeoutS, 1, PostgresConnectionSettings.MaxTimeoutS), Math.Clamp(rowCap, 1, 10_000), ct);
 
     private static string? FirstTag(IReadOnlyList<PgStatement> statements) => statements.Count == 0 ? null : statements[0].FirstKeyword;
 
@@ -42,8 +42,8 @@ public sealed partial class PostgresOperations
             var command = new NpgsqlBatchCommand(sql);
             batch.BatchCommands.Add(command);
             await using var reader = await batch.ExecuteReaderAsync(ct);
-            var (columns, rows, capped) = await ReadLastResultSetAsync(reader, cap, ct);
-            await reader.CloseAsync();
+            var (columns, rows, capped) = await ReadLastResultSetAsync(reader, cap, batch.Cancel, ct);
+            await CloseAfterCapAsync(reader, capped);
             return new PgQueryResult(columns, rows, capped, null, Stopwatch.GetElapsedTime(started), statementCount,
                 TagOf(command, tagFallback));
         }, ct, timeoutS);
@@ -80,7 +80,9 @@ public sealed partial class PostgresOperations
                 try
                 {
                     await using var reader = await batch.ExecuteReaderAsync(ct);
-                    var set = await ReadLastResultSetAsync(reader, cap, ct);
+                    // No cancel here: cancelling would abort the user's transaction. A capped row-returning statement in a
+                    // write script is therefore read to the end, and that time counts against the statement timeout.
+                    var set = await ReadLastResultSetAsync(reader, cap, null, ct);
                     await reader.CloseAsync();
                     if (set.Columns.Count > 0)
                     {
@@ -129,9 +131,27 @@ public sealed partial class PostgresOperations
         _ => fallback,
     };
 
-    /// <summary>Walks every result set and keeps the last one that has columns (rows capped).</summary>
+    /// <summary>
+    /// Closes a reader that stopped early. When the cap was hit the statement was cancelled, so the server's 57014 is
+    /// expected here and swallowed; any other error still surfaces.
+    /// </summary>
+    internal static async Task CloseAfterCapAsync(NpgsqlDataReader reader, bool capped)
+    {
+        try
+        {
+            await reader.CloseAsync();
+        }
+        catch (PostgresException ex) when (capped && ex.SqlState == PostgresErrorCodes.QueryCanceled)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Walks every result set and keeps the last one that has columns (rows capped). With <paramref name="cancel"/>,
+    /// hitting the cap cancels the statement and stops reading, instead of streaming the rest of the result.
+    /// </summary>
     private static async Task<(IReadOnlyList<PgResultColumn> Columns, IReadOnlyList<IReadOnlyList<PgCell>> Rows, bool Capped)>
-        ReadLastResultSetAsync(NpgsqlDataReader reader, int cap, CancellationToken ct)
+        ReadLastResultSetAsync(NpgsqlDataReader reader, int cap, Action? cancel, CancellationToken ct)
     {
         IReadOnlyList<PgResultColumn> columns = [];
         var rows = new List<IReadOnlyList<PgCell>>();
@@ -164,14 +184,18 @@ public sealed partial class PostgresOperations
                 rows.Add(row);
             }
         }
-        while (await reader.NextResultAsync(ct));
+        while (!(capped && cancel is not null) && await reader.NextResultAsync(ct));
+
+        if (capped)
+        {
+            cancel?.Invoke();
+        }
 
         return (columns, rows, capped);
     }
 
     public Task<string> ExplainAsync(string secret, string? database, string sql, int timeoutS, CancellationToken ct = default)
     {
-        PgSqlGuard.Check(sql, write: false);
         var alreadyExplain = PgSqlGuard.Check(sql, write: false)[0].FirstKeyword == "EXPLAIN";
         var text = alreadyExplain ? sql : ExplainPrefix + sql;
         var prefix = alreadyExplain ? 0 : ExplainPrefix.Length;
@@ -205,7 +229,8 @@ public sealed partial class PostgresOperations
             await using var batch = new NpgsqlBatch(conn, tx) { Timeout = Math.Clamp(timeoutS, 1, PostgresConnectionSettings.MaxTimeoutS) + 5 };
             batch.BatchCommands.Add(new NpgsqlBatchCommand(sql));
             await using var reader = await batch.ExecuteReaderAsync(ct);
-            var (content, count, truncated) = await WriteCsvAsync(reader, CsvExport.EffectiveMaxRows, CsvExport.MaxBytes, ct);
+            var (content, count, truncated) = await WriteCsvAsync(reader, CsvExport.EffectiveMaxRows, CsvExport.MaxBytes, batch.Cancel, ct);
+            await CloseAfterCapAsync(reader, truncated);
             return new CsvExport($"query-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv", content, count, truncated);
         }, ct, timeoutS);
     }
