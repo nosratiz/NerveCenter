@@ -404,4 +404,51 @@ internal static class TestData
         new("checkout", "checkout-tls", "kubernetes.io/tls", ["tls.crt", "tls.key"], T0.AddDays(-80), T0.AddDays(9)),
         new("checkout", "ghcr-pull", "kubernetes.io/dockerconfigjson", [".dockerconfigjson"], T0.AddDays(-41), null),
     ];
+
+    /// <summary>
+    /// Mockup 3i's last hour, newest first at <see cref="T0"/>: 38 Warning events on 9 objects (payment-gateway-7d9f8-x2k4q
+    /// BackOff ×14 + Unhealthy ×2, prometheus-1 FailedScheduling ×22, node aks-pool1-38211-vmss00000a NodeNotReady /
+    /// TaintManagerEviction / ContainerGCFailed, report-builder with one FailedMount per missing volume, …) and 5 Normal events.
+    /// </summary>
+    public static IReadOnlyList<K8sEvent> Events()
+    {
+        K8sEvent E(int minutesAgo, string type, string reason, string kind, string? ns, string name, string message, int count, string reporter) =>
+            new(kind == "Node" ? "default" : ns, type, reason, message, new K8sRef(kind, ns, name), count, T0.AddMinutes(-minutesAgo), reporter);
+
+        const string gateway = "payment-gateway-7d9f8-x2k4q";
+        const string node = "aks-pool1-38211-vmss00000a";
+        var events = new List<K8sEvent>
+        {
+            E(1, "Normal", "Pulled", "Pod", "checkout", "checkout-api-6c8d7-zz1aa", "Container image \"checkout-api:1.4.2\" already present on machine", 1, "kubelet"),
+            E(2, "Warning", "BackOff", "Pod", "checkout", gateway,
+                "Back-off restarting failed container gateway in pod payment-gateway-7d9f8-x2k4q_checkout(4f1c)", 14, "kubelet"),
+            E(3, "Normal", "Scheduled", "Pod", "checkout", "checkout-api-6c8d7-zz1aa", "Successfully assigned checkout/checkout-api-6c8d7-zz1aa", 1, "default-scheduler"),
+            E(4, "Warning", "FailedScheduling", "Pod", "monitoring", "prometheus-1",
+                "0/12 nodes are available: 1 node(s) had untolerated taint {node.kubernetes.io/unreachable}, 11 Insufficient memory.", 22, "default-scheduler"),
+            E(5, "Warning", "ProgressDeadlineExceeded", "Deployment", "checkout", "payment-gateway",
+                "ReplicaSet \"payment-gateway-7d9f8\" has timed out progressing.", 1, "deployment-controller"),
+            E(6, "Warning", "NodeNotReady", "Node", null, node, $"Node {node} status is now: NodeNotReady", 1, "node-controller"),
+            E(6, "Warning", "TaintManagerEviction", "Node", null, node, "Marking for deletion Pod checkout/checkout-api-6c8d7-r9p2m", 1, "taint-eviction-controller"),
+            E(7, "Warning", "ContainerGCFailed", "Node", null, node,
+                "rpc error: code = Unavailable desc = connection error: desc = \"transport: Error while dialing\"", 1, "kubelet"),
+            E(8, "Normal", "ScalingReplicaSet", "Deployment", "checkout", "checkout-api", "Scaled up replica set checkout-api-6c8d7 to 3", 1, "deployment-controller"),
+            E(9, "Warning", "Unhealthy", "Pod", "checkout", gateway,
+                "Liveness probe failed: Get \"http://10.244.3.118:8080/healthz\": dial tcp: connection refused", 2, "kubelet"),
+            E(9, "Warning", "Unhealthy", "Pod", "checkout", "checkout-api-6c8d7-r9p2m", "Readiness probe failed: HTTP probe failed with statuscode: 503", 3, "kubelet"),
+            E(12, "Warning", "OOMKilling", "Node", null, "aks-pool1-38211-vmss000004", "Memory cgroup out of memory: Killed process 48213 (gateway)", 2, "kernel-monitor"),
+            E(13, "Warning", "SystemOOM", "Node", null, "aks-pool1-38211-vmss000004", "System OOM encountered, victim process: gateway", 1, "kubelet"),
+            E(14, "Warning", "FailedGetResourceMetric", "HorizontalPodAutoscaler", "checkout", "checkout-api",
+                "failed to get cpu utilization: unable to get metrics for resource cpu: metrics-server unavailable", 4, "horizontal-pod-autoscaler"),
+            E(20, "Normal", "Started", "Pod", "checkout", "checkout-api-6c8d7-zz1aa", "Started container api", 1, "kubelet"),
+            E(30, "Normal", "SuccessfulCreate", "Job", "payments", "settlement-20261014-1100", "Created pod: settlement-20261014-1100-q8x7z", 1, "job-controller"),
+            E(50, "Warning", "BackoffLimitExceeded", "Job", "payments", "settlement-20261014-0200", "Job has reached the specified backoff limit", 1, "job-controller"),
+        };
+        for (var i = 0; i < 26; i++)
+        {
+            events.Add(E(15 + i, "Warning", "FailedMount", "Pod", "reporting", "report-builder-2x8ql",
+                $"MountVolume.SetUp failed for volume \"reports-cfg-{i}\" : configmap \"reports-config\" not found", 1, "kubelet"));
+        }
+
+        return events.OrderByDescending(e => e.LastSeen).ToList();
+    }
 }

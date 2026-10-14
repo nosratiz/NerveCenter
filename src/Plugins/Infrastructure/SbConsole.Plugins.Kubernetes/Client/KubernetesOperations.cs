@@ -61,9 +61,4 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
             return new Dictionary<string, int>();
         }
     }
-
-    // ---- Not implemented yet: each later task replaces its own. ----
-
-    public Task<IReadOnlyList<K8sEvent>> ListEventsAsync(string secret, IReadOnlyList<string> namespaces, TimeSpan window, CancellationToken ct = default) =>
-        throw new NotImplementedException();
 }

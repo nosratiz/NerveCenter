@@ -11,6 +11,7 @@ using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Config;
 using SbConsole.Plugins.Kubernetes.Deployments;
+using SbConsole.Plugins.Kubernetes.Events;
 using SbConsole.Plugins.Kubernetes.Namespaces;
 using SbConsole.Plugins.Kubernetes.Nodes;
 using SbConsole.Plugins.Kubernetes.Overview;
@@ -126,6 +127,8 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<ListSecretsQueryHandler>.Instance));
         Services.AddSingleton(new UpdateConfigMapCommandHandler(
             Operations, Connections, Audit, NullLogger<UpdateConfigMapCommandHandler>.Instance));
+        Services.AddSingleton(new ListEventsQueryHandler(
+            Operations, Connections, NullLogger<ListEventsQueryHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

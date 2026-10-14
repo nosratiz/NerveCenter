@@ -258,3 +258,34 @@ pre.k8s-log mark.k8s-log-mark-current { background: var(--mud-palette-warning); 
 .k8s-secret-keys { display: flex; flex-wrap: wrap; gap: 4px; }
 .k8s-secret-age-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .k8s-config-audited { margin-left: 8px; }
+
+/* Events (mockup 3i). */
+.k8s-ev-kind, .k8s-ev-window-select { width: 130px; }
+.k8s-ev-window { display: flex; align-items: center; gap: 6px; }
+.k8s-ev-window-caption { max-width: 90px; line-height: 1.2; }
+.k8s-ev-search { width: 220px; }
+.k8s-ev-groupbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 20px; border-bottom: 1px solid var(--mud-palette-divider); font-size: 0.8rem; }
+.k8s-ev-group-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; width: 100%; font-size: 0.85rem; }
+.k8s-ev-group-ns { font-size: 0.75rem; }
+.k8s-ev-group-name { color: inherit; }
+a.k8s-ev-group-name { color: var(--mud-palette-primary); text-decoration: none; }
+a.k8s-ev-group-name:hover { text-decoration: underline; }
+.k8s-ev-top-reasons, .k8s-ev-last { font-size: 0.72rem; }
+.k8s-ev-row { display: grid; grid-template-columns: 44px minmax(90px, 160px) minmax(0, 1fr) 56px minmax(80px, max-content); gap: 12px; align-items: center;
+    padding: 7px 14px; border-bottom: 1px solid var(--mud-palette-divider); font-size: 0.8rem; }
+.k8s-ev-row:last-child { border-bottom: none; }
+.k8s-ev-age, .k8s-ev-reporter { font-size: 0.72rem; }
+.k8s-ev-reporter { text-align: right; }
+.k8s-ev-reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k8s-ev-reason-warning { color: var(--mud-palette-error); }
+.k8s-ev-text { min-width: 0; display: flex; flex-direction: column; }
+.k8s-ev-object { font-size: 0.72rem; }
+.k8s-ev-message { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k8s-ev-count-cell { text-align: right; }
+.k8s-ev-empty, .k8s-ev-more { padding: 12px 14px; font-size: 0.8rem; }
+.k8s-ev-footnote { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+@media (max-width: 800px) {
+    .k8s-ev-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
+    .k8s-ev-text { grid-column: 1 / -1; order: 5; }
+    .k8s-ev-reporter { display: none; }
+}

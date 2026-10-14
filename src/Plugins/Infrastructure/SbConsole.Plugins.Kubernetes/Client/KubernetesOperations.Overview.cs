@@ -34,7 +34,7 @@ public sealed partial class KubernetesOperations
         var jobsTask = ListScopedAsync(namespaces,
             async () => (await client.BatchV1.ListJobForAllNamespacesAsync(cancellationToken: ct)).Items,
             async ns => (await client.BatchV1.ListNamespacedJobAsync(ns, cancellationToken: ct)).Items, gate, ct);
-        var eventsTask = ListWarningEventsAsync(client, namespaces, gate, ct);
+        var eventsTask = FetchEventsAsync(client, namespaces, "Warning", gate, logger, ct);
         var namespaceCountTask = CountNamespacesAsync(client, namespaces, ct);
         var identityTask = GetIdentityAsync(client, secret, ct);
         var usageTask = NodeUsageAsync(client, ct);
@@ -86,30 +86,6 @@ public sealed partial class KubernetesOperations
             limits.Mem,
             usage is { } u && cpuAllocatable > 0 ? (double)u.Cpu / cpuAllocatable : null,
             usage is { } m && memAllocatable > 0 ? (double)m.Mem / memAllocatable : null);
-    }
-
-    /// <summary>
-    /// Warning events via events.k8s.io; the built-in "view" ClusterRole only grants core/v1 events, so a 403 there
-    /// falls back to the core API (same objects, older shape).
-    /// </summary>
-    private async Task<IReadOnlyList<K8sEvent>> ListWarningEventsAsync(IKubernetes client, IReadOnlyList<string> namespaces, SemaphoreSlim gate, CancellationToken ct)
-    {
-        try
-        {
-            var events = await ListScopedAsync(namespaces,
-                async () => (await client.EventsV1.ListEventForAllNamespacesAsync(fieldSelector: "type=Warning", cancellationToken: ct)).Items,
-                async ns => (await client.EventsV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, gate, ct);
-            return events.Select(K8sMappers.Event).ToList();
-        }
-        catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
-        {
-            logger.LogDebug("Listing events.k8s.io events is forbidden; reading core/v1 events instead");
-        }
-
-        var core = await ListScopedAsync(namespaces,
-            async () => (await client.CoreV1.ListEventForAllNamespacesAsync(fieldSelector: "type=Warning", cancellationToken: ct)).Items,
-            async ns => (await client.CoreV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, gate, ct);
-        return core.Select(K8sMappers.Event).ToList();
     }
 
     /// <summary>Nodes are cluster-scoped; an account that can't list them (e.g. the built-in "view" role) just sees none.</summary>
