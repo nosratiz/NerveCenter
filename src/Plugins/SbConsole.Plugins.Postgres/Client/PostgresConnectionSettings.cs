@@ -22,6 +22,11 @@ public sealed record PostgresConnectionSettings(
 {
     public static readonly string[] SslModes = ["Disable", "Prefer", "Require", "VerifyCA", "VerifyFull"];
 
+    public const int MaxTimeoutS = 3600;
+
+    // Npgsql itself rejects Timeout above 1024, so a larger connect timeout could never be built.
+    public const int MaxConnectTimeoutS = 1024;
+
     public string Endpoint => $"{Host}:{Port}";
 
     public static PostgresConnectionSettings Parse(string secret)
@@ -29,7 +34,6 @@ public sealed record PostgresConnectionSettings(
         var mode = PgAccessMode.ReadOnly;
         var statementTimeoutS = 30;
         var npgsqlParts = new List<string>();
-        var hasTimeout = false;
 
         foreach (var segment in SplitSegments(secret ?? ""))
         {
@@ -46,14 +50,14 @@ public sealed record PostgresConnectionSettings(
             }
             else if (key.Equals("StatementTimeoutS", StringComparison.OrdinalIgnoreCase))
             {
-                if (!int.TryParse(Unquote(value), NumberStyles.None, CultureInfo.InvariantCulture, out statementTimeoutS) || statementTimeoutS <= 0)
+                if (!int.TryParse(Unquote(value), NumberStyles.None, CultureInfo.InvariantCulture, out statementTimeoutS)
+                    || statementTimeoutS is < 1 or > MaxTimeoutS)
                 {
-                    throw new FormatException("StatementTimeoutS must be a positive integer.");
+                    throw new FormatException($"StatementTimeoutS must be a whole number between 1 and {MaxTimeoutS}.");
                 }
             }
             else if (IsAcceptedByNpgsql(segment))
             {
-                hasTimeout |= key.Replace(" ", "").ToLowerInvariant() is "timeout" or "connecttimeout" or "connectiontimeout";
                 npgsqlParts.Add(segment);
             }
         }
@@ -79,7 +83,17 @@ public sealed record PostgresConnectionSettings(
         }
 
         var ssl = FromNpgsqlSslMode(b.SslMode);
-        var timeout = hasTimeout && b.Timeout > 0 ? b.Timeout : 5;
+        // ShouldSerialize is true only for keys actually given (any alias), so no hand-kept alias list.
+        var timeout = 5;
+        if (b.ShouldSerialize("Timeout"))
+        {
+            timeout = b.Timeout;
+            if (timeout < 1)
+            {
+                throw new FormatException("Timeout must be a positive whole number.");
+            }
+        }
+
         return new PostgresConnectionSettings(
             b.Host, b.Port, string.IsNullOrWhiteSpace(b.Database) ? "postgres" : b.Database,
             b.Username ?? "", b.Password ?? "", ssl, timeout, statementTimeoutS, mode);
@@ -132,9 +146,9 @@ public sealed record PostgresConnectionSettings(
             throw new ArgumentException("Port must be between 1 and 65535.", nameof(Port));
         }
 
-        if (ConnectTimeoutS <= 0 || StatementTimeoutS <= 0)
+        if (ConnectTimeoutS is < 1 or > MaxConnectTimeoutS || StatementTimeoutS is < 1 or > MaxTimeoutS)
         {
-            throw new ArgumentException("Timeouts must be positive.");
+            throw new ArgumentException($"Timeouts must be between 1 and {MaxTimeoutS} seconds (connect timeout at most {MaxConnectTimeoutS}).");
         }
 
         if (!SslModes.Contains(SslMode))

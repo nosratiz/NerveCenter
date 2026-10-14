@@ -26,8 +26,7 @@ public sealed class PostgresPlugin : IPlugin
     public string ConnectionKind => Kind;
     public string ConnectionKindDisplayName => "PostgreSQL";
 
-    // Task 2 adds PostgresConnectionFields.
-    public Type? ConnectionFormComponentType => null;
+    public Type? ConnectionFormComponentType => typeof(PostgresConnectionFields);
 
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [

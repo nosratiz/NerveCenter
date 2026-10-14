@@ -114,4 +114,35 @@ public class PostgresConnectionSettingsTests
 
         PostgresConnectionSettings.Parse(original.ToSecretString()).Password.Should().Be("a;b=c\"d'e");
     }
+
+    [Theory]
+    [InlineData("Host=h;Timeout=0")]
+    [InlineData("Host=h;Timeout=-3")]
+    [InlineData("Host=h;StatementTimeoutS=3601")]
+    [InlineData("Host=h;Timeout=1025")]
+    public void Present_but_out_of_range_timeouts_are_format_errors(string secret)
+    {
+        var act = () => PostgresConnectionSettings.Parse(secret);
+
+        act.Should().Throw<FormatException>();
+    }
+
+    [Fact]
+    public void Absent_timeout_defaults_to_5_and_the_maxima_are_accepted()
+    {
+        PostgresConnectionSettings.Parse("Host=h").ConnectTimeoutS.Should().Be(5);
+        var s = PostgresConnectionSettings.Parse("Host=h;Timeout=1024;StatementTimeoutS=3600");
+        s.ConnectTimeoutS.Should().Be(1024);
+        s.StatementTimeoutS.Should().Be(3600);
+    }
+
+    [Theory]
+    [InlineData(1025, 30)]
+    [InlineData(5, 3601)]
+    public void ToSecretString_rejects_timeouts_above_3600(int connect, int statement)
+    {
+        var act = () => new PostgresConnectionSettings("h", ConnectTimeoutS: connect, StatementTimeoutS: statement).ToSecretString();
+
+        act.Should().Throw<ArgumentException>();
+    }
 }
