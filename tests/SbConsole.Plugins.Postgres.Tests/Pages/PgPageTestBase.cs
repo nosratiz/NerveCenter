@@ -71,6 +71,7 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new ExportTableCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportTableCsvCommandHandler>.Instance));
         Services.AddSingleton(new RunQueryCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RunQueryCommandHandler>.Instance));
         Services.AddSingleton(new ExplainQueryQueryHandler(Operations, Connections, NullLogger<ExplainQueryQueryHandler>.Instance));
+        Services.AddSingleton(new GetCompletionSchemaQueryHandler(Operations, Connections, NullLogger<GetCompletionSchemaQueryHandler>.Instance));
         Services.AddSingleton(new ExportQueryCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportQueryCsvCommandHandler>.Instance));
         Services.AddSingleton(new ListQueryHistoryQueryHandler(Store, Time));
         Services.AddSingleton(new GetActivityQueryHandler(Operations, Connections, NullLogger<GetActivityQueryHandler>.Instance));
