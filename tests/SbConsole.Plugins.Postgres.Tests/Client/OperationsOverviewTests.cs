@@ -120,10 +120,19 @@ public sealed class OperationsOverviewTests(PostgresFixture fx)
             blocked = Task.Run(async () =>
             {
                 await using var b = await OpenAsync(fx.AdminConnectionString());
-                await using var cmd = new NpgsqlCommand("UPDATE orders SET status = 'y' WHERE id = 1", b);
-                try { await cmd.ExecuteNonQueryAsync(cts.Token); }
+                // Explicit transaction, always rolled back: B can never commit a change to the shared seed row.
+                await using var txB = await b.BeginTransactionAsync();
+                try
+                {
+                    await using var cmd = new NpgsqlCommand("UPDATE orders SET status = 'y' WHERE id = 1", b, txB);
+                    await cmd.ExecuteNonQueryAsync(cts.Token);
+                }
                 catch (OperationCanceledException) { }
                 catch (PostgresException) { }
+                finally
+                {
+                    try { await txB.RollbackAsync(); } catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { }
+                }
             });
 
             var o = await PollAsync(x => x.Attention.BlockedCount == 1);
@@ -136,9 +145,9 @@ public sealed class OperationsOverviewTests(PostgresFixture fx)
         }
         finally
         {
-            await txA.RollbackAsync();
             await cts.CancelAsync();
             if (blocked is not null) await blocked;
+            await txA.RollbackAsync();
         }
     }
 
@@ -149,7 +158,33 @@ public sealed class OperationsOverviewTests(PostgresFixture fx)
 
         o.Attention.UnusedIndexCount.Should().BeGreaterThanOrEqualTo(1);
         o.Attention.UnusedIndexBytes.Should().BeGreaterThan(0);
-        o.Attention.LargestUnusedIndex.Should().NotBeNullOrEmpty();
+        o.Attention.LargestUnusedIndex.Should().Be("idx_orders_legacy");
+    }
+
+    [DockerFact]
+    public async Task Overview_tolerates_a_database_the_role_cannot_connect_to()
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var db = "restricted_" + id;
+        var role = "limited_" + id;
+        const string password = "limited-pw-1";
+        await using var admin = await OpenAsync(fx.AdminConnectionString("postgres"));
+        try
+        {
+            await ExecAsync(admin, $"CREATE DATABASE {db}");
+            await ExecAsync(admin, $"REVOKE CONNECT ON DATABASE {db} FROM PUBLIC");
+            await ExecAsync(admin, $"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER");
+
+            var o = await fx.Operations.GetOverviewAsync(fx.SecretForRole(role, password));
+
+            o.Databases.Should().Contain(d => d.Name == db && d.Bytes == 0);
+            o.Databases.Should().Contain(d => d.Name == "app" && d.Bytes > 0);
+        }
+        finally
+        {
+            await ExecAsync(admin, $"DROP DATABASE IF EXISTS {db} WITH (FORCE)");
+            await ExecAsync(admin, $"DROP ROLE IF EXISTS {role}");
+        }
     }
 
     [DockerFact]

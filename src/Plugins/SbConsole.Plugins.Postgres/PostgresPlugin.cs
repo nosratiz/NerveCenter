@@ -64,7 +64,6 @@ public sealed class PostgresPlugin : IPlugin
 
     public void Initialize(IServiceProvider services)
     {
-        
         _operations = services.GetRequiredService<IPostgresOperations>();
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
     }

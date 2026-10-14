@@ -21,6 +21,9 @@ public sealed class PostgresFixture : IAsyncLifetime
     public string SecretWithPassword(string password) =>
         (Settings(PgAccessMode.ReadOnly, "app") with { Password = password }).ToSecretString();
 
+    public string SecretForRole(string user, string password) =>
+        (Settings(PgAccessMode.ReadOnly, "app") with { Username = user, Password = password }).ToSecretString();
+
     public string AdminConnectionString(string database = "app") =>
         new NpgsqlConnectionStringBuilder(Container.GetConnectionString()) { Database = database, Pooling = false }.ConnectionString;
 
@@ -70,7 +73,9 @@ public sealed class PostgresFixture : IAsyncLifetime
             metadata jsonb,
             created_at timestamptz DEFAULT now());
         CREATE INDEX idx_orders_status ON orders (status);
-        CREATE INDEX idx_orders_legacy ON orders (total_cents);
+        -- idx_orders_legacy must stay unused — never query orders by total_cents in tests.
+        -- It is wider than idx_orders_status so it is deterministically the largest unused index.
+        CREATE INDEX idx_orders_legacy ON orders (total_cents, created_at, customer_id);
         INSERT INTO customers (email, country)
             SELECT 'user' || g || '@example.com', (ARRAY['US','DE','FR','JP'])[1 + g % 4] FROM generate_series(1, 200) g;
         INSERT INTO orders (customer_id, status, total_cents, metadata)
