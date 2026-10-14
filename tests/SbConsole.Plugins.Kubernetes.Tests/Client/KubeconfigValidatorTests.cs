@@ -46,7 +46,7 @@ public class KubeconfigValidatorTests
     {
         var r = KubeconfigValidator.Validate(TestData.Kubeconfig("exec:\n  apiVersion: client.authentication.k8s.io/v1\n  command: aws"), null);
 
-        r.Errors.Should().Contain(ExecSentence);
+        r.Errors.Should().Contain("User 'u1': " + ExecSentence);
         r.Summary.Should().BeNull();
     }
 
@@ -55,7 +55,7 @@ public class KubeconfigValidatorTests
     {
         var r = KubeconfigValidator.Validate(TestData.Kubeconfig("auth-provider:\n  name: gcp"), null);
 
-        r.Errors.Should().Contain(ExecSentence.Replace("(exec)", "(auth-provider)"));
+        r.Errors.Should().Contain("User 'u1': " + ExecSentence.Replace("(exec)", "(auth-provider)"));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class KubeconfigValidatorTests
         var yaml = TestData.Kubeconfig().Replace("insecure-skip-tls-verify: false", "certificate-authority: /etc/ca.crt");
 
         KubeconfigValidator.Validate(yaml, null).Errors.Should().Contain(
-            "certificate-authority points at a file on the SbConsole server; paste it as certificate-authority-data instead.");
+            "Cluster 'c1': certificate-authority points at a file on the SbConsole server; paste it as certificate-authority-data instead.");
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class KubeconfigValidatorTests
     {
         var r = KubeconfigValidator.Validate(TestData.Kubeconfig("client-certificate: /a.crt\nclient-key: /a.key"), null);
 
-        r.Errors.Should().Contain("client-certificate / client-key point at files; use client-certificate-data / client-key-data.");
+        r.Errors.Should().Contain("User 'u1': client-certificate / client-key point at files; use client-certificate-data / client-key-data.");
     }
 
     [Fact]
@@ -201,5 +201,140 @@ public class KubeconfigValidatorTests
         r.Contexts.Should().Equal("zeta", "alpha");
         r.Errors.Should().BeEmpty();
         r.Summary!.Context.Should().Be("alpha");
+    }
+
+    // Reviewer repro 1: users 'admin' (exec) and 'Admin' (token), context -> 'Admin'. KubernetesClient resolves names
+    // case-insensitively (first match), so it would run the exec user while the validator only checked 'Admin'.
+    [Fact]
+    public void Case_variant_users_are_rejected()
+    {
+        var yaml = """
+            apiVersion: v1
+            kind: Config
+            current-context: dev
+            clusters:
+            - name: c1
+              cluster: { server: "https://k.example:6443" }
+            contexts:
+            - name: dev
+              context: { cluster: c1, user: Admin }
+            users:
+            - name: admin
+              user:
+                exec: { apiVersion: client.authentication.k8s.io/v1, command: /usr/bin/touch, args: ["/tmp/pwned"] }
+            - name: Admin
+              user: { token: abc }
+            """;
+
+        var r = KubeconfigValidator.Validate(yaml, "dev");
+
+        r.Errors.Should().Contain("Names in a kubeconfig must be unique ignoring case: user 'admin' and 'Admin'.");
+        r.Summary.Should().BeNull();
+    }
+
+    // Reviewer repro 2: contexts 'Good' (exec user) and 'good' (token user), selected 'good'.
+    [Fact]
+    public void Case_variant_contexts_are_rejected()
+    {
+        var yaml = """
+            apiVersion: v1
+            kind: Config
+            clusters:
+            - name: c
+              cluster: { server: "https://example.invalid:6443" }
+            contexts:
+            - name: Good
+              context: { cluster: c, user: evil }
+            - name: good
+              context: { cluster: c, user: ok }
+            users:
+            - name: evil
+              user:
+                exec: { apiVersion: client.authentication.k8s.io/v1, command: /usr/bin/touch, args: ["/tmp/pwned"] }
+            - name: ok
+              user: { token: abc }
+            """;
+
+        var r = KubeconfigValidator.Validate(yaml, "good");
+
+        r.Errors.Should().Contain("Names in a kubeconfig must be unique ignoring case: context 'Good' and 'good'.");
+        r.Summary.Should().BeNull();
+    }
+
+    [Fact]
+    public void Case_variant_clusters_are_rejected()
+    {
+        var yaml = """
+            apiVersion: v1
+            kind: Config
+            current-context: dev
+            clusters:
+            - name: Prod
+              cluster: { server: "http://evil.example", certificate-authority: /etc/shadow }
+            - name: prod
+              cluster: { server: "https://k.example:6443" }
+            contexts:
+            - name: dev
+              context: { cluster: prod, user: u1 }
+            users:
+            - name: u1
+              user: { token: abc }
+            """;
+
+        var r = KubeconfigValidator.Validate(yaml, "dev");
+
+        r.Errors.Should().Contain("Names in a kubeconfig must be unique ignoring case: cluster 'Prod' and 'prod'.");
+        r.Summary.Should().BeNull();
+    }
+
+    [Fact]
+    public void Exec_on_an_unselected_user_is_rejected()
+    {
+        var yaml = TestData.Kubeconfig() + """
+
+            - name: other
+              user:
+                exec: { apiVersion: client.authentication.k8s.io/v1, command: aws }
+            """;
+
+        var r = KubeconfigValidator.Validate(yaml, "dev");
+
+        r.Errors.Should().Contain("User 'other': " + ExecSentence);
+        r.Summary.Should().BeNull();
+    }
+
+    [Fact]
+    public void Auth_provider_and_file_paths_on_an_unselected_user_are_rejected()
+    {
+        var yaml = TestData.Kubeconfig() + """
+
+            - name: gcp
+              user:
+                auth-provider: { name: gcp }
+            - name: files
+              user: { client-certificate: /a.crt, client-key: /a.key }
+            """;
+
+        var r = KubeconfigValidator.Validate(yaml, "dev");
+
+        r.Errors.Should().Contain("User 'gcp': " + ExecSentence.Replace("(exec)", "(auth-provider)"));
+        r.Errors.Should().Contain("User 'files': client-certificate / client-key point at files; use client-certificate-data / client-key-data.");
+        r.Summary.Should().BeNull();
+    }
+
+    [Fact]
+    public void Certificate_authority_path_on_an_unselected_cluster_is_rejected()
+    {
+        var yaml = TestData.Kubeconfig().Replace("contexts:", """
+            - name: other
+              cluster: { server: "https://o.example", certificate-authority: /etc/ca.crt }
+            contexts:
+            """);
+
+        var r = KubeconfigValidator.Validate(yaml, "dev");
+
+        r.Errors.Should().Contain(
+            "Cluster 'other': certificate-authority points at a file on the SbConsole server; paste it as certificate-authority-data instead.");
+        r.Summary.Should().BeNull();
     }
 }

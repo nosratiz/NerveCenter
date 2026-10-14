@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using k8s;
+using k8s.KubeConfigModels;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kubernetes.Client;
@@ -72,12 +73,50 @@ public sealed class KubernetesClientFactory : ISingletonService, IDisposable
         return result;
     }
 
-    private static k8s.Kubernetes Create(KubeconfigSettings settings)
+    private static k8s.Kubernetes Create(KubeconfigSettings settings) => new(BuildConfiguration(settings));
+
+    /// <summary>
+    /// Builds from an in-memory config holding only the validated context, its cluster and its user, so the client's
+    /// case-insensitive name lookup can never land on an entry the validator didn't approve.
+    /// </summary>
+    internal static KubernetesClientConfiguration BuildConfiguration(KubeconfigSettings settings)
     {
+        // Parse already validated; re-validate here so a settings object built by hand can't skip it.
+        var validation = KubeconfigValidator.Validate(settings.Kubeconfig, settings.Context);
+        if (validation.Summary is null)
+        {
+            throw new FormatException(string.Join("; ", validation.Errors));
+        }
+
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(settings.Kubeconfig));
-        var config = KubernetesClientConfiguration.BuildConfigFromConfigFile(stream, currentContext: settings.Context);
+        var trimmed = Trim(KubernetesClientConfiguration.LoadKubeConfig(stream), validation.Summary.Context);
+        var config = KubernetesClientConfiguration.BuildConfigFromConfigObject(trimmed, trimmed.CurrentContext);
         config.HttpClientTimeout = Timeout;
-        return new k8s.Kubernetes(config);
+        return config;
+    }
+
+    /// <summary>A deep copy of exactly one context (matched by exact name), its cluster and its user.</summary>
+    internal static K8SConfiguration Trim(K8SConfiguration config, string context)
+    {
+        var ctx = (config.Contexts ?? []).FirstOrDefault(c => c.Name == context)
+            ?? throw new FormatException($"Context '{context}' isn't in this kubeconfig.");
+        var cluster = (config.Clusters ?? []).FirstOrDefault(c => c.Name == ctx.ContextDetails?.Cluster)
+            ?? throw new FormatException($"Context '{context}' points at cluster '{ctx.ContextDetails?.Cluster}', which isn't defined.");
+        var user = (config.Users ?? []).FirstOrDefault(u => u.Name == ctx.ContextDetails?.User)
+            ?? throw new FormatException($"Context '{context}' points at user '{ctx.ContextDetails?.User}', which isn't defined.");
+
+        var subset = new K8SConfiguration
+        {
+            ApiVersion = config.ApiVersion,
+            Kind = config.Kind,
+            CurrentContext = ctx.Name,
+            Contexts = [ctx],
+            Clusters = [cluster],
+            Users = [user],
+        };
+
+        // Round-trip through YAML: a deep copy with no references back into the parsed file.
+        return KubernetesYaml.Deserialize<K8SConfiguration>(KubernetesYaml.Serialize(subset));
     }
 
     public void Dispose()

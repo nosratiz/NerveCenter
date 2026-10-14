@@ -60,4 +60,13 @@ public class KubeconfigSettingsTests
     {
         new KubeconfigSettings("y", "c").ToSecretString().Should().Be("""{"kubeconfig":"y","context":"c"}""");
     }
+
+    [Fact]
+    public void Parse_normalises_an_empty_context_to_the_resolved_current_context()
+    {
+        var parsed = KubeconfigSettings.Parse(new KubeconfigSettings(TestData.Kubeconfig(context: "prod-eu"), "").ToSecretString());
+
+        parsed.Context.Should().Be("prod-eu");
+        parsed.Summary.Context.Should().Be(parsed.Context);
+    }
 }

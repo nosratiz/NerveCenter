@@ -1866,6 +1866,11 @@ the spec.
   credentials are rejected at save time: they would run binaries or read files on the *host*
   running the console, which for a team-hosted app is not the user's machine and is an
   arbitrary-code path. The form says how to mint a ServiceAccount token instead.
+  Because KubernetesClient resolves context/cluster/user names case-insensitively (first match),
+  the validator checks *every* user and cluster in the file and rejects names that collide
+  ignoring case, and the client factory builds from a trimmed in-memory config holding only the
+  validated context, cluster and user (`BuildConfigFromConfigObject`), so an unchecked entry can
+  never be selected.
 - **Secrets never leave one method.** The typed Secret list is reduced to `SecretSummary` (name,
   type, key names, sizes, age) inside a single method of `KubernetesOperations.Config.cs`; values
   are not copied anywhere. The one value read is a `kubernetes.io/tls` certificate's `NotAfter`,

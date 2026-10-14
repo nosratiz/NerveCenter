@@ -39,7 +39,8 @@ public sealed record KubeconfigSettings(string Kubeconfig, string Context)
             throw new FormatException(string.Join("; ", validation.Errors));
         }
 
-        return settings;
+        // An empty stored context means "current-context"; pin it so the stored value always matches the summary.
+        return string.IsNullOrEmpty(settings.Context) ? settings with { Context = validation.Summary!.Context } : settings;
     }
 
     public string ToSecretString() =>
