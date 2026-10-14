@@ -139,9 +139,10 @@ public static class PgCompletionEngine
         }
 
         items.AddRange(refs.Where(r => r.Alias is not null)
-            .Select(r => (Alias: r.Alias!.Value.Value, r.Object))
-            .DistinctBy(r => r.Alias, StringComparer.OrdinalIgnoreCase)
-            .Select(r => new PgCompletionItem(r.Alias, Identifier(r.Alias), PgCompletionKind.Alias, r.Object.Name)));
+            .Select(r => (Alias: r.Alias!.Value, r.Object))
+            .DistinctBy(r => (r.Alias.Quoted, Value: r.Alias.Quoted ? r.Alias.Value : r.Alias.Value.ToLowerInvariant()))
+            .Select(r => new PgCompletionItem(
+                r.Alias.Value, r.Alias.Quoted ? PgIdent.Quote(r.Alias.Value) : r.Alias.Value, PgCompletionKind.Alias, r.Object.Name)));
         items.AddRange(PgCompletionVocabulary.Keywords.Select(k => new PgCompletionItem(k, k, PgCompletionKind.Keyword, null)));
         items.AddRange(PgCompletionVocabulary.Functions.Select(f => new PgCompletionItem(
             f.Name, f.Signature.EndsWith("()", StringComparison.Ordinal) ? f.Name + "()" : f.Name + "(", PgCompletionKind.Function, f.Signature)));

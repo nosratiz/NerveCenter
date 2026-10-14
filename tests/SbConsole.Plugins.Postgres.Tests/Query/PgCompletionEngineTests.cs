@@ -212,6 +212,15 @@ public class PgCompletionEngineTests
     }
 
     [Fact]
+    public void Aliases_are_inserted_as_written()
+    {
+        Complete("SELECT | FROM orders O").Items.Should().ContainEquivalentOf(
+            new PgCompletionItem("O", "O", PgCompletionKind.Alias, "orders"));
+        Complete("SELECT | FROM orders \"My O\"").Items.Should().ContainEquivalentOf(
+            new PgCompletionItem("My O", "\"My O\"", PgCompletionKind.Alias, "orders"));
+    }
+
+    [Fact]
     public void Identifiers_are_quoted_only_when_needed()
     {
         var items = Complete("SELECT | FROM customers").Items;
