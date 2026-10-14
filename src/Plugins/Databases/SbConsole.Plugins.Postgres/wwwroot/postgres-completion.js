@@ -95,6 +95,10 @@ class Completion {
     }
 
     onKeyDown(e) {
+        if (e.isComposing) {
+            return; // an IME is mid-composition: its keys are not ours
+        }
+
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
             this.close(); // Ctrl/⌘+Enter runs the query (the wrapper's shortcut); no preventDefault, no pending popup
             return;
@@ -121,6 +125,11 @@ class Completion {
                 this.accept(this.active);
                 break;
             case "Tab":
+                if (e.shiftKey) {
+                    this.close(); // Shift+Tab keeps its focus-moving meaning
+                    break;
+                }
+
                 e.preventDefault();
                 this.accept(this.active);
                 break;

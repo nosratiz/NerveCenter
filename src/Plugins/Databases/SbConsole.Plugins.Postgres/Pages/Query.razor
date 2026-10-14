@@ -340,13 +340,7 @@
             await module.InvokeVoidAsync("attach", _editorWrap, reference);
             if (_disposed)
             {
-                // Disposed during the attach round-trip: DisposeAsync saw no attached module, so release it here.
-                await module.InvokeVoidAsync("detach", _editorWrap);
-                if (ReferenceEquals(module, _completionModule))
-                {
-                    await module.DisposeAsync();
-                }
-
+                // Disposed during the attach round-trip: DisposeAsync already detached (a no-op then) and disposed the module.
                 return;
             }
 
@@ -380,7 +374,8 @@
             _schema = PgCompletionSchema.Empty;
         }
 
-        if (_connection is not { } connection || _disposed)
+        // Static prerender never edits: skip the catalog query there (the interactive render loads it).
+        if (!RendererInfo.IsInteractive || _connection is not { } connection || _disposed)
         {
             return;
         }
@@ -466,7 +461,7 @@
 
         _database = database;
         UpdateUrl();
-        await LoadSchemaAsync(keepCurrent: false);
+        _ = LoadSchemaAsync(keepCurrent: false); // not awaited: the generation counter discards a stale result
     }
 
     // Composed from tracked state, never from Navigation.Uri: it lags a NavigateTo on Blazor Server. sql is carried only while the editor still holds the prefill:
@@ -1022,11 +1017,8 @@
         {
             try
             {
-                if (_completionAttached)
-                {
-                    await _completionModule.InvokeVoidAsync("detach", _editorWrap);
-                }
-
+                // Unconditional: interop is ordered on the circuit, and detach is a no-op in JS when nothing is attached.
+                await _completionModule.InvokeVoidAsync("detach", _editorWrap);
                 await _completionModule.DisposeAsync();
             }
             catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException)

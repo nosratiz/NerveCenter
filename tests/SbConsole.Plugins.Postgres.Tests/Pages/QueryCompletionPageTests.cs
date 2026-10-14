@@ -26,6 +26,7 @@ public class QueryCompletionPageTests : PgPageTestBase
         Operations.GetCompletionSchemaAsync(Secret, Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Schema);
         Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>())
             .Returns(new PgQueryResult([], [], false, 0, TimeSpan.FromSeconds(1), 1, "OK"));
+        SetRendererInfo(new RendererInfo("Server", true)); // bUnit's default is non-interactive (static prerender)
         _module = JSInterop.SetupModule(CompletionModulePath);
         _module.SetupVoid("attach", _ => true).SetVoidResult();
         _module.SetupVoid("detach", _ => true).SetVoidResult();
@@ -41,6 +42,15 @@ public class QueryCompletionPageTests : PgPageTestBase
         });
         cut.WaitForElement(".pg-editor");
         return cut;
+    }
+
+    [Fact]
+    public void Static_prerender_does_not_load_the_schema()
+    {
+        SetRendererInfo(new RendererInfo("Static", false));
+        RenderQuery();
+
+        Operations.DidNotReceive().GetCompletionSchemaAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     private DotNetObjectReference<QueryPage> AttachedReference(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
