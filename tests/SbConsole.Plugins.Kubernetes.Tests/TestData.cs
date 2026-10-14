@@ -183,4 +183,61 @@ internal static class TestData
             38,
             142_000, 512 * GiB, 0.38, 0.52);
     }
+
+    private const long MiB = 1024L * 1024;
+
+    public static K8sReplicaSet ReplicaSet(string name, long revision, string tag, int desired, int ready, DateTimeOffset created,
+        bool current = false, string? changeCause = null, bool hasTemplate = true) =>
+        new(name, revision, [$"ghcr.io/nervecenter/payment-gateway:{tag}"], desired, ready, created, changeCause, current, hasTemplate);
+
+    /// <summary>
+    /// Mockup 3c, captured at <see cref="T0"/>: checkout/payment-gateway, desired 4 ready 2, RollingUpdate 25% / 0. Revision 23
+    /// (2.14.1, 38 min old) has two OOM-crash-looping pods; revision 22 (2.13.4) still serves two; revisions 19–21 are kept
+    /// at desired 0. Progressing=False ProgressDeadlineExceeded, one Service with 2 endpoints, memory limit 512 Mi.
+    /// </summary>
+    public static K8sDeploymentDetail PaymentGatewayDetail()
+    {
+        var labels = new Dictionary<string, string> { ["app"] = "payment-gateway" };
+        var deployment = Deployment("checkout", "payment-gateway", 4, 2,
+        [
+            new K8sCondition("Available", "True", "MinimumReplicasAvailable", "Deployment has minimum availability.", T0.AddDays(-9)),
+            new K8sCondition("Progressing", "False", "ProgressDeadlineExceeded",
+                "ReplicaSet \"payment-gateway-7d9f8\" has timed out progressing.", T0.AddMinutes(-38)),
+            new K8sCondition("ReplicaFailure", "False", null, null, T0.AddDays(-9)),
+        ]) with
+        {
+            Ready = 2, UpToDate = 2, Images = ["ghcr.io/nervecenter/payment-gateway:2.14.1"], CreatedAt = T0.AddDays(-41), Labels = labels,
+        };
+
+        K8sPodSummary PgPod(string rs, string suffix, string status, int restarts, string? lastReason, int ready) =>
+            new("checkout", $"{rs}-{suffix}", "Running", status, restarts, ready, 1, "aks-pool1-38211-vmss000004",
+                new K8sRef("Deployment", "checkout", "payment-gateway"), rs, lastReason, lastReason is null ? null : 137,
+                lastReason is null ? null : T0.AddMinutes(-2), null, T0.AddMinutes(-38), 500, 512 * MiB, false,
+                new Dictionary<string, string>(labels) { ["pod-template-hash"] = rs[(rs.LastIndexOf('-') + 1)..] }, false, false);
+
+        return new K8sDeploymentDetail(
+            deployment, "RollingUpdate", "25%", "0", "app=payment-gateway", 600, 10,
+            new K8sResources(500, 512 * MiB, 1000, 512 * MiB), 23,
+            [
+                ReplicaSet("payment-gateway-7d9f8", 23, "2.14.1", 4, 0, T0.AddMinutes(-38), current: true, changeCause: "bump sdk"),
+                ReplicaSet("payment-gateway-5c6b4", 22, "2.13.4", 2, 2, T0.AddDays(-9)),
+                ReplicaSet("payment-gateway-8a1e0", 21, "2.13.3", 0, 0, T0.AddDays(-16)),
+                ReplicaSet("payment-gateway-6f2c1", 20, "2.13.1", 0, 0, T0.AddDays(-24), changeCause: "manual"),
+                ReplicaSet("payment-gateway-49b7d", 19, "2.13.0", 0, 0, T0.AddDays(-30)),
+            ],
+            [
+                PgPod("payment-gateway-7d9f8", "x2k4q", "CrashLoopBackOff", 14, "OOMKilled", 0),
+                PgPod("payment-gateway-7d9f8", "p7m2w", "CrashLoopBackOff", 11, "OOMKilled", 0),
+                PgPod("payment-gateway-5c6b4", "k8s2d", "Running", 0, null, 1),
+                PgPod("payment-gateway-5c6b4", "nq41v", "Running", 0, null, 1),
+            ],
+            [new K8sServiceRef("payment-gateway", 2)],
+            [
+                new K8sEvent("checkout", "Warning", "BackOff", "Back-off restarting failed container gateway",
+                    new K8sRef("Pod", "checkout", "payment-gateway-7d9f8-x2k4q"), 14, T0.AddMinutes(-2), "kubelet"),
+                new K8sEvent("checkout", "Normal", "ScalingReplicaSet", "Scaled up replica set payment-gateway-7d9f8 to 2",
+                    new K8sRef("Deployment", "checkout", "payment-gateway"), 1, T0.AddMinutes(-38), "deployment-controller"),
+            ],
+            false);
+    }
 }

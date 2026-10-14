@@ -77,6 +77,44 @@ internal static class K8sMappers
     /// <summary>Σ a pod template's app-container requests (one pod's worth): CPU millicores, memory bytes.</summary>
     public static (long Cpu, long Mem) TemplateRequests(V1PodTemplateSpec? template) => Sum(template?.Spec?.Containers, r => r.Requests);
 
+    /// <summary>One pod's requests and limits from a template; a value is null when no container sets it.</summary>
+    public static K8sResources TemplateResources(V1PodTemplateSpec? template)
+    {
+        var containers = template?.Spec?.Containers ?? [];
+        long? Total(Func<V1ResourceRequirements, IDictionary<string, ResourceQuantity>?> pick, string key, Func<string?, long> parse)
+        {
+            var values = containers.Select(c => c.Resources is null ? null : Quantity(pick(c.Resources), key)).Where(v => v is not null).ToList();
+            return values.Count == 0 ? null : values.Sum(parse);
+        }
+
+        return new K8sResources(
+            Total(r => r.Requests, "cpu", K8sFormat.ParseCpuMilli), Total(r => r.Requests, "memory", K8sFormat.ParseBytes),
+            Total(r => r.Limits, "cpu", K8sFormat.ParseCpuMilli), Total(r => r.Limits, "memory", K8sFormat.ParseBytes));
+    }
+
+    public const string RevisionAnnotation = "deployment.kubernetes.io/revision";
+    public const string ChangeCauseAnnotation = "kubernetes.io/change-cause";
+
+    /// <summary>A Deployment-owned ReplicaSet; <paramref name="currentRevision"/> is the Deployment's own revision annotation.</summary>
+    public static K8sReplicaSet ReplicaSet(V1ReplicaSet rs, long currentRevision)
+    {
+        var revision = Revision(rs.Metadata);
+        return new K8sReplicaSet(
+            rs.Metadata.Name, revision,
+            (rs.Spec?.Template?.Spec?.Containers ?? []).Select(c => c.Image ?? string.Empty).ToList(),
+            rs.Spec?.Replicas ?? 0, rs.Status?.ReadyReplicas ?? 0,
+            Utc(rs.Metadata.CreationTimestamp) ?? DateTimeOffset.MinValue,
+            rs.Metadata.Annotations is { } a && a.TryGetValue(ChangeCauseAnnotation, out var cause) && !string.IsNullOrEmpty(cause) ? cause : null,
+            revision > 0 && revision == currentRevision,
+            rs.Spec?.Template is not null);
+    }
+
+    /// <summary>The <c>deployment.kubernetes.io/revision</c> annotation, or 0 when absent or not a number.</summary>
+    public static long Revision(V1ObjectMeta? meta) =>
+        meta?.Annotations is { } a && a.TryGetValue(RevisionAnnotation, out var value)
+            && long.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n)
+            ? n : 0;
+
     /// <summary>Σ app-container limits (init containers ignored): CPU millicores, memory bytes.</summary>
     public static (long Cpu, long Mem) PodLimits(V1Pod pod) => Sum(pod.Spec?.Containers, r => r.Limits);
 

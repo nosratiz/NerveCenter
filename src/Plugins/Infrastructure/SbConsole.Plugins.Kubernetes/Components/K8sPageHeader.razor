@@ -5,7 +5,10 @@
 </HeadContent>
 
 <div class="k8s-header @Class">
-    <span class="k8s-title">@Title</span>
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <span class="k8s-title">@Title</span>
+    }
     @Chips
     @if (Meta is not null)
     {
@@ -16,6 +19,7 @@
 </div>
 
 @code {
+    /// <summary>The page title; empty when the page puts breadcrumbs in <see cref="Chips"/> instead (Deployment detail).</summary>
     [Parameter, EditorRequired] public string Title { get; set; } = "";
 
     [Parameter] public RenderFragment? Chips { get; set; }

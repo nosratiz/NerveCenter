@@ -1,0 +1,857 @@
+@* Mockup 3c, spec §7: one Deployment — stuck-rollout alert, facts, ReplicaSet → Pod strip, conditions, events,
+   rollout history with Rollback. No connection picker: the cluster comes from ?connectionId=, looked up server-side. *@
+@page "/p/kubernetes/workloads/deployments/{Namespace}/{Name}"
+@using System.Globalization
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Kubernetes.Access
+@using SbConsole.Plugins.Kubernetes.Deployments
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject GetDeploymentDetailQueryHandler GetDetail
+@inject GetPermissionsQueryHandler GetPermissions
+@inject GetResourceYamlQueryHandler GetResourceYaml
+@inject RestartWorkloadCommandHandler RestartHandler
+@inject DeleteWorkloadCommandHandler DeleteHandler
+@inject RollbackDeploymentCommandHandler RollbackHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@Name · Deployment</PageTitle>
+
+<div class="k8s-page k8s-dd">
+    <K8sPageHeader Title="">
+        <Chips>
+            <MudBreadcrumbs Items="Crumbs" Class="k8s-breadcrumbs" />
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-kind-chip">Deployment</MudChip>
+            @if (_connection?.IsProd == true)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Class="k8s-prod-chip">PROD</MudChip>
+            }
+        </Chips>
+        <Actions>
+            @if (_connection is not null && _detail is not null)
+            {
+                <MudButton Class="k8s-dd-yaml" Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Outlined.Code" OnClick="ViewYamlAsync">YAML</MudButton>
+                @if (CanScale)
+                {
+                    <MudButton Class="k8s-dd-scale" Variant="Variant.Outlined" Size="Size.Small" OnClick="ScaleAsync">Scale</MudButton>
+                }
+                @if (CanPatch)
+                {
+                    <MudButton Class="k8s-dd-restart" Variant="Variant.Outlined" Size="Size.Small" OnClick="RestartAsync">Rollout restart</MudButton>
+                }
+                @if (CanDelete)
+                {
+                    <MudMenu Class="k8s-dd-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" Dense="true"
+                             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"More actions for {Name}")">
+                        <MudMenuItem Class="k8s-dd-delete" Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error" OnClick="DeleteAsync">
+                            <span class="mud-error-text">Delete…</span>
+                        </MudMenuItem>
+                    </MudMenu>
+                }
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_noConnection)
+    {
+        <div class="k8s-body">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="k8s-dd-noconn">
+                This link doesn't say which cluster to use, or that cluster is no longer saved.
+                <MudLink Href="@KubernetesPlugin.WorkloadsHref">Open Workloads</MudLink> and choose the Deployment there.
+            </MudAlert>
+        </div>
+    }
+    else if (_connection is not null)
+    {
+        <div class="k8s-body">
+            @if (_error is not null)
+            {
+                <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Title="@($"Can't load Deployment {Namespace}/{Name}.")" Class="k8s-dd-error">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-dd-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                </K8sErrorAlert>
+            }
+
+            @if (_gone)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="k8s-dd-gone">
+                    Deployment @Namespace/@Name no longer exists.
+                    <MudLink Href="@WorkloadsLink(Namespace)">Back to Workloads</MudLink>
+                </MudAlert>
+            }
+            else if (_detail is { } d)
+            {
+                @Body(d)
+            }
+            else if (_error is null)
+            {
+                <div class="k8s-wl-loading">
+                    @for (var i = 0; i < 4; i++)
+                    {
+                        <MudSkeleton Height="28px" />
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(10);
+
+    [Parameter] public string Namespace { get; set; } = "";
+
+    [Parameter] public string Name { get; set; } = "";
+
+    private readonly CancellationTokenSource _cts = new();
+    private K8sPoller? _poller;
+    private ConnectionInfo? _connection;
+    private bool _noConnection;
+    private K8sPermissions? _permissions;
+    private K8sDeploymentDetail? _detail;
+    private bool _gone;
+    private string? _error;
+    private bool _loading;
+    private string? _key;
+    private int _generation;
+    private int _openDialogs;
+    private bool _disposed;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _visibility;
+    private DotNetObjectReference<DeploymentDetail>? _self;
+
+    // ---- Rendering ----
+
+    private RenderFragment Body(K8sDeploymentDetail d) => __builder =>
+    {
+        var now = Clock.GetUtcNow();
+        if (RolloutHistory.Stuck(d, now) is { } stuck)
+        {
+            var target = RolloutHistory.RollbackTarget(d);
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="k8s-stuck-alert">
+                <div class="k8s-stuck-row">
+                    <span><strong>Rollout stuck.</strong> @StuckText(stuck)</span>
+                    @if (target is { } t && CanPatch)
+                    {
+                        <MudButton Class="k8s-rollback-stuck" Variant="Variant.Outlined" Size="Size.Small" OnClick="() => RollbackAsync(t)">Rollback to @t</MudButton>
+                    }
+                </div>
+            </MudAlert>
+        }
+
+        @Facts(d, now)
+        @Strip(d, now)
+
+        <div class="k8s-dd-lower">
+            <MudPaper Outlined="true" Class="k8s-conditions">
+                <div class="k8s-card-head"><strong>Conditions</strong></div>
+                @if (d.Deployment.Conditions.Count == 0)
+                {
+                    <div class="k8s-events-empty k8s-muted">No conditions reported.</div>
+                }
+                @foreach (var c in d.Deployment.Conditions)
+                {
+                    <div class="k8s-condition-row">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@ConditionColor(c)">@c.Status</MudChip>
+                        <div>
+                            <div>@c.Type</div>
+                            <div class="k8s-mono k8s-muted k8s-condition-reason">@ConditionReason(c, now)</div>
+                        </div>
+                    </div>
+                }
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="k8s-events">
+                <div class="k8s-card-head"><strong>Events</strong><span class="k8s-card-note">this deployment + its pods</span></div>
+                @if (d.Events.Count == 0)
+                {
+                    <div class="k8s-events-empty k8s-muted">No recent events.</div>
+                }
+                @foreach (var e in d.Events)
+                {
+                    <div class="k8s-event-row">
+                        <span class="k8s-mono k8s-muted k8s-event-age">@K8sFormat.Age(now - e.LastSeen)</span>
+                        <div class="k8s-event-text k8s-event-message" title="@e.Message">
+                            <span class="@("k8s-mono " + (e.Type == "Warning" ? "k8s-event-warning" : "k8s-event-normal"))">@e.Reason</span>
+                            <span class="k8s-muted">@EventText(e, d)</span>
+                        </div>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">×@e.Count</MudChip>
+                    </div>
+                }
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="k8s-history">
+                <div class="k8s-card-head"><strong>Rollout history</strong></div>
+                @foreach (var row in RolloutHistory.Build(d))
+                {
+                    <div class="@("k8s-history-row" + (row.IsCurrent ? " k8s-history-current" : ""))">
+                        <span class="k8s-mono k8s-history-rev">@row.Revision</span>
+                        <div class="k8s-history-text">
+                            <div class="k8s-mono k8s-history-image" title="@row.Image">@Tags(row.Image)</div>
+                            <div class="k8s-muted k8s-history-sub">@K8sFormat.Age(now - row.CreatedAt)@(row.ChangeCause is null ? "" : " · " + row.ChangeCause)</div>
+                        </div>
+                        @if (row.IsStuck)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">stuck</MudChip>
+                        }
+                        else if (row.IsCurrent)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">current</MudChip>
+                        }
+                        else if (row.CanRollback && CanPatch)
+                        {
+                            <MudButton Class="k8s-rollback" Variant="Variant.Outlined" Size="Size.Small" OnClick="() => RollbackAsync(row.Revision)">Rollback</MudButton>
+                        }
+                        else
+                        {
+                            <span></span>
+                        }
+                    </div>
+                }
+            </MudPaper>
+        </div>
+    };
+
+    private RenderFragment Facts(K8sDeploymentDetail d, DateTimeOffset now) => __builder =>
+    {
+        var w = d.Deployment;
+        var previous = PreviousImages(d);
+        var oom = d.Pods.Any(p => p.LastTerminationReason == "OOMKilled");
+        var res = d.PodResources;
+        <div class="k8s-facts">
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Ready</span>
+                <ReadyBar Ready="w.Ready" Desired="w.Desired" />
+                <span class="k8s-tile-caption">@w.Desired desired</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Strategy</span>
+                <span class="k8s-mono k8s-fact-value">@d.Strategy</span>
+                @if (d.MaxSurge is not null || d.MaxUnavailable is not null)
+                {
+                    <span class="k8s-tile-caption">maxSurge @(d.MaxSurge ?? "—") · maxUnavailable @(d.MaxUnavailable ?? "—")</span>
+                }
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Image</span>
+                <span class="k8s-mono k8s-fact-value k8s-fact-ellipsis" title="@K8sFormat.Images(w.Images)">@string.Join(" · ", w.Images.Select(ShortImage))</span>
+                @if (previous is not null)
+                {
+                    <span class="k8s-tile-caption">was @previous</span>
+                }
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Resources / pod</span>
+                <span class="k8s-mono k8s-fact-value">@(res.CpuRequestMilli is { } cpu ? K8sFormat.Cpu(cpu) : "—") · @(res.MemRequestBytes is { } mem ? K8sFormat.Bytes(mem) : "—")</span>
+                @if (res.MemLimitBytes is { } limit)
+                {
+                    <span class="@("k8s-tile-caption" + (oom ? " k8s-fact-warn" : ""))">limit @K8sFormat.Bytes(limit)@(oom ? " — OOMKilled at " + K8sFormat.Bytes(limit) : "")</span>
+                }
+                else
+                {
+                    <span class="@("k8s-tile-caption" + (oom ? " k8s-fact-warn" : ""))">no memory limit@(oom ? " — OOMKilled" : "")</span>
+                }
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Selector</span>
+                <span class="k8s-mono k8s-fact-value k8s-fact-ellipsis" title="@d.Selector">@(d.Selector.Length == 0 ? "—" : d.Selector)</span>
+                <span class="k8s-tile-caption">Service @ServiceText(d.Services)</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Age</span>
+                <span class="k8s-fact-big">@K8sFormat.Age(now - w.CreatedAt)</span>
+                <span class="k8s-tile-caption">@Revisions(d) revisions</span>
+            </MudPaper>
+        </div>
+    };
+
+    private RenderFragment Strip(K8sDeploymentDetail d, DateTimeOffset now) => __builder =>
+    {
+        var podsByRs = d.Pods.ToLookup(p => p.ReplicaSet ?? "", StringComparer.Ordinal);
+        var ordered = d.ReplicaSets.OrderByDescending(r => r.Revision).ToList();
+        var live = ordered.Where(r => r.Desired > 0 || r.IsCurrent || podsByRs[r.Name].Any()).ToList();
+        var older = ordered.Except(live).ToList();
+        <MudPaper Outlined="true" Class="k8s-rs-strip">
+            <div class="k8s-card-head">
+                <strong>Deployment → ReplicaSets → Pods</strong>
+                <span class="k8s-muted k8s-rs-hint">click a pod to open it</span>
+                <span class="k8s-card-note k8s-rs-legend">
+                    <span><span class="k8s-dot k8s-dot-running"></span>running</span>
+                    <span><span class="k8s-dot k8s-dot-pending"></span>pending</span>
+                    <span><span class="k8s-dot k8s-dot-crash"></span>crash loop</span>
+                    <span><span class="k8s-dot k8s-dot-terminating"></span>terminating</span>
+                </span>
+            </div>
+            <div class="k8s-rs-grid">
+                <div class="k8s-rs-root">
+                    <span class="k8s-mono">@Name</span>
+                    <span class="k8s-muted k8s-rs-sub">Deployment · @d.Deployment.Desired desired</span>
+                </div>
+                <div class="k8s-rs-rows">
+                    @foreach (var rs in live)
+                    {
+                        <div class="k8s-rs-row">
+                            <div class="k8s-rs-card">
+                                <div class="k8s-rs-title">
+                                    <span class="k8s-mono">@rs.Name</span>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(rs.IsCurrent ? Color.Primary : Color.Default)">rev @rs.Revision · @(rs.IsCurrent ? "current" : "old")</MudChip>
+                                </div>
+                                <span class="k8s-mono k8s-rs-image" title="@K8sFormat.Images(rs.Images)">@Tags(K8sFormat.Images(rs.Images))</span>
+                                <span class="k8s-muted k8s-rs-sub">desired @rs.Desired · ready @rs.Ready · @K8sFormat.Age(now - rs.CreatedAt)</span>
+                            </div>
+                            <div class="k8s-rs-pods">
+                                @foreach (var pod in podsByRs[rs.Name])
+                                {
+                                    <PhaseChip Status="@pod.Status" Label="@ShortPod(pod.Name, rs.Name)" Restarts="pod.Restarts"
+                                               Href="@(KubernetesPlugin.PodHref(pod.Namespace, pod.Name) + "?connectionId=" + _connection?.Id)" />
+                                }
+                                @if (!podsByRs[rs.Name].Any())
+                                {
+                                    <span class="k8s-muted k8s-rs-sub">no pods</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (older.Count > 0)
+                    {
+                        <div class="k8s-rs-older k8s-muted">@OlderText(older, d.RevisionHistoryLimit)</div>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    };
+
+    // ---- Text helpers ----
+
+    private static string Plural(int n, string one, string many) => n == 1 ? $"{n} {one}" : $"{n} {many}";
+
+    private static string StuckText(StuckRollout s)
+    {
+        var text = $"Revision {s.NewRevision} has been progressing for {K8sFormat.Age(s.ProgressingFor)}; "
+                   + $"{s.CrashLoopingPods} of the new pods are crash-looping{(s.Reason is null ? "" : " on " + s.Reason)}.";
+        if (s.ServingRevision is { } serving)
+        {
+            text += $" Revision {serving} is still serving {Plural(s.ServingPods, "pod", "pods")}.";
+        }
+
+        return text;
+    }
+
+    private static string OlderText(IReadOnlyList<K8sReplicaSet> older, int limit)
+    {
+        var min = older.Min(r => r.Revision);
+        var max = older.Max(r => r.Revision);
+        var revs = min == max ? $"rev {min}" : $"rev {min}–{max}";
+        return $"{older.Count} older · {revs} · desired 0 · no pods · kept by revisionHistoryLimit {limit}";
+    }
+
+    private static string ServiceText(IReadOnlyList<K8sServiceRef> services) =>
+        services.Count == 0
+            ? "none"
+            : string.Join(", ", services.Select(s => $"{s.Name} · {Plural(s.ReadyEndpoints, "endpoint", "endpoints")}"));
+
+    private static long Revisions(K8sDeploymentDetail d) =>
+        Math.Max(d.CurrentRevision, d.ReplicaSets.Count == 0 ? 0 : d.ReplicaSets.Max(r => r.Revision));
+
+    /// <summary>"repo/name:tag" → "name:tag" (the last path segment).</summary>
+    private static string ShortImage(string image)
+    {
+        var slash = image.LastIndexOf('/');
+        return slash < 0 ? image : image[(slash + 1)..];
+    }
+
+    /// <summary>The tag (or digest) of an image, or the whole image when it has none.</summary>
+    private static string Tag(string image)
+    {
+        var at = image.IndexOf('@');
+        if (at >= 0)
+        {
+            return image[(at + 1)..];
+        }
+
+        var colon = image.LastIndexOf(':');
+        return colon > image.LastIndexOf('/') ? image[(colon + 1)..] : image;
+    }
+
+    private static string Repository(string image)
+    {
+        var at = image.IndexOf('@');
+        if (at >= 0)
+        {
+            return image[..at];
+        }
+
+        var colon = image.LastIndexOf(':');
+        return colon > image.LastIndexOf('/') ? image[..colon] : image;
+    }
+
+    private static string Tags(string joinedImages) =>
+        string.Join(" · ", joinedImages.Split(" · ", StringSplitOptions.RemoveEmptyEntries).Select(Tag));
+
+    /// <summary>The newest non-current revision's images when they differ from the current ones; tags only for the same repository.</summary>
+    private static string? PreviousImages(K8sDeploymentDetail d)
+    {
+        var current = d.Deployment.Images;
+        var previous = d.ReplicaSets.Where(r => !r.IsCurrent).OrderByDescending(r => r.Revision).FirstOrDefault();
+        if (previous is null || previous.Images.SequenceEqual(current))
+        {
+            return null;
+        }
+
+        return string.Join(" · ", previous.Images.Select((image, i) =>
+            i < current.Count && Repository(current[i]) == Repository(image) ? Tag(image) : image));
+    }
+
+    private static string ShortPod(string pod, string replicaSet) =>
+        pod.StartsWith(replicaSet + "-", StringComparison.Ordinal) && pod.Length > replicaSet.Length + 1 ? pod[(replicaSet.Length + 1)..] : pod;
+
+    private static string EventText(K8sEvent e, K8sDeploymentDetail d)
+    {
+        var obj = e.Regarding.Kind switch
+        {
+            "Pod" => d.Pods.FirstOrDefault(p => p.Name == e.Regarding.Name) is { ReplicaSet: { } rs } ? ShortPod(e.Regarding.Name, rs)
+                : e.Regarding.Name[(e.Regarding.Name.LastIndexOf('-') + 1)..],
+            "ReplicaSet" => e.Regarding.Name,
+            "Node" => "node " + e.Regarding.Name,
+            _ => null,
+        };
+        return obj is null ? e.Message : $"{obj} — {e.Message}";
+    }
+
+    private static Color ConditionColor(K8sCondition c) => c.Type == "ReplicaFailure"
+        ? (c.Status == "True" ? Color.Error : Color.Default)
+        : c.Status switch { "True" => Color.Success, "False" => Color.Error, _ => Color.Default };
+
+    private static string ConditionReason(K8sCondition c, DateTimeOffset now)
+    {
+        var reason = c.Reason ?? "—";
+        return c.LastTransition is { } at ? $"{reason} · {K8sFormat.Age(now - at)}" : reason;
+    }
+
+    private IReadOnlyList<BreadcrumbItem> Crumbs =>
+        _connection is { } c
+            ?
+            [
+                new BreadcrumbItem(c.Name, $"{KubernetesPlugin.WorkloadsHref}?connectionId={c.Id}"),
+                new BreadcrumbItem(Namespace, WorkloadsLink(Namespace)),
+                new BreadcrumbItem(Name, null, disabled: true),
+            ]
+            : [new BreadcrumbItem(Namespace, null, disabled: true), new BreadcrumbItem(Name, null, disabled: true)];
+
+    private string WorkloadsLink(string ns) =>
+        _connection is { } c
+            ? $"{KubernetesPlugin.WorkloadsHref}?connectionId={c.Id}&ns={Uri.EscapeDataString(ns)}"
+            : KubernetesPlugin.WorkloadsHref;
+
+    // ---- RBAC (spec §11): nothing mutating renders until the probe answers; incomplete reviews render everything. ----
+
+    private bool Allowed(string resource, string verb) =>
+        _permissions is { } p && (p.Incomplete || p.Can("apps", resource, verb, Namespace));
+
+    private bool CanScale => Allowed("deployments/scale", "patch");
+
+    private bool CanPatch => Allowed("deployments", "patch");
+
+    private bool CanDelete => Allowed("deployments", "delete");
+
+    // ---- Lifecycle ----
+
+    protected override void OnInitialized() => _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        var connectionId = query.TryGetValue("connectionId", out var raw) && Guid.TryParse(raw.ToString(), out var id) ? id : (Guid?)null;
+        var key = $"{connectionId}/{Namespace}/{Name}";
+        if (key == _key)
+        {
+            return;
+        }
+
+        _key = key;
+        _generation++;
+        _connection = null;
+        _noConnection = false;
+        _permissions = null;
+        _detail = null;
+        _gone = false;
+        _error = null;
+        _poller?.Stop();
+
+        if (connectionId is not { } cid)
+        {
+            _noConnection = true;
+            return;
+        }
+
+        var generation = _generation;
+        IReadOnlyList<ConnectionInfo> connections;
+        try
+        {
+            connections = await Connections.ListAsync(KubernetesPlugin.Kind, _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
+
+        // IsProd comes from this server-side ConnectionInfo, never from the query string.
+        _connection = connections.FirstOrDefault(c => c.Id == cid);
+        if (_connection is null)
+        {
+            _noConnection = true;
+            return;
+        }
+
+        _poller?.Start();
+        await LoadAsync(background: false, withPermissions: true);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            var module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
+            if (module is null)
+            {
+                return;
+            }
+
+            if (_disposed)
+            {
+                await module.DisposeAsync();
+                return;
+            }
+
+            _module = module;
+            _self = DotNetObjectReference.Create(this);
+            var visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
+            if (_disposed)
+            {
+                // DisposeAsync ran while the hook was being installed: release it or the browser keeps a listener
+                // that calls a disposed DotNetObjectReference.
+                if (visibility is not null)
+                {
+                    await visibility.InvokeVoidAsync("dispose");
+                    await visibility.DisposeAsync();
+                }
+
+                return;
+            }
+
+            _visibility = visibility;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Without the visibility hook the poller keeps running while the tab is hidden.
+        }
+    }
+
+    /// <summary>Called by kubernetes.js <c>watchVisibility</c>: no polling while the browser tab is hidden.</summary>
+    [JSInvokable]
+    public Task SetHidden(bool hidden)
+    {
+        if (!_disposed && _poller is not null)
+        {
+            _poller.Hidden = hidden;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task LoadAsync() => LoadAsync(background: false, withPermissions: true);
+
+    private async Task LoadAsync(bool background, bool withPermissions)
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            // Sequential on purpose: the handlers share the circuit's scoped services.
+            if (withPermissions || _permissions is null)
+            {
+                var permissions = await GetPermissions.HandleAsync(connection.Id, [Namespace], false, _cts.Token);
+                if (generation != _generation || _disposed)
+                {
+                    return;
+                }
+
+                // A failed lookup leaves the server's 403 as the backstop rather than hiding everything.
+                _permissions = permissions.Value ?? K8sPermissions.All;
+            }
+
+            var result = await GetDetail.HandleAsync(connection.Id, Namespace, Name, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _detail = result.Value;
+                _gone = result.Value is null;
+                _error = null;
+            }
+            else
+            {
+                // Keep the last detail (if any) and say why it is not fresh.
+                _error = result.Error ?? "Loading the Deployment failed.";
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _openDialogs > 0 || _gone)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true, withPermissions: false);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    /// <summary>Runs a dialog with the poller paused, so a refresh never repaints the page under it.</summary>
+    private async Task<T> WithDialogAsync<T>(Func<Task<T>> dialog)
+    {
+        _openDialogs++;
+        if (_poller is not null)
+        {
+            _poller.Paused = true;
+        }
+
+        try
+        {
+            return await dialog();
+        }
+        finally
+        {
+            _openDialogs--;
+            if (_poller is not null)
+            {
+                _poller.Paused = _openDialogs > 0;
+            }
+        }
+    }
+
+    // ---- Actions ----
+
+    private K8sTarget Target(ConnectionInfo c) => new(c.Id, c.Name, Namespace, Name);
+
+    private async Task ViewYamlAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var ct = _cts.Token;
+        await WithDialogAsync(async () =>
+        {
+            var reference = await YamlDialog.ShowAsync(Dialogs, $"deployment/{Name}",
+                () => GetResourceYaml.HandleAsync(connection.Id, K8sResourceKind.Deployment, Namespace, Name, ct));
+            return await reference.Result;
+        });
+    }
+
+    private async Task ScaleAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var result = await WithDialogAsync(async () =>
+        {
+            var reference = await ScaleDialog.ShowAsync(Dialogs, connection, K8sWorkloadKind.Deployment, Namespace, Name);
+            return await reference.Result;
+        });
+        if (_disposed || result is not { Canceled: false, Data: int replicas })
+        {
+            return;
+        }
+
+        Snackbar.Add($"Scaled {Name} to {Plural(replicas, "replica", "replicas")}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task RestartAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        // Mutating: a plain two-button confirmation, never typed.
+        if (!await WithDialogAsync(() => Confirmation.ConfirmAsync("Restart", Name, isProd: false)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await RestartHandler.HandleAsync(new WorkloadCommand(Target(connection), K8sWorkloadKind.Deployment), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Restart failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Restarting {Name}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task RollbackAsync(long revision)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        // Mutating: a plain two-button confirmation, never typed.
+        var label = revision.ToString(CultureInfo.InvariantCulture);
+        if (!await WithDialogAsync(() => Confirmation.ConfirmAsync("Roll back to revision", label, false)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await RollbackHandler.HandleAsync(new RollbackCommand(Target(connection), revision), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Rollback failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Rolling {Name} back to revision {label}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_connection is not { } connection || _detail is not { } d)
+        {
+            return;
+        }
+
+        // IsProd comes from the server-side ConnectionInfo, never from the query string.
+        var request = new ConfirmationRequest("Delete Deployment", Name, connection.IsProd,
+            Consequence: "Deletes the Deployment and, in the background, everything it owns (ReplicaSets and Pods).",
+            Details:
+            [
+                new ConfirmationDetail("Namespace", Namespace),
+                new ConfirmationDetail("Ready", $"{d.Deployment.Ready}/{d.Deployment.Desired}"),
+                new ConfirmationDetail("Images", K8sFormat.Images(d.Deployment.Images)),
+            ],
+            AuditAction: WorkloadAudit.Action(K8sWorkloadKind.Deployment, "delete"),
+            Destructive: true);
+        if (!await WithDialogAsync(() => Confirmation.ConfirmAsync(request)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await DeleteHandler.HandleAsync(new WorkloadCommand(Target(connection), K8sWorkloadKind.Deployment), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Delete failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Deleted Deployment {Name}.", Severity.Success);
+        Navigation.NavigateTo(WorkloadsLink(Namespace));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+        try
+        {
+            if (_visibility is not null)
+            {
+                await _visibility.InvokeVoidAsync("dispose");
+                await _visibility.DisposeAsync();
+            }
+
+            if (_module is not null)
+            {
+                await _module.DisposeAsync();
+            }
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException or TaskCanceledException)
+        {
+            // The circuit is already gone; nothing to release.
+        }
+
+        _self?.Dispose();
+    }
+}

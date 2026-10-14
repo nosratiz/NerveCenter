@@ -64,12 +64,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
 
     // ---- Not implemented yet: each later task replaces its own. ----
 
-    public Task<K8sDeploymentDetail?> GetDeploymentDetailAsync(string secret, string ns, string name, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<long> RollbackDeploymentAsync(string secret, string ns, string name, long toRevision, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
     public Task<K8sPodDetail?> GetPodDetailAsync(string secret, string ns, string name, CancellationToken ct = default) =>
         throw new NotImplementedException();
 
