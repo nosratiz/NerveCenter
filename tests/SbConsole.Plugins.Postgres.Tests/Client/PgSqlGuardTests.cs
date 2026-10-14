@@ -68,4 +68,12 @@ public class PgSqlGuardTests
         FluentActions.Invoking(() => PgSqlGuard.Check("CREATE INDEX CONCURRENTLY i ON t(a)", true))
             .Should().Throw<PgSqlRefusedException>()
             .WithMessage("`CREATE INDEX CONCURRENTLY` can't run in a transaction — run it from a SQL client.");
+
+    [Theory]
+    [InlineData("SELECT 1 -- x\r; COMMIT; DELETE FROM t")]
+    [InlineData("SELECT 1 AS é$$; COMMIT; DELETE FROM t; SELECT $$x")]
+    [InlineData("SELECT éE'\\'; COMMIT; DELETE FROM t; --'")]
+    public void Read_mode_refuses_lexer_bypass_inputs(string sql) =>
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, false))
+            .Should().Throw<PgSqlRefusedException>();
 }

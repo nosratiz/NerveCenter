@@ -2,7 +2,10 @@ namespace SbConsole.Plugins.Postgres.Client;
 
 public sealed record PgStatement(int Start, int Length, string Text, string FirstKeyword);
 
-/// <summary>Splits a SQL script on top-level semicolons, honouring every PostgreSQL quoting form.</summary>
+/// <summary>
+/// Splits a SQL script on top-level semicolons, honouring every PostgreSQL quoting form.
+/// Must never see fewer statements than the server; over-splitting only refuses.
+/// </summary>
 public static class PgSqlLexer
 {
     public static IReadOnlyList<PgStatement> Split(string sql)
@@ -106,15 +109,15 @@ public static class PgSqlLexer
     /// <summary>Skips whitespace or one comment starting at i; returns i if neither.</summary>
     private static int SkipTrivia(string s, int i)
     {
-        if (char.IsWhiteSpace(s[i]))
+        if (IsPgWhitespace(s[i]))
         {
             return i + 1;
         }
 
         if (s[i] == '-' && i + 1 < s.Length && s[i + 1] == '-')
         {
-            var nl = s.IndexOf('\n', i);
-            return nl < 0 ? s.Length : nl + 1;
+            var nl = s.AsSpan(i).IndexOfAny('\n', '\r');
+            return nl < 0 ? s.Length : i + nl + 1;
         }
 
         if (s[i] == '/' && i + 1 < s.Length && s[i + 1] == '*')
@@ -187,7 +190,11 @@ public static class PgSqlLexer
         return i + 1;
     }
 
-    private static bool IsIdentChar(char c) => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '$';
+    private static bool IsPgWhitespace(char c) => c is ' ' or '\t' or '\n' or '\r' or '\f' or '\v';
+
+    private static bool IsIdentChar(char c) => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '$' || c >= 0x80;
+
+    private static bool IsTagStart(char c) => char.IsAsciiLetter(c) || c == '_' || c >= 0x80;
 
     /// <summary>Index of the closing '$' of a dollar-quote opener at i, or -1 (e.g. for the parameter $1).</summary>
     private static int TagEnd(string s, int i)
@@ -198,9 +205,9 @@ public static class PgSqlLexer
         }
 
         var j = i + 1;
-        if (j < s.Length && (char.IsAsciiLetter(s[j]) || s[j] == '_'))
+        if (j < s.Length && IsTagStart(s[j]))
         {
-            while (j < s.Length && (char.IsAsciiLetterOrDigit(s[j]) || s[j] == '_'))
+            while (j < s.Length && (IsTagStart(s[j]) || char.IsAsciiDigit(s[j])))
             {
                 j++;
             }

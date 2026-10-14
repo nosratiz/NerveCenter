@@ -69,4 +69,20 @@ public class PgSqlLexerTests
         PgSqlLexer.LineAndColumn(sql, 999).Should().Be((2, 7));
         PgSqlLexer.LineAndColumn(sql, 0).Should().Be((1, 1));
     }
+
+    [Fact]
+    public void Line_comment_ends_at_carriage_return() =>
+        PgSqlLexer.Split("SELECT 1 -- x\r; COMMIT; DELETE FROM t").Should().HaveCount(3);
+
+    [Fact]
+    public void Non_ascii_identifier_char_prevents_dollar_quote() =>
+        PgSqlLexer.Split("SELECT 1 AS é$$; COMMIT; DELETE FROM t; SELECT $$x").Should().HaveCount(4);
+
+    [Fact]
+    public void Non_ascii_identifier_char_prevents_escape_string() =>
+        PgSqlLexer.Split("SELECT éE'\\'; COMMIT; DELETE FROM t; --'").Should().HaveCountGreaterThanOrEqualTo(2);
+
+    [Fact]
+    public void Dollar_quote_tag_may_start_with_non_ascii_letter() =>
+        PgSqlLexer.Split("$é$ a;b $é$").Should().HaveCount(1);
 }
