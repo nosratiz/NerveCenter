@@ -84,11 +84,6 @@ public sealed partial class PostgresOperations(ILogger<PostgresOperations> logge
         }, ct);
 
     // Stubs: later tasks move each of these into its own partial file (Schema, Rows, Query, Activity, Maintenance, Export).
-    public Task<PgSchemaTree> ListSchemaAsync(string secret, string? database, CancellationToken ct = default) => throw new NotImplementedException("Task 5");
-    public Task<PgObjectDetail?> GetObjectDetailAsync(string secret, string? database, uint oid, CancellationToken ct = default) => throw new NotImplementedException("Task 5");
-    public Task<string?> GetDdlAsync(string secret, string? database, uint oid, CancellationToken ct = default) => throw new NotImplementedException("Task 5");
-    public Task<PgRowPage> PreviewRowsAsync(string secret, string? database, PgRowsRequest request, CancellationToken ct = default) => throw new NotImplementedException("Task 6");
-    public Task<CsvExport> ExportTableCsvAsync(string secret, string? database, PgRowsRequest request, CancellationToken ct = default) => throw new NotImplementedException("Task 6");
     public Task<string> ReindexIndexAsync(string secret, string? database, uint indexOid, CancellationToken ct = default) => throw new NotImplementedException("Task 7");
     public Task<string> DropIndexAsync(string secret, string? database, uint indexOid, CancellationToken ct = default) => throw new NotImplementedException("Task 7");
     public Task<PgQueryResult> RunQueryAsync(string secret, string? database, PgQueryRequest request, CancellationToken ct = default) => throw new NotImplementedException("Task 9");

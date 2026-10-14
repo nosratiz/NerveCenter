@@ -87,6 +87,15 @@ public sealed class PostgresFixture : IAsyncLifetime
         CREATE FUNCTION order_count() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM orders';
         CREATE SCHEMA reporting;
         CREATE TABLE reporting.daily (d date);
+        CREATE TABLE samples (
+            id int PRIMARY KEY, label text, tags text[], payload jsonb, doc json, blob bytea,
+            day date, ts timestamptz, long_text text, "we""ird" text);
+        COMMENT ON COLUMN samples.label IS 'it''s a label';
+        INSERT INTO samples VALUES
+            (1, 'one', '{a,b}', '{"k":1,"j":[1,2]}', '[1,2,3]', decode('000102030405060708090a0b0c0d0e0f1011', 'hex'),
+             '2024-03-05', '2024-03-05 10:11:12+00', repeat('x', 300), 'q'),
+            (2, NULL, NULL, '{"only":true}', '{}', NULL, NULL, NULL, NULL, NULL),
+            (3, 'a,"b"' || E'\nc', '{}', '{}', '[]', '\x', '2024-03-06', NULL, 'short', NULL);
         ANALYZE;
         """;
 }

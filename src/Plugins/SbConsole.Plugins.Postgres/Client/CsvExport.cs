@@ -9,11 +9,16 @@ public sealed record CsvExport(string FileName, byte[] Content, int RowCount, bo
     public const int MaxRows = 100_000;
     public const long MaxBytes = 50L * 1024 * 1024;
 
+    /// <summary>Tests only: lowers the row cap so truncation can be exercised without 100,000 rows. Always reset in a finally.</summary>
+    internal static int? MaxRowsOverride { get; set; }
+
+    internal static int EffectiveMaxRows => MaxRowsOverride ?? MaxRows;
+
     /// <summary>"1,234 rows", plus which cap truncated it -- the footer and the audit detail.</summary>
     public string Summary => $"{PgFormat.Count(RowCount)} rows"
         + (Truncated
-            ? RowCount >= MaxRows
-                ? $" (truncated at {PgFormat.Count(MaxRows)} rows)"
+            ? RowCount >= EffectiveMaxRows
+                ? $" (truncated at {PgFormat.Count(EffectiveMaxRows)} rows)"
                 : $" (truncated at {PgFormat.Bytes(MaxBytes)})"
             : "");
 }
