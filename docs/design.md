@@ -1927,3 +1927,20 @@ the spec.
 - **Known limitations.** Events polls cluster-wide on "All namespaces"; PDB `matchExpressions` are
   ignored when previewing a drain (the preview can over-report blocked pods); a single-node
   cluster can't demonstrate NotReady or a drain that moves workloads (handler tests cover them).
+
+## 21. PostgreSQL query IntelliSense (2026-10-14)
+
+Completion in the Postgres Query editor (spec: `docs/superpowers/specs/2026-10-14-postgres-plugin-design.md`
+§16; plan: `docs/superpowers/plans/2026-10-14-postgres-query-intellisense.md`), reversing that spec's
+§15 non-goal. Same shape as the SQLite plugin's (§15 / its spec §12): a pure C# `PgCompletionEngine`
+answers the page's `[JSInvokable] GetCompletions`, and `postgres-completion.js` only renders the
+popup — no editor library. The engine and popup are a **port, not shared code**: plugins reference
+only the Sdk, and the dialects differ (dollar quoting, `E''`, schemas, search path, `::`). Hoist a
+shared engine/popup into the Sdk or host only when a third plugin needs completion. The schema is
+one read-only catalog query (`GetCompletionSchemaQueryHandler`, not audited, capped at 2,000 objects ×
+200 columns, search-path schemas kept first when truncated). The page holds a single schema for the
+current (connection, database), reloads it on a switch (not a keyed cache) and after a committed write
+that ran DDL, and skips the load during static prerender. A finished word that equals a candidate
+(`orders`, `OR`) offers nothing, so Enter stays a newline rather than accepting the next prefix match.
+Suggestions: keywords, built-in functions, schemas, tables/views/matviews, columns, aliases;
+user-defined functions, types and enum labels are out of scope.

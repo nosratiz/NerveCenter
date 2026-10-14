@@ -10,6 +10,7 @@ public interface IPostgresOperations
     Task<int> GetBlockedCountAsync(string secret, CancellationToken ct = default);
 
     Task<PgSchemaTree> ListSchemaAsync(string secret, string? database, CancellationToken ct = default);
+    Task<PgCompletionSchema> GetCompletionSchemaAsync(string secret, string? database, CancellationToken ct = default);
     Task<PgObjectDetail?> GetObjectDetailAsync(string secret, string? database, uint oid, CancellationToken ct = default);
     Task<string?> GetDdlAsync(string secret, string? database, uint oid, CancellationToken ct = default);
     Task<PgRowPage> PreviewRowsAsync(string secret, string? database, PgRowsRequest request, CancellationToken ct = default);
