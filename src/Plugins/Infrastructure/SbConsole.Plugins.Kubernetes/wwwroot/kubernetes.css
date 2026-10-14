@@ -1,1 +1,67 @@
 /* Kubernetes plugin styles. Colours only via --mud-palette-* variables; class prefix k8s-. */
+.k8s-page { display: flex; flex-direction: column; min-width: 0; }
+.k8s-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--mud-palette-divider); }
+.k8s-title { font-size: 1.15rem; font-weight: 500; margin-right: 4px; }
+.k8s-spacer { flex: 1; }
+.k8s-actions { display: flex; align-items: center; gap: 8px; }
+.k8s-meta, .k8s-mono { font-family: var(--mud-typography-mono-family, ui-monospace, SFMono-Regular, Menlo, monospace); }
+.k8s-meta { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.k8s-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.k8s-muted { color: var(--mud-palette-text-secondary); }
+.k8s-num { text-align: right; font-variant-numeric: tabular-nums; }
+.k8s-stale { opacity: 0.55; }
+.k8s-table-wrap { overflow-x: auto; }
+.k8s-link { all: unset; cursor: pointer; color: var(--mud-palette-primary); }
+.k8s-link:focus-visible { outline: 2px solid var(--mud-palette-primary); }
+
+/* Stat tiles: 5 across, 2 on narrow screens, 1 on phones. */
+.k8s-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .k8s-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .k8s-tiles { grid-template-columns: minmax(0, 1fr); } }
+.k8s-tile { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.k8s-tile-label { font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mud-palette-text-secondary); }
+.k8s-tile-value { display: flex; align-items: baseline; gap: 6px; font-size: 1.6rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.k8s-tile-unit, .k8s-tile-caption { font-size: 0.75rem; color: var(--mud-palette-text-secondary); font-weight: 400; }
+.k8s-warning { box-shadow: inset 0 0 0 1px var(--mud-palette-warning); }
+.k8s-warning .k8s-tile-label, .k8s-warning .k8s-tile-value { color: var(--mud-palette-warning); }
+
+.k8s-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--mud-palette-divider); }
+.k8s-card-note { margin-left: auto; font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.k8s-footnote { padding: 10px 14px; border-top: 1px solid var(--mud-palette-divider); font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+
+/* Connection picker */
+.k8s-unreachable-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mud-palette-error); margin-right: 6px; }
+.k8s-unreachable { box-shadow: inset 0 0 0 1px var(--mud-palette-error); }
+
+/* Namespace picker */
+.k8s-ns { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.k8s-ns-picker { min-width: 180px; max-width: 260px; }
+.k8s-ns-trigger { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.k8s-ns-search-row { padding: 4px 12px; }
+.k8s-ns-option .mud-list-item-text, .k8s-ns-option .mud-list-item-text p { display: flex; align-items: baseline; gap: 12px; width: 100%; }
+.k8s-ns-count { margin-left: auto; font-size: 0.75rem; }
+.k8s-ns-caption { padding: 6px 16px; font-size: 0.72rem; border-top: 1px solid var(--mud-palette-divider); }
+
+/* RBAC, readiness, pod chips */
+.k8s-rbac-chip { cursor: help; }
+.k8s-ready { display: flex; flex-direction: column; gap: 3px; min-width: 64px; }
+.k8s-ready-text { font-size: 0.78rem; text-align: left; }
+.k8s-phase-chip { font-size: 0.72rem; }
+
+/* Errors */
+.k8s-error-alert .k8s-error-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.k8s-error-details { font-size: 0.72rem; font-family: var(--mud-typography-mono-family, ui-monospace, monospace); color: var(--mud-palette-text-secondary); padding: 6px 0; }
+
+/* YAML and logs */
+.k8s-yaml-view { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.k8s-yaml-toolbar { display: flex; gap: 4px; justify-content: flex-end; }
+pre.k8s-yaml, pre.k8s-log { margin: 0; padding: 10px 12px; overflow: auto; font-family: var(--mud-typography-mono-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.78rem; line-height: 1.45; background: var(--mud-palette-background-gray); color: var(--mud-palette-text-primary); border-radius: var(--mud-default-borderradius); }
+pre.k8s-yaml { max-height: 70vh; }
+.k8s-yaml-key { all: unset; font-weight: 600; color: var(--mud-palette-primary); }
+button.k8s-yaml-key { cursor: pointer; }
+button.k8s-yaml-key::before { content: "▾ "; color: var(--mud-palette-text-secondary); }
+button.k8s-yaml-folded-key::before { content: "▸ "; }
+button.k8s-yaml-key:focus-visible { outline: 2px solid var(--mud-palette-primary); }
+.k8s-yaml-folded { color: var(--mud-palette-text-secondary); }
+.k8s-yaml-gone { padding: 16px 4px; }
+pre.k8s-log { max-height: 60vh; white-space: pre; }

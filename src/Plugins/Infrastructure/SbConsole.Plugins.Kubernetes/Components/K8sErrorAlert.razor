@@ -1,0 +1,34 @@
+@* Error alert (spec §12): title, the friendly sentence first; the HTTP status and reason sit behind a
+   Details toggle. Callers add their actions (Retry now, Edit connection) as ChildContent. *@
+<MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="@(("k8s-error-alert " + Class).Trim())">
+    @if (Title is not null)
+    {
+        <div class="k8s-error-title"><strong>@Title</strong></div>
+    }
+    <div class="k8s-error-message">@Info.Message</div>
+    @if (HasDetails)
+    {
+        <MudButton Size="Size.Small" Variant="Variant.Text" Class="k8s-error-details-toggle" OnClick="@(() => _open = !_open)">Details</MudButton>
+        <MudCollapse Expanded="_open">
+            <div class="k8s-error-details">HTTP @Info.StatusCode@(Info.Reason is null ? "" : " · " + Info.Reason)</div>
+        </MudCollapse>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="k8s-error-actions">@ChildContent</div>
+    }
+</MudAlert>
+
+@code {
+    [Parameter, EditorRequired] public K8sErrorInfo Info { get; set; } = default!;
+
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _open;
+
+    private bool HasDetails => Info.StatusCode is not null;
+}

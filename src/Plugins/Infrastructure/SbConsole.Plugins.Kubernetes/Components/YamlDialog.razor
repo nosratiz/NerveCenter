@@ -1,0 +1,57 @@
+@* Read-only YAML of one resource (spec §6 row menu "View YAML"). Takes a loader rather than a handler, so it
+   works for any kind: pages pass () => GetResourceYaml.HandleAsync(...). Null YAML means the resource is gone. *@
+<MudDialog Class="k8s-yaml-dialog">
+    <TitleContent><span class="k8s-mono">@Title</span></TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="k8s-yaml-loading" />
+        }
+        else if (_error is not null)
+        {
+            <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" />
+        }
+        else if (_yaml is null)
+        {
+            <div class="k8s-yaml-gone k8s-muted">It no longer exists.</div>
+        }
+        else
+        {
+            <YamlView Yaml="@_yaml" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Class="k8s-yaml-close" OnClick="@(() => MudDialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    [Parameter, EditorRequired] public Func<Task<PluginResult<string?>>> Load { get; set; } = default!;
+
+    private bool _loading = true;
+    private string? _yaml;
+    private string? _error;
+
+    public static Task<IDialogReference> ShowAsync(IDialogService dialogs, string title, Func<Task<PluginResult<string?>>> load) =>
+        dialogs.ShowAsync<YamlDialog>(title,
+            new DialogParameters<YamlDialog> { { d => d.Title, title }, { d => d.Load, load } },
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true });
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await Load();
+        _loading = false;
+        if (result.IsSuccess)
+        {
+            _yaml = result.Value;
+        }
+        else
+        {
+            _error = result.Error ?? "Couldn't load the YAML.";
+        }
+    }
+}

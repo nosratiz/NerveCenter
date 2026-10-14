@@ -1,0 +1,17 @@
+@* "ready/desired" text over a thin bar: green when all ready, amber when some, red when none of a non-zero desired. *@
+<div class="k8s-ready">
+    <span class="k8s-ready-text k8s-num">@Ready/@Desired</span>
+    <MudProgressLinear Class="k8s-ready-bar" Size="Size.Small" Min="0" Max="@Math.Max(Desired, 1)"
+                       Value="@Math.Clamp(Ready, 0, Math.Max(Desired, 1))" Color="@BarColor" />
+</div>
+
+@code {
+    [Parameter] public int Ready { get; set; }
+
+    [Parameter] public int Desired { get; set; }
+
+    internal Color BarColor => Desired == 0 ? Color.Default
+        : Ready >= Desired ? Color.Success
+        : Ready == 0 ? Color.Error
+        : Color.Warning;
+}

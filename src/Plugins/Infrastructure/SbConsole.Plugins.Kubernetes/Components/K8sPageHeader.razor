@@ -1,0 +1,28 @@
+@* The header bar every Kubernetes page opens with (mockups 3a-3i): title, connection chips, mono meta,
+   right-aligned actions. Also links the plugin stylesheet, so no host wiring is needed. *@
+<HeadContent>
+    <link rel="stylesheet" href="_content/SbConsole.Plugins.Kubernetes/kubernetes.css" />
+</HeadContent>
+
+<div class="k8s-header @Class">
+    <span class="k8s-title">@Title</span>
+    @Chips
+    @if (Meta is not null)
+    {
+        <span class="k8s-meta">@Meta</span>
+    }
+    <span class="k8s-spacer"></span>
+    <div class="k8s-actions">@Actions</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    [Parameter] public RenderFragment? Chips { get; set; }
+
+    [Parameter] public RenderFragment? Meta { get; set; }
+
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+}
