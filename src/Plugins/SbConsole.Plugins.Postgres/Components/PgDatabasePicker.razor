@@ -21,6 +21,7 @@
     /// <summary>The connection's own database; used when ?db= is absent or unknown.</summary>
     [Parameter] public string? Default { get; set; }
 
+    /// <summary>Raised with the chosen database, or with an empty string when the selection was dropped (empty list or failed load).</summary>
     [Parameter] public EventCallback<string> SelectedChanged { get; set; }
 
     private IReadOnlyList<string> _databases = [];
@@ -48,6 +49,14 @@
         _databases = result.IsSuccess ? result.Value ?? [] : [];
         if (_databases.Count == 0)
         {
+            // The selection was dropped (empty list or failed load): tell the parent and take ?db= off the URL.
+            var cleared = Navigation.GetUriWithQueryParameter("db", (string?)null);
+            if (cleared != Navigation.Uri)
+            {
+                Navigation.NavigateTo(cleared, replace: true);
+            }
+
+            await SelectedChanged.InvokeAsync("");
             return;
         }
 

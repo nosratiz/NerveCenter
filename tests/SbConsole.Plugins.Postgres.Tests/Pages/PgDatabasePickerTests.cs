@@ -78,4 +78,30 @@ public class PgDatabasePickerTests : PgPageTestBase
 
         cut.FindAll(".pg-database-picker").Should().BeEmpty();
     }
+
+    [Fact]
+    public void A_failed_load_after_a_connection_change_tells_the_parent_and_drops_db_from_the_url()
+    {
+        Arrange(ConnectionId, "app");
+        Services.GetService<NavigationManager>()!.NavigateTo("/p/postgres/browse?db=app");
+        var selected = new List<string>();
+        var cut = RenderPicker(ConnectionId, null, selected);
+        selected.Should().Equal("app");
+
+        Connections.GetSecretAsync(_other, Arg.Any<CancellationToken>()).Returns((string?)null);
+        cut.Render(p => p.Add(c => c.ConnectionId, _other));
+
+        cut.WaitForAssertion(() => selected.Should().Equal("app", ""));
+        Services.GetService<NavigationManager>()!.Uri.Should().NotContain("db=");
+    }
+
+    [Fact]
+    public void An_empty_database_list_tells_the_parent_with_an_empty_string()
+    {
+        Arrange(ConnectionId);
+        var selected = new List<string>();
+        RenderPicker(ConnectionId, null, selected);
+
+        selected.Should().Equal("");
+    }
 }
