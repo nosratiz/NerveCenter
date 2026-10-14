@@ -240,4 +240,40 @@ internal static class TestData
             ],
             false);
     }
+
+    /// <summary>
+    /// Mockup 3d, captured at <see cref="T0"/>: checkout/payment-gateway-7d9f8-x2k4q, revision 23's pod, crash-looping on an
+    /// OOM kill (137) with 14 restarts; an init container that completed; env from a literal, a ConfigMap, a Secret and fields.
+    /// </summary>
+    public static K8sPodDetail PaymentGatewayPodDetail()
+    {
+        const string ns = "checkout";
+        const string name = "payment-gateway-7d9f8-x2k4q";
+        var pod = PaymentGatewayDetail().Pods.Single(p => p.Name == name);
+        var oomAt = T0.AddMinutes(-2);
+        return new K8sPodDetail(
+            pod, "10.244.3.17", "10.0.0.14", "Burstable", "payment-gateway", 4, 1,
+            [new K8sOwnerLink("ReplicaSet", "payment-gateway-7d9f8", 23), new K8sOwnerLink("Deployment", "payment-gateway", null)],
+            new K8sNodeHealth("aks-pool1-38211-vmss000004", "True", [], 0.62),
+            [
+                new K8sContainer("migrate", true, "ghcr.io/nervecenter/payment-gateway-migrate:2.14.1", "Terminated", "Completed",
+                    new K8sTermination(0, "Completed", T0.AddMinutes(-38), T0.AddMinutes(-37)), null, 0, false, [],
+                    new K8sResources(100, 64 * MiB, null, null)),
+                new K8sContainer("gateway", false, "ghcr.io/nervecenter/payment-gateway:2.14.1", "Waiting", "CrashLoopBackOff",
+                    null, new K8sTermination(137, "OOMKilled", oomAt.AddSeconds(-41), oomAt), 14, false, ["8080/http", "9090/metrics"],
+                    new K8sResources(500, 512 * MiB, 1000, 512 * MiB)),
+            ],
+            [
+                new K8sEnvVar("gateway", "ASPNETCORE_ENVIRONMENT", "Production", K8sEnvSource.Literal, null),
+                new K8sEnvVar("gateway", "PG_HOST", "pg-checkout.internal", K8sEnvSource.ConfigMap, "payment-gateway-config"),
+                new K8sEnvVar("gateway", "PG_PASSWORD", null, K8sEnvSource.Secret, "payment-gateway-db"),
+                new K8sEnvVar("gateway", "POD_NAME", name, K8sEnvSource.FieldRef, "metadata.name"),
+                new K8sEnvVar("gateway", "MEM_LIMIT", "512Mi", K8sEnvSource.ResourceFieldRef, "limits.memory"),
+            ],
+            [
+                new K8sEvent(ns, "Warning", "BackOff", "Back-off restarting failed container gateway",
+                    new K8sRef("Pod", ns, name), 14, oomAt, "kubelet"),
+            ],
+            $"apiVersion: v1\nkind: Pod\nmetadata:\n  name: {name}\n  namespace: {ns}\n");
+    }
 }

@@ -170,6 +170,199 @@ internal static class K8sMappers
         return (new K8sRef(owner.Kind, owner.Kind == "Node" ? null : ns, owner.Name), null);
     }
 
+    // ---- Pod detail ----
+
+    /// <summary>Init containers first (in spec order), then app containers; state from the status of the same name.</summary>
+    public static IReadOnlyList<K8sContainer> Containers(V1Pod pod)
+    {
+        var init = (pod.Spec?.InitContainers ?? []).Select(c => Container(c, true, pod.Status?.InitContainerStatuses));
+        var app = (pod.Spec?.Containers ?? []).Select(c => Container(c, false, pod.Status?.ContainerStatuses));
+        return init.Concat(app).ToList();
+    }
+
+    private static K8sContainer Container(V1Container c, bool isInit, IList<V1ContainerStatus>? statuses)
+    {
+        var status = statuses?.FirstOrDefault(s => s.Name == c.Name);
+        var state = status?.State;
+        var (stateName, reason) = state switch
+        {
+            { Running: not null } => ("Running", (string?)null),
+            { Terminated: { } t } => ("Terminated", t.Reason),
+            { Waiting: { } w } => ("Waiting", w.Reason),
+            _ => ("Waiting", null),
+        };
+
+        return new K8sContainer(
+            c.Name, isInit, c.Image ?? status?.Image ?? string.Empty, stateName, reason,
+            Termination(state?.Terminated), Termination(status?.LastState?.Terminated),
+            status?.RestartCount ?? 0, status?.Ready ?? false,
+            (c.Ports ?? []).Select(p => $"{p.ContainerPort}/{p.Name ?? (p.Protocol ?? "TCP").ToLowerInvariant()}").ToList(),
+            ContainerResources(c));
+    }
+
+    private static K8sTermination? Termination(V1ContainerStateTerminated? t) =>
+        t is null ? null : new K8sTermination(t.ExitCode, t.Reason, Utc(t.StartedAt), Utc(t.FinishedAt));
+
+    private static K8sResources ContainerResources(V1Container c)
+    {
+        long? Value(IDictionary<string, ResourceQuantity>? values, string key, Func<string?, long> parse) =>
+            Quantity(values, key) is { } q ? parse(q) : null;
+
+        var r = c.Resources;
+        return new K8sResources(
+            Value(r?.Requests, "cpu", K8sFormat.ParseCpuMilli), Value(r?.Requests, "memory", K8sFormat.ParseBytes),
+            Value(r?.Limits, "cpu", K8sFormat.ParseCpuMilli), Value(r?.Limits, "memory", K8sFormat.ParseBytes));
+    }
+
+    private static IEnumerable<V1Container> AllContainers(V1Pod pod) =>
+        (pod.Spec?.InitContainers ?? []).Concat(pod.Spec?.Containers ?? []);
+
+    /// <summary>The distinct ConfigMaps whose values the env shows (env <c>configMapKeyRef</c> and <c>envFrom configMapRef</c>), ordered by name.</summary>
+    public static IReadOnlyList<string> ReferencedConfigMaps(V1Pod pod) =>
+        AllContainers(pod)
+            .SelectMany(c => (c.EnvFrom ?? []).Select(f => f.ConfigMapRef?.Name)
+                .Concat((c.Env ?? []).Select(e => e.ValueFrom?.ConfigMapKeyRef?.Name)))
+            .OfType<string>()
+            .Where(n => n.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// The resolved env of every container (init first; per container <c>envFrom</c> rows, then <c>env</c> rows).
+    /// <paramref name="configMaps"/> holds the maps that could be read; any other is Unresolved. Secret-sourced rows
+    /// never carry a value: the Secret is not read.
+    /// </summary>
+    public static IReadOnlyList<K8sEnvVar> Env(V1Pod pod, IReadOnlyDictionary<string, V1ConfigMap> configMaps)
+    {
+        var rows = new List<K8sEnvVar>();
+        foreach (var c in AllContainers(pod))
+        {
+            foreach (var from in c.EnvFrom ?? [])
+            {
+                var prefix = from.Prefix ?? string.Empty;
+                if (from.ConfigMapRef is { } cmRef)
+                {
+                    if (configMaps.TryGetValue(cmRef.Name, out var map))
+                    {
+                        rows.AddRange((map.Data ?? new Dictionary<string, string>())
+                            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                            .Select(kv => new K8sEnvVar(c.Name, prefix + kv.Key, kv.Value, K8sEnvSource.ConfigMap, cmRef.Name)));
+                    }
+                    else
+                    {
+                        rows.Add(new K8sEnvVar(c.Name, prefix + "*", null, K8sEnvSource.Unresolved, cmRef.Name));
+                    }
+                }
+                else if (from.SecretRef is { } secretRef)
+                {
+                    rows.Add(new K8sEnvVar(c.Name, prefix + "*", null, K8sEnvSource.Secret, secretRef.Name));
+                }
+            }
+
+            foreach (var e in c.Env ?? [])
+            {
+                rows.Add(EnvVar(pod, c, e, configMaps));
+            }
+        }
+
+        return rows;
+    }
+
+    private static K8sEnvVar EnvVar(V1Pod pod, V1Container c, V1EnvVar e, IReadOnlyDictionary<string, V1ConfigMap> configMaps)
+    {
+        var from = e.ValueFrom;
+        if (from?.SecretKeyRef is { } secretKey)
+        {
+            return new K8sEnvVar(c.Name, e.Name, null, K8sEnvSource.Secret, secretKey.Name);
+        }
+
+        if (from?.ConfigMapKeyRef is { } cmKey)
+        {
+            return configMaps.TryGetValue(cmKey.Name, out var map) && map.Data is { } data && data.TryGetValue(cmKey.Key, out var value)
+                ? new K8sEnvVar(c.Name, e.Name, value, K8sEnvSource.ConfigMap, cmKey.Name)
+                : new K8sEnvVar(c.Name, e.Name, null, K8sEnvSource.Unresolved, cmKey.Name);
+        }
+
+        if (from?.FieldRef is { } field)
+        {
+            var value = field.FieldPath switch
+            {
+                "metadata.name" => pod.Metadata?.Name,
+                "metadata.namespace" => pod.Metadata?.NamespaceProperty,
+                "spec.nodeName" => pod.Spec?.NodeName,
+                "status.podIP" => pod.Status?.PodIP,
+                "spec.serviceAccountName" => pod.Spec?.ServiceAccountName,
+                _ => null,
+            };
+            return new K8sEnvVar(c.Name, e.Name, value, K8sEnvSource.FieldRef, field.FieldPath);
+        }
+
+        if (from?.ResourceFieldRef is { } resource)
+        {
+            var target = string.IsNullOrEmpty(resource.ContainerName)
+                ? c
+                : AllContainers(pod).FirstOrDefault(x => x.Name == resource.ContainerName);
+            var parts = resource.Resource.Split('.', 2);
+            var values = parts[0] switch
+            {
+                "limits" => target?.Resources?.Limits,
+                "requests" => target?.Resources?.Requests,
+                _ => null,
+            };
+            return new K8sEnvVar(c.Name, e.Name, parts.Length == 2 ? Quantity(values, parts[1]) : null,
+                K8sEnvSource.ResourceFieldRef, resource.Resource);
+        }
+
+        return new K8sEnvVar(c.Name, e.Name, e.Value ?? string.Empty, K8sEnvSource.Literal, null);
+    }
+
+    /// <summary>The pod's controller (first owner when none is marked controller), or null for a bare pod.</summary>
+    public static V1OwnerReference? ControllerOf(V1ObjectMeta? meta)
+    {
+        var refs = meta?.OwnerReferences;
+        return refs?.FirstOrDefault(r => r.Controller == true) ?? refs?.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Pod → its owner (ReplicaSet with revision / StatefulSet / DaemonSet / Job / …) → that owner's owner (Deployment /
+    /// CronJob), at most two links. <paramref name="ownerMeta"/> is the first owner as read (null when it couldn't be:
+    /// the chain stops there).
+    /// </summary>
+    public static IReadOnlyList<K8sOwnerLink> OwnerChain(V1Pod pod, V1ObjectMeta? ownerMeta)
+    {
+        if (ControllerOf(pod.Metadata) is not { } first)
+        {
+            return [];
+        }
+
+        long? revision = first.Kind == "ReplicaSet" && Revision(ownerMeta) is > 0 and var r ? r : null;
+        var chain = new List<K8sOwnerLink> { new(first.Kind, first.Name, revision) };
+        if (ControllerOf(ownerMeta) is { } second)
+        {
+            chain.Add(new K8sOwnerLink(second.Kind, second.Name, null));
+        }
+
+        return chain;
+    }
+
+    public static int VolumeCount(V1Pod pod) => pod.Spec?.Volumes?.Count ?? 0;
+
+    /// <summary>Secret volumes plus the Secret sources of projected volumes.</summary>
+    public static int SecretMountCount(V1Pod pod) =>
+        (pod.Spec?.Volumes ?? []).Sum(v =>
+            (v.Secret is not null ? 1 : 0) + (v.Projected?.Sources?.Count(s => s.Secret is not null) ?? 0));
+
+    public static string QosClass(V1Pod pod) => pod.Status?.QosClass ?? "BestEffort";
+
+    /// <summary>
+    /// The node facts the pod detail shows. The memory request fraction is Σ requests of the node's active pods over its
+    /// allocatable memory; null when the pods couldn't be listed (<paramref name="podsListed"/> false) or nothing is allocatable.
+    /// </summary>
+    public static K8sNodeHealth NodeHealth(K8sNodeInfo node, bool podsListed) =>
+        new(node.Name, node.ReadyStatus, node.Pressures,
+            podsListed && node.MemAllocatableBytes > 0 ? (double)node.MemRequestedBytes / node.MemAllocatableBytes : null);
+
     // ---- Nodes ----
 
     public static K8sNodeInfo Node(V1Node node, IEnumerable<K8sPodSummary> podsOnNode)

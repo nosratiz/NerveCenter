@@ -12,6 +12,7 @@ using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Deployments;
 using SbConsole.Plugins.Kubernetes.Namespaces;
 using SbConsole.Plugins.Kubernetes.Overview;
+using SbConsole.Plugins.Kubernetes.Pods;
 using SbConsole.Plugins.Kubernetes.Workloads;
 using SbConsole.Sdk;
 
@@ -97,6 +98,10 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<GetDeploymentDetailQueryHandler>.Instance));
         Services.AddSingleton(new RollbackDeploymentCommandHandler(
             Operations, Connections, Audit, NullLogger<RollbackDeploymentCommandHandler>.Instance));
+        Services.AddSingleton(new GetPodDetailQueryHandler(
+            Operations, Connections, NullLogger<GetPodDetailQueryHandler>.Instance));
+        Services.AddSingleton(new DeletePodCommandHandler(
+            Operations, Connections, Audit, NullLogger<DeletePodCommandHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider
