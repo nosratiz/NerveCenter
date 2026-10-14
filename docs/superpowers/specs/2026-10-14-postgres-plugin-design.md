@@ -345,3 +345,78 @@ every 15 min. Demo connections: `pg-local` (ReadWrite, tags `prod` — to demo t
 Creating/dropping databases, roles or extensions; editing rows from the grid; query autocomplete
 (the SQLite completion engine is not ported in this round); `EXPLAIN` visual plans; logical
 replication slots management; Testcontainers for other plugins.
+
+## 16. Query IntelliSense (2026-10-14)
+
+Reverses the §15 non-goal "query autocomplete", on request. Scope: SQLite parity (its spec §12)
+plus schemas — keywords, built-in functions, schemas, tables/views/materialized views, columns,
+aliases. User-defined functions, types and enum labels stay out of scope.
+
+- **Approach — port, don't share.** Plugins reference only `SbConsole.Sdk`, so the SQLite engine
+  and popup can't be reused directly; the Postgres plugin gets its own `PgCompletionEngine` and
+  `postgres-completion.js` (adapted from `sqlite-completion.js`). Hoisting a shared engine/popup
+  into the Sdk or host is deferred until a third plugin needs completion — the dialects
+  (dollar quoting, `E''`, schemas, `::`) differ more than they overlap. No editor library
+  (same reasoning as the SQLite spec: no JS build pipeline, no vendored Monaco/CodeMirror).
+- **Schema source** — `IPostgresOperations.GetCompletionSchemaAsync(secret, database, ct)` →
+  `PgCompletionSchema(SearchPath, Schemas, Objects)`: one read-only catalog query over
+  `pg_namespace`, `pg_class` (relkind `r`, `v`, `m`, `p`, `f`) and `pg_attribute` (live,
+  non-system columns, `format_type` for the type, primary-key flag from `pg_index`), plus
+  `current_schemas(false)` for the search path. Excludes `pg_catalog`, `information_schema`,
+  `pg_toast*` and `pg_temp*`. Capped at 2,000 objects × 200 columns (truncation is silent — the
+  cap only limits suggestions; when objects are cut, search-path schemas are kept first, in path order). Wrapped by `GetCompletionSchemaQueryHandler` (query, not
+  audited, `FriendlyError` on failure). The Query page loads it when the connection or database
+  changes (not during static prerender), holds a single schema on the page for the current
+  (connection, database), replaced on a switch, and reloads after a committed
+  write whose statements include DDL (`CREATE`/`ALTER`/`DROP`/`COMMENT`/`TRUNCATE` first keyword).
+- **Engine** — `PgCompletionEngine.Complete(text, caret, schema)` (pure, static, no I/O) →
+  `PgCompletionResult(ReplaceFrom, ReplaceTo, Items)`, item = `Label`, `InsertText`, `Kind`
+  (Keyword, Function, Schema, Table, View, Column, Alias), `Detail` (column type + table,
+  function signature, object kind). `PgCompletionSchema.Empty` (not loaded yet / load failed)
+  offers keywords and functions only. Tokenizing follows `PgSqlLexer`'s quoting rules (single quotes, `E''` with
+  backslash escapes, `$tag$…$tag$`, `"…"` identifiers, `--` and nested `/* */` comments); the
+  current statement is the one containing the caret, split on top-level `;`. Context rules:
+  - caret inside a string, dollar-quoted body, quoted identifier or comment (an unterminated one
+    runs to the end) → nothing;
+  - right after `::` → nothing (types out of scope);
+  - after `<q>.` where `<q>` is an alias or table name used in the statement → that object's
+    columns; where `<q>` is a schema name → that schema's tables/views/matviews; after `<s>.<t>.`
+    → columns of `s.t`. Resolution is case-insensitive for unquoted names and exact for quoted
+    ones; an alias wins over a same-named schema;
+  - after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE`, `ONLY`, a comma in a FROM list, or
+    `INDEX … ON` → tables/views/matviews and schemas;
+  - otherwise → columns of the statement's referenced objects, aliases, keywords, functions,
+    tables/views, schemas.
+  - Unqualified table references resolve via the search path (first schema in path order that
+    has the name).
+  - Filtering on the identifier prefix before the caret: case-insensitive prefix matches first,
+    then substring matches, kind order kept within each group; max 50 items. When the caret is
+    at the end of a word that equals some candidate's insert text (ignoring case), nothing is
+    offered, so Enter after a finished `select`, `orders` or `OR` is a newline, not an accept of
+    the next prefix match (`orders_archive`, `ORDER`); typing on (`orders_`) offers them again.
+  - Insertion: keywords upper-case; identifiers bare when they are lower-case `[a-z_][a-z0-9_$]*`
+    and not a reserved keyword, otherwise `PgIdent.Quote`d; a table/view whose schema is not on
+    the search path is inserted `schema.name` (each part quoted as needed) unless the user already
+    typed a schema qualifier.
+  - Lists: PostgreSQL 16 keywords (reserved + common non-reserved); built-in functions —
+    aggregate, window, string, math, date/time (`now`, `date_trunc`, `extract`, `age`,
+    `to_char`…), JSON/JSONB (`jsonb_build_object`, `jsonb_agg`, `jsonb_path_query`…), array,
+    conditional (`coalesce`, `nullif`, `greatest`, `least`), `generate_series`, `gen_random_uuid`.
+    Operators (`->`, `->>`, `@>`) are not functions.
+- **UI** — `wwwroot/postgres-completion.js` (`attach(textarea, dotnetRef)` / `detach`), adapted
+  from the SQLite module; the Query page exposes `[JSInvokable] GetCompletions(text, caret)` that
+  runs the engine against the cached schema. Keys and behaviour as SQLite §12: typing an
+  identifier character or `.` (debounced ~120 ms, stale answers dropped) or Ctrl+Space opens;
+  ↑/↓ move; Enter/Tab accept; Esc closes; click accepts; Ctrl/⌘+Enter closes the popup and still
+  runs the query. Accepting replaces `ReplaceFrom..ReplaceTo`, places the caret after the insert
+  and dispatches `input` so Blazor sees the new text. Popup styled only via `--mud-palette-*`
+  tokens; ARIA `listbox`/`option` with `aria-activedescendant`. Works in read-only and write
+  modes. If the module fails to load or the schema load fails, the editor works as before (no
+  error banner; schema failure is logged server-side).
+- **Testing** — `PgCompletionEngineTests` (xUnit, pure): each context rule, string/dollar-quote/
+  comment suppression, `::`, alias and schema qualification, search-path resolution, quoting on
+  insert, ranking and the 50-item cap, null schema. `GetCompletionSchemaQueryHandlerTests` against
+  a substituted `IPostgresOperations`. One `PostgresOperations` Testcontainer test for the catalog
+  query (system schemas excluded, matview and pk present, search path) — skipped without Docker
+  per §12. One bUnit page test: the module's `attach` is called with the editor and
+  `GetCompletions` returns engine results for the loaded schema.

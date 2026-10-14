@@ -153,3 +153,35 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-maintenance-table .pg-flagged { background: color-mix(in srgb, var(--mud-palette-warning) 10%, transparent); }
 .pg-maintenance-more { padding: 10px 20px; }
 .pg-maintenance-footnote { display: flex; gap: 14px; }
+
+/* ---- Query completion popup (design spec §16) ----
+   postgres-completion.js appends it to <body> (outside .pg-page), so it uses --mud-palette-* directly. */
+.pg-complete {
+    position: fixed; z-index: 1500; min-width: 240px; max-width: min(520px, calc(100vw - 16px)); max-height: 264px;
+    overflow-y: auto; padding: 4px; box-sizing: border-box; border-radius: 8px;
+    background: var(--mud-palette-surface); color: var(--mud-palette-text-primary);
+    border: 1px solid var(--mud-palette-lines-default);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--mud-palette-black) 30%, transparent);
+    font-family: var(--mud-typography-mono-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12.5px; line-height: 1.5;
+}
+.pg-complete[hidden] { display: none; }
+.pg-complete-item {
+    display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.pg-complete-item:hover { background: var(--mud-palette-action-default-hover); }
+.pg-complete-item.pg-is-active { background: color-mix(in srgb, var(--mud-palette-primary) 20%, transparent); }
+.pg-complete-kind {
+    --pg-kind: var(--mud-palette-text-secondary);
+    flex: none; min-width: 22px; box-sizing: border-box; padding: 0 4px; border-radius: 4px; text-align: center;
+    font-size: 10.5px; font-weight: 500; color: var(--pg-kind); background: color-mix(in srgb, var(--pg-kind) 16%, transparent);
+}
+.pg-complete-kind-table, .pg-complete-kind-view { --pg-kind: var(--mud-palette-primary); }
+.pg-complete-kind-schema { --pg-kind: var(--mud-palette-secondary); }
+.pg-complete-kind-column { --pg-kind: var(--mud-palette-info); }
+.pg-complete-kind-alias { --pg-kind: var(--mud-palette-warning); }
+.pg-complete-kind-function { --pg-kind: var(--mud-palette-success); }
+.pg-complete-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pg-complete-detail {
+    margin-left: auto; padding-left: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    color: var(--mud-palette-text-secondary); font-size: 11px;
+}
