@@ -26,6 +26,7 @@
     private IReadOnlyList<string> _databases = [];
     private string? _selected;
     private Guid _loadedFor;
+    private int _generation;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -35,7 +36,15 @@
         }
 
         _loadedFor = ConnectionId;
+        var generation = ++_generation;
+        _databases = [];
+        _selected = null;
         var result = await ListDatabases.HandleAsync(ConnectionId);
+        if (generation != _generation)
+        {
+            return;
+        }
+
         _databases = result.IsSuccess ? result.Value ?? [] : [];
         if (_databases.Count == 0)
         {

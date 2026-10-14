@@ -36,14 +36,19 @@
         </Actions>
     </PgPageHeader>
 
+    @if (_connection is not null)
+    {
     <div class="pg-body">
-        @if (_view?.Error is not null && _connection is not null)
+        @if (_view?.Error is not null)
         {
             <PgErrorAlert Info="@(_view.ErrorInfo ?? new PgErrorInfo(_view.Error, null, null, null, null, null, true))"
                           Title="@($"Can't reach {_connection.Name}.")" Class="pg-overview-error">
                 <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-overview-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
                 <MudButton Variant="Variant.Text" Size="Size.Small" Class="pg-overview-edit" Href="/connections">Edit connection</MudButton>
-                <span class="pg-meta pg-overview-retry-in">retrying in @_retryIn s</span>
+                @if (_retryTimer is not null)
+                {
+                    <span class="pg-meta pg-overview-retry-in">retrying in @_retryIn s</span>
+                }
             </PgErrorAlert>
         }
 
@@ -217,6 +222,7 @@
             </MudPaper>
         </div>
     </div>
+    }
 </div>
 
 @code {
@@ -281,7 +287,8 @@
                 : new OverviewView(null, false, null, result.Error, new PgErrorInfo(result.Error ?? "Connection not found.", null, null, null, null, null, false),
                     new Dictionary<string, double?>());
             _loadedAt = Clock.GetUtcNow();
-            if (_view?.Error is not null)
+            // Only an unreachable server (success carrying an error) is worth retrying; a plain Fail such as "connection not found" is not.
+            if (result.IsSuccess && _view?.Error is not null)
             {
                 StartRetry();
             }
@@ -298,6 +305,12 @@
             }
         }
 
+        if (!_disposed)
+        {
+            // Runs on the renderer's context (button click or InvokeAsync from the timer), so this also repaints timer-driven reloads.
+            StateHasChanged();
+        }
+
         if (_picker is not null && !_disposed)
         {
             await _picker.RefreshReachabilityAsync();
@@ -306,6 +319,12 @@
 
     private void StartRetry()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        StopRetry();
         _retryIn = RetrySeconds;
         _retryTimer = Clock.CreateTimer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
@@ -346,7 +365,7 @@
 
     private string CommitRate(string database) =>
         _view?.CommitsPerSecond.TryGetValue(database, out var rate) == true && rate is { } r
-            ? PgFormat.Count((long)Math.Round(r))
+            ? (r < 10 ? r.ToString("0.0", Inv) : PgFormat.Count((long)Math.Round(r)))
             : "—";
 
     private static string ReplicationCaption(PgReplication r) => r.ReplicaCount == 0

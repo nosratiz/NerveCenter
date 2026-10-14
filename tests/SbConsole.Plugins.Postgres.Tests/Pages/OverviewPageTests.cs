@@ -176,7 +176,67 @@ public class OverviewPageTests : PgPageTestBase
         cut.WaitForAssertion(() => cut.Find(".pg-overview-retry-in").TextContent.Should().Be("retrying in 25 s"));
         await Operations.Received(1).GetOverviewAsync(Secret, Arg.Any<CancellationToken>());
 
+        Arrange(OverviewTestData.Overview());
         Time.Advance(TimeSpan.FromSeconds(25));
         cut.WaitForAssertion(() => Operations.Received(2).GetOverviewAsync(Secret, Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() =>
+        {
+            cut.FindAll(".pg-overview-error").Should().BeEmpty();
+            cut.Find(".pg-tile-connections").TextContent.Should().Contain("/ 100 max_connections");
+        });
+    }
+
+    [Fact]
+    public async Task A_load_completing_after_dispose_does_not_start_a_retry_timer()
+    {
+        var gate = new TaskCompletionSource<PgOverview>();
+        Operations.GetOverviewAsync(Secret, Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = Render<SbConsole.Plugins.Postgres.Pages.Overview>();
+        cut.WaitForState(() => Operations.ReceivedCalls().Any(), TimeSpan.FromSeconds(5));
+
+        await DisposeComponentsAsync();
+        gate.SetException(new TimeoutException("late"));
+        await Task.Delay(100);
+        Time.Advance(TimeSpan.FromSeconds(60));
+        await Task.Delay(100);
+
+        await Operations.Received(1).GetOverviewAsync(Secret, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_missing_connection_result_does_not_auto_retry()
+    {
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns((string?)null);
+        var cut = RenderPage();
+
+        cut.FindAll(".pg-overview-retry-in").Should().BeEmpty();
+        Time.Advance(TimeSpan.FromSeconds(90));
+        await Task.Delay(100);
+        await Operations.DidNotReceiveWithAnyArgs().GetOverviewAsync(default!, default);
+    }
+
+    [Theory]
+    [InlineData(4, "0.4")]
+    [InlineData(12346, "1,235")]
+    public void Commits_per_second_shows_one_decimal_under_ten(long delta, string expected)
+    {
+        Arrange(OverviewTestData.Overview(captured: T0, commits: 100));
+        var cut = RenderPage();
+        Time.Advance(TimeSpan.FromSeconds(10));
+        Arrange(OverviewTestData.Overview(captured: T0.AddSeconds(10), commits: 100 + delta));
+        cut.Find(".pg-overview-refresh").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".pg-databases tbody tr").TextContent.Should().Contain(expected));
+    }
+
+    [Fact]
+    public void No_connections_shows_no_skeleton_tiles()
+    {
+        Connections.ListAsync("postgres", Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<SbConsole.Sdk.ConnectionInfo>>([]));
+        var cut = Render<SbConsole.Plugins.Postgres.Pages.Overview>();
+        cut.WaitForState(() => cut.FindAll(".pg-no-connections").Count > 0, TimeSpan.FromSeconds(5));
+
+        cut.FindAll(".mud-skeleton").Should().BeEmpty();
+        cut.FindAll(".pg-tiles").Should().BeEmpty();
     }
 }
