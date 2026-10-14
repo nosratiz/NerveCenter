@@ -1,0 +1,498 @@
+@* Mockup 1f: bloat and dead tuples per table with VACUUM / ANALYZE (Mutating). VACUUM FULL lives in the row menu as Destructive. *@
+@page "/p/postgres/maintenance"
+@using System.Globalization
+@using SbConsole.Plugins.Postgres.Client
+@using SbConsole.Plugins.Postgres.Maintenance
+@inject GetMaintenanceQueryHandler GetMaintenance
+@inject RunMaintenanceCommandHandler RunMaintenance
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
+@implements IDisposable
+
+<PageTitle>PostgreSQL maintenance</PageTitle>
+
+<div class="pg-page">
+    <PgPageHeader Title="Maintenance">
+        <Chips>
+            <PgConnectionPicker Loading="Busy" ManageUrl="false" SelectionChanged="OnConnectionChangedAsync" />
+            @if (_connection is not null)
+            {
+                <PgDatabasePicker ConnectionId="_connection.Id" Default="@(_connection.Summary.GetValueOrDefault("Database"))"
+                                  Loading="Busy" ManageUrl="false" SelectedChanged="OnDatabaseChangedAsync" />
+            }
+        </Chips>
+        <Actions>
+            @if (_data is { } header)
+            {
+                <span class="pg-meta pg-autovacuum-chip">autovacuum @(header.AutovacuumOn ? "on" : "off") · @header.MaxWorkers @(header.MaxWorkers == 1 ? "worker" : "workers") · @header.Running.Count running</span>
+                @if (_progress is not null)
+                {
+                    <span class="pg-meta pg-bulk-progress">@_progress</span>
+                }
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-analyze-flagged" Disabled="BulkDisabled"
+                           title="@ReadOnlyTitle" OnClick="() => BulkAsync(PgMaintenanceKind.Analyze)">ANALYZE @Flagged.Count flagged</MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-vacuum-flagged" Disabled="BulkDisabled"
+                           title="@ReadOnlyTitle" OnClick="() => BulkAsync(PgMaintenanceKind.Vacuum)">VACUUM @Flagged.Count flagged</MudButton>
+            }
+        </Actions>
+    </PgPageHeader>
+
+    @if (_connection is not null)
+    {
+        @if (_database == "")
+        {
+            <div class="pg-body">
+                <div class="pg-no-database">
+                    <strong>No database selected.</strong>
+                    <div class="pg-muted">This connection lists no databases it can open. Check the role's CONNECT privilege, or pick another connection.</div>
+                </div>
+            </div>
+        }
+        else if (_error is not null)
+        {
+            <div class="pg-body">
+                <PgErrorAlert Info="@(new PgErrorInfo(_error, null, null, null, null, null, false))" Title="@($"Can't read maintenance data on {_connection.Name}.")" Class="pg-maintenance-error" />
+            </div>
+        }
+        else if (_data is { } data)
+        {
+            <div class="pg-maint-tiles">
+                <PgStatTile Class="pg-tile-flagged" Label="Flagged tables" Value="@Flagged.Count.ToString(CultureInfo.InvariantCulture)"
+                            Warning="Flagged.Count > 0" Caption="> 30% dead tuples or > 20% bloat est." />
+                @if (data.PgstattupleAvailable)
+                {
+                    <PgStatTile Class="pg-tile-reclaimable" Label="Reclaimable (est.)" Value="@PgFormat.Bytes(data.Tables.Sum(t => t.BloatBytes ?? 0))"
+                                Caption="plain VACUUM frees for reuse, not to disk" />
+                }
+                else
+                {
+                    <PgStatTile Class="pg-tile-reclaimable" Label="Reclaimable (est.)" Value="—" Caption="install pgstattuple for bloat estimates" />
+                }
+                @if (data.Running.Count > 0)
+                {
+                    var p = data.Running[0];
+                    <PgStatTile Class="pg-tile-autovacuum" Label="Autovacuum running" Value="@p.Table" Caption="@RunningCaption(p)" />
+                }
+                else
+                {
+                    <PgStatTile Class="pg-tile-autovacuum" Label="Autovacuum running" Value="idle" Caption="no vacuum in progress" />
+                }
+                <PgStatTile Class="pg-tile-xid" Label="Oldest xid age" Value="@PgFormat.Compact(data.OldestXidAge)"
+                            Warning="data.OldestXidAge > data.FreezeMaxAge" Meter="@(data.OldestXidAge / 2_100_000_000d)"
+                            MeterColor="@(data.OldestXidAge > data.FreezeMaxAge ? Color.Warning : Color.Primary)"
+                            Caption="@($"wraparound at 2.1B · freeze_max_age {PgFormat.Compact(data.FreezeMaxAge)}")" />
+            </div>
+
+            <MudTable T="PgTableHealth" Class="pg-maintenance-table" Items="Visible" Dense="true" Hover="true" Elevation="0"
+                      RowClassFunc="@((t, _) => RowClass(t))">
+                <HeaderContent>
+                    <MudTh>Table</MudTh><MudTh Class="pg-num">Size</MudTh><MudTh Class="pg-num">Live tuples</MudTh><MudTh Class="pg-num">Dead tuples</MudTh>
+                    <MudTh>Dead %</MudTh><MudTh Class="pg-num">Bloat est.</MudTh><MudTh>Last vacuum</MudTh><MudTh>Last autovacuum</MudTh><MudTh>Last analyze</MudTh><MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Class="pg-mono">@context.Schema.@context.Name</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Bytes(context.TotalBytes)</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Compact(context.Live)</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Compact(context.Dead)</MudTd>
+                    <MudTd>
+                        @if (context.DeadPercent > DeadThreshold)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="pg-dead-chip">@Pct(context.DeadPercent)</MudChip>
+                        }
+                        else
+                        {
+                            <span class="pg-mono pg-dead-text">@Pct(context.DeadPercent)</span>
+                        }
+                    </MudTd>
+                    <MudTd Class="pg-mono pg-num">@(context.BloatBytes is { } b ? PgFormat.Bytes(b) : "—")</MudTd>
+                    <MudTd Class="pg-mono">@Ago(context.LastVacuum)</MudTd>
+                    <MudTd Class="pg-mono">
+                        @if (context.AutovacuumRunning)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Class="pg-running-chip">running</MudChip>
+                        }
+                        else
+                        {
+                            @Ago(context.LastAutovacuum)
+                        }
+                    </MudTd>
+                    <MudTd Class="pg-mono">@Ago(Latest(context.LastAnalyze, context.LastAutoanalyze))</MudTd>
+                    <MudTd Class="pg-row-actions">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-vacuum" Disabled="@(!ReadWrite || _acting || context.AutovacuumRunning)"
+                                   title="@ReadOnlyTitle" OnClick="() => RunOneAsync(context, PgMaintenanceKind.Vacuum)">VACUUM</MudButton>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-analyze" Disabled="@(!ReadWrite || _acting)"
+                                   title="@ReadOnlyTitle" OnClick="() => RunOneAsync(context, PgMaintenanceKind.Analyze)">ANALYZE</MudButton>
+                        <MudMenu Class="pg-maintenance-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
+                            <MudMenuItem Class="pg-vacuum-full pg-menu-danger" Disabled="@(!ReadWrite || _acting)"
+                                         OnClick="() => VacuumFullAsync(context)">VACUUM FULL…</MudMenuItem>
+                        </MudMenu>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pg-muted pg-maintenance-empty">No tables in this database.</div>
+                </NoRecordsContent>
+            </MudTable>
+
+            @if (HiddenCount > 0 || _showAll)
+            {
+                <div class="pg-maintenance-more pg-meta">
+                    @if (_showAll)
+                    {
+                        <button type="button" class="pg-link" @onclick="() => _showAll = false">show top @TopRows only</button>
+                    }
+                    else
+                    {
+                        <span>@HiddenCount more tables under 1% dead · </span>
+                        <button type="button" class="pg-link" @onclick="() => _showAll = true">show all</button>
+                    }
+                </div>
+            }
+
+            <div class="pg-footnote pg-maintenance-footnote">
+                <span>VACUUM and ANALYZE are Mutating: a short confirm, no typing. VACUUM FULL locks the table and lives in the row menu as Destructive.</span>
+                <span class="pg-footnote-right">Audited as pg.maintenance.vacuum / .analyze · <a href="/audit">Audit log</a></span>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private const int TopRows = 25;
+    private const double DeadThreshold = 30;
+    private const string MaintenancePath = "/p/postgres/maintenance";
+
+    private readonly CancellationTokenSource _cts = new();
+    private ConnectionInfo? _connection;
+    private string? _database;
+    private PgMaintenance? _data;
+    private string? _error;
+    private bool _loading;
+    private bool _acting;
+    private bool _showAll;
+    private bool _disposed;
+    private string? _progress;
+    private int _generation;
+    private string _lastUrl = "";
+
+    private bool Busy => _loading || _acting;
+
+    private bool ReadWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private string? ReadOnlyTitle => ReadWrite ? null : "Connection is read-only";
+
+    private bool BulkDisabled => !ReadWrite || _acting || Flagged.Count == 0;
+
+    private DateTimeOffset Now => _data is { CapturedAt: var at } && at != default ? at : Clock.GetUtcNow();
+
+    private IReadOnlyList<PgTableHealth> Flagged =>
+        _data?.Tables.Where(IsFlagged).ToList() ?? [];
+
+    private static bool IsFlagged(PgTableHealth t) =>
+        t.DeadPercent > DeadThreshold || (t.TotalBytes > 0 && t.BloatBytes is { } bloat && (double)bloat / t.TotalBytes > 0.20);
+
+    private IEnumerable<PgTableHealth> Visible => _showAll ? _data?.Tables ?? [] : (_data?.Tables ?? []).Take(TopRows);
+
+    private int HiddenCount => Math.Max(0, (_data?.Tables.Count ?? 0) - TopRows);
+
+    private static string RowClass(PgTableHealth t) => "pg-maintenance-row" + (IsFlagged(t) ? " pg-flagged" : "");
+
+    private static string Pct(double value) => Math.Round(value, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) + "%";
+
+    private string Ago(DateTimeOffset? at) => at is { } t ? PgFormat.Ago(Now - t) : "—";
+
+    private static DateTimeOffset? Latest(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
+
+    private string RunningCaption(PgVacuumProgress p)
+    {
+        var parts = new List<string>();
+        if (p.StartedAt is { } started)
+        {
+            parts.Add($"started {PgFormat.Ago(Now - started)}");
+        }
+
+        parts.Add($"pid {p.Pid}");
+        if (p.HeapScannedPercent is { } pct)
+        {
+            parts.Add($"{Pct(pct)} of heap scanned");
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    // ---- selection ----------------------------------------------------------------------------------------------
+
+    protected override void OnInitialized() => _lastUrl = Navigation.Uri;
+
+    private Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_connection is not null && _connection.Id != connection.Id)
+        {
+            // Another connection's tables must never sit under this connection's name.
+            _generation++;
+            _loading = false;
+            _database = null;
+            _data = null;
+            _error = null;
+            _showAll = false;
+            _connection = connection;
+            UpdateUrl();
+        }
+
+        _connection = connection;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnDatabaseChangedAsync(string database)
+    {
+        if (_connection is null || _disposed)
+        {
+            return;
+        }
+
+        if (database != _database)
+        {
+            _showAll = false;
+            _data = null;
+            _error = null;
+        }
+
+        _database = database;
+        UpdateUrl();
+        if (database == "")
+        {
+            _generation++;
+            _loading = false;
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    // Composed from tracked state, never from Navigation.Uri, which lags a NavigateTo on Blazor Server.
+    private void UpdateUrl()
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var uri = Navigation.GetUriWithQueryParameters(Navigation.ToAbsoluteUri(MaintenancePath).ToString(), new Dictionary<string, object?>
+        {
+            ["connectionId"] = connection.Id.ToString(),
+            ["db"] = string.IsNullOrEmpty(_database) ? null : _database,
+        });
+        if (uri != _lastUrl)
+        {
+            _lastUrl = uri;
+            Navigation.NavigateTo(uri, replace: true);
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_connection is not { } connection || string.IsNullOrEmpty(_database) || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await GetMaintenance.HandleAsync(connection.Id, _database, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (result.IsSuccess && result.Value is { } value)
+            {
+                _data = value;
+                _error = null;
+            }
+            else
+            {
+                _data = null;
+                _error = result.Error ?? "Connection not found.";
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    // ---- actions ------------------------------------------------------------------------------------------------
+
+    private static string Verb(PgMaintenanceKind kind) => kind == PgMaintenanceKind.Analyze ? "ANALYZE" : "VACUUM";
+
+    private static string Name(PgTableHealth t) => $"{t.Schema}.{t.Name}";
+
+    private async Task RunOneAsync(PgTableHealth table, PgMaintenanceKind kind)
+    {
+        if (_connection is not { } connection || _acting || _disposed)
+        {
+            return;
+        }
+
+        _acting = true;
+        var database = _database;
+        try
+        {
+            if (!await Confirmation.ConfirmAsync(Verb(kind), Name(table), false))
+            {
+                return;
+            }
+
+            var result = await RunMaintenance.HandleAsync(new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, kind), _cts.Token);
+            Report(result, $"{Verb(kind)} finished on {Name(table)}.", Name(table), Verb(kind));
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _acting = false;
+        }
+
+        await ReloadIfSameAsync(connection.Id, database);
+    }
+
+    private async Task VacuumFullAsync(PgTableHealth table)
+    {
+        if (_connection is not { } connection || _acting || _disposed)
+        {
+            return;
+        }
+
+        var request = new ConfirmationRequest("VACUUM FULL", Name(table), connection.IsProd,
+            "Takes an ACCESS EXCLUSIVE lock and rewrites the table — reads and writes wait until it finishes.",
+            [
+                new ConfirmationDetail("size", PgFormat.Bytes(table.TotalBytes)),
+                new ConfirmationDetail("dead", $"{PgFormat.Count(table.Dead)} tuples · {Pct(table.DeadPercent)}"),
+            ], "pg.maintenance.vacuum_full", Destructive: true);
+
+        _acting = true;
+        var database = _database;
+        try
+        {
+            if (!await Confirmation.ConfirmAsync(request))
+            {
+                return;
+            }
+
+            var result = await RunMaintenance.HandleAsync(
+                new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, PgMaintenanceKind.VacuumFull), _cts.Token);
+            Report(result, $"VACUUM FULL finished on {Name(table)}.", Name(table), "VACUUM FULL");
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _acting = false;
+        }
+
+        await ReloadIfSameAsync(connection.Id, database);
+    }
+
+    private async Task BulkAsync(PgMaintenanceKind kind)
+    {
+        if (_connection is not { } connection || _acting || _disposed)
+        {
+            return;
+        }
+
+        var targets = Flagged.ToList();
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        _acting = true;
+        var database = _database;
+        try
+        {
+            if (!await Confirmation.ConfirmAsync(Verb(kind), $"{targets.Count} flagged tables", false, targets.Count))
+            {
+                return;
+            }
+
+            var failed = false;
+            for (var i = 0; i < targets.Count; i++)
+            {
+                _progress = $"{Verb(kind)} {i + 1} / {targets.Count}…";
+                StateHasChanged();
+                var result = await RunMaintenance.HandleAsync(
+                    new MaintenanceCommand(connection.Id, connection.Name, database, targets[i].Oid, kind), _cts.Token);
+                if (!result.IsSuccess)
+                {
+                    Report(result, "", Name(targets[i]), Verb(kind));
+                    failed = true;
+                    break;
+                }
+            }
+
+            if (!failed && !_disposed)
+            {
+                Snackbar.Add($"{Verb(kind)} finished.", Severity.Success);
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _acting = false;
+            _progress = null;
+        }
+
+        await ReloadIfSameAsync(connection.Id, database);
+    }
+
+    // A slow action finishing after the user switched connection or database must not reload the new selection's data twice.
+    private Task ReloadIfSameAsync(Guid connectionId, string? database) =>
+        _connection?.Id == connectionId && _database == database ? LoadAsync() : Task.CompletedTask;
+
+    private void Report(PluginResult<string> result, string success, string table, string verb)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (result.IsSuccess)
+        {
+            Snackbar.Add(success, Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"{verb} failed on {table}: {result.Error ?? "The action failed."}", Severity.Error);
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

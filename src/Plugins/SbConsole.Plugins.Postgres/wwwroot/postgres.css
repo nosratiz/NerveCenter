@@ -121,3 +121,12 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-activity-empty { padding: 24px 6px; }
 .pg-activity-footnote { display: flex; gap: 14px; }
 .pg-menu-danger .mud-menu-item-text { color: var(--mud-palette-error); }
+
+/* Maintenance (mockup 1f) */
+.pg-maint-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px 20px 0; }
+@media (max-width: 1100px) { .pg-maint-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.pg-maintenance-table { margin: 12px 12px 0; }
+.pg-maintenance-table .pg-row-actions { white-space: nowrap; text-align: right; }
+.pg-maintenance-table .pg-flagged { background: color-mix(in srgb, var(--mud-palette-warning) 10%, transparent); }
+.pg-maintenance-more { padding: 10px 20px; }
+.pg-maintenance-footnote { display: flex; gap: 14px; }

@@ -10,6 +10,7 @@ using NSubstitute;
 using SbConsole.Plugins.Postgres.Activity;
 using SbConsole.Plugins.Postgres.Browse;
 using SbConsole.Plugins.Postgres.Client;
+using SbConsole.Plugins.Postgres.Maintenance;
 using SbConsole.Plugins.Postgres.Overview;
 using SbConsole.Plugins.Postgres.Query;
 using SbConsole.Sdk;
@@ -77,6 +78,8 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new TerminateBackendCommandHandler(Operations, Connections, Audit, NullLogger<TerminateBackendCommandHandler>.Instance));
         Services.AddSingleton(new ReindexIndexCommandHandler(Operations, Connections, Audit, NullLogger<ReindexIndexCommandHandler>.Instance));
         Services.AddSingleton(new DropIndexCommandHandler(Operations, Connections, Audit, NullLogger<DropIndexCommandHandler>.Instance));
+        Services.AddSingleton(new GetMaintenanceQueryHandler(Operations, Connections, NullLogger<GetMaintenanceQueryHandler>.Instance));
+        Services.AddSingleton(new RunMaintenanceCommandHandler(Operations, Connections, Audit, NullLogger<RunMaintenanceCommandHandler>.Instance));
         Services.AddSingleton<AuthenticationStateProvider>(new FakeAuthStateProvider());
     }
 
