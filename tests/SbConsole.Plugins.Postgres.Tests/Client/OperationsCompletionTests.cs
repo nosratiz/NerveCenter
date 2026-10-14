@@ -38,4 +38,15 @@ public sealed class OperationsCompletionTests(PostgresFixture fx)
         schema.Objects.Should().NotContain(o => o.Name == "orders");
         schema.Schemas.Should().Contain("public");
     }
+
+    [DockerFact]
+    public async Task Completion_objects_list_search_path_schemas_first()
+    {
+        var schema = await fx.Operations.GetCompletionSchemaAsync(fx.Secret(), null);
+
+        var firstReporting = schema.Objects.ToList().FindIndex(o => o.Schema == "reporting");
+        var lastPublic = schema.Objects.ToList().FindLastIndex(o => o.Schema == "public");
+        firstReporting.Should().BeGreaterThanOrEqualTo(0);
+        lastPublic.Should().BeLessThan(firstReporting);
+    }
 }

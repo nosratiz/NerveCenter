@@ -98,12 +98,21 @@ public static class PgCompletionEngine
             return new PgCompletionResult(replaceFrom, replaceTo, []);
         }
 
-        // Accepting an item equal to the word just typed would change nothing (or only its case), and
-        // would eat the Enter meant as a newline -- leave it out.
-        var typed = caret == replaceTo ? text[replaceFrom..replaceTo] : null;
+        // A finished word (caret at its end) that equals a candidate offers nothing: accepting would change
+        // nothing, and the next prefix match (orders -> orders_archive, OR -> ORDER) would eat the Enter meant
+        // as a newline. Typing on (orders_) shows the longer matches again.
+        if (caret == replaceTo && replaceFrom < replaceTo)
+        {
+            var word = text[replaceFrom..replaceTo];
+            if (candidates.Any(c => string.Equals(c.InsertText, word, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new PgCompletionResult(replaceFrom, replaceTo, []);
+            }
+        }
+
         var items = candidates
             .Select(item => (Item: item, Rank: Rank(item.Label, prefix)))
-            .Where(x => x.Rank >= 0 && !string.Equals(x.Item.InsertText, typed, StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Rank >= 0)
             .OrderBy(x => x.Rank)
             .Take(MaxItems)
             .Select(x => x.Item)

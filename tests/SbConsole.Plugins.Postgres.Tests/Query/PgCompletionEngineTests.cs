@@ -48,7 +48,7 @@ public class PgCompletionEngineTests
     {
         Complete("SELECT coal|").Items.Should().ContainEquivalentOf(
             new PgCompletionItem("coalesce", "coalesce(", PgCompletionKind.Function, "coalesce(value, …)"));
-        Complete("SELECT no|").Items.Should().Contain(i => i.Label == "now" && i.InsertText == "now()");
+        Complete("SELECT now|").Items.Should().Contain(i => i.Label == "now" && i.InsertText == "now()");
     }
 
     [Fact]
@@ -68,10 +68,31 @@ public class PgCompletionEngineTests
     }
 
     [Fact]
-    public void An_item_equal_to_the_typed_word_ignoring_case_is_left_out()
+    public void A_finished_word_equal_to_a_candidate_ignoring_case_offers_nothing()
     {
-        Labels("select|").Should().NotContain("SELECT");
-        Labels("SELECT * FROM orders|").Should().NotContain("orders");
+        Labels("select|").Should().BeEmpty();
+        Labels("SELECT * FROM orders|").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_finished_word_does_not_fall_through_to_a_longer_prefix_match()
+    {
+        var withArchive = new PgCompletionSchema(["public"], ["public"],
+        [
+            new("public", "orders", PgObjectKind.Table, [Col("id")]),
+            new("public", "orders_archive", PgObjectKind.Table, [Col("id")]),
+        ]);
+        Labels("SELECT * FROM orders|", withArchive).Should().BeEmpty();
+        Labels("SELECT * FROM orders_|", withArchive).Should().Contain("orders_archive");
+        Labels("SELECT * FROM x WHERE a = 1 OR|").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void OVERRIDING_after_a_table_is_a_keyword_not_an_alias()
+    {
+        Labels("SELECT | FROM orders OVERRIDING").Should().NotContain("OVERRIDING");
+        Complete("SELECT | FROM orders OVERRIDING").Items
+            .Should().NotContain(i => i.Kind == PgCompletionKind.Alias && i.Label == "OVERRIDING");
     }
 
     // ---- suppression ----
