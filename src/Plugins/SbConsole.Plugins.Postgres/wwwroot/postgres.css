@@ -102,3 +102,22 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-history-failed .pg-history-sql, .pg-history-error { color: var(--mud-palette-error); }
 .pg-history-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--mud-palette-text-secondary); font-size: 0.7rem; }
 .pg-history .pg-footnote { margin-top: auto; }
+
+/* Activity (mockups 1d/1e) */
+.pg-activity-table .pg-depth-1 td:first-child { padding-left: 28px; }
+.pg-activity-table .pg-depth-2 td:first-child { padding-left: 48px; }
+.pg-activity-table .pg-depth-3 td:first-child { padding-left: 68px; }
+.pg-activity-table .pg-depth-4 td:first-child, .pg-activity-table .pg-depth-5 td:first-child { padding-left: 88px; }
+.pg-activity-table .pg-query-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-activity-table .pg-row-actions { white-space: nowrap; text-align: right; }
+.pg-blocker-banner { margin: 0 20px; align-items: center; }
+.pg-blocker-banner .mud-alert-message { display: flex; align-items: center; gap: 12px; width: 100%; }
+.pg-blocker-banner .pg-jump-blocker { margin-left: auto; }
+.pg-idle-hidden { padding: 10px 20px; }
+.pg-menu-danger { color: var(--mud-palette-error); }
+.pg-footnote-right { margin-left: auto; }
+.pg-activity-error { margin: 0; }
+.pg-autorefresh { min-width: 96px; }
+.pg-activity-empty { padding: 24px 6px; }
+.pg-activity-footnote { display: flex; gap: 14px; }
+.pg-menu-danger .mud-menu-item-text, .pg-menu-danger.mud-menu-item { color: var(--mud-palette-error); }

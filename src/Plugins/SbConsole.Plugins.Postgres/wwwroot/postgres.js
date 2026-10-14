@@ -37,3 +37,8 @@ export function unregisterRunShortcut(element) {
         handlers.delete(element);
     }
 }
+
+// Activity "Jump to blocker": brings the row's pid cell to the middle of the viewport.
+export function scrollToId(id) {
+    document.getElementById(id)?.scrollIntoView({ block: "center" });
+}

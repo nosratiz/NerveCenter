@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using SbConsole.Plugins.Postgres.Client;
+using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Postgres.Tests.Pages;
 
@@ -321,6 +322,101 @@ public class BrowsePageTests : PgPageTestBase
         cut.WaitForElement(".pg-index-copy").Click();
 
         JSInterop.VerifyInvoke("navigator.clipboard.writeText").Arguments[0].Should().Be(def);
+    }
+
+    private static PgIndex Idx(uint oid, string name, bool backsConstraint = false) =>
+        new(oid, name, $"CREATE INDEX {name} ON public.orders USING btree (legacy_ref)", "(legacy_ref)", "btree", 6L << 30, 12, 100, false, false, false, true, backsConstraint);
+
+    private void OpenIndexMenu(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        SelectTab(cut, "Indexes");
+        cut.WaitForElement(".pg-index-menu");
+        cut.Find(".pg-index-menu button").Click();
+        cut.WaitForElement(".mud-popover-open .pg-index-copy");
+    }
+
+    [Fact]
+    public void Reindex_confirms_plainly_runs_the_handler_and_reloads_the_detail()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        Confirmation.ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        Operations.ReindexIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()).Returns("public.idx_legacy");
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+        var before = Operations.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IPostgresOperations.GetObjectDetailAsync));
+
+        cut.Find(".mud-popover-open .pg-index-reindex").Click();
+
+        cut.WaitForAssertion(() => Operations.Received(1).ReindexIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => Operations.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IPostgresOperations.GetObjectDetailAsync)).Should().Be(before + 1));
+    }
+
+    [Fact]
+    public void Declining_reindex_runs_nothing()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        Confirmation.ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(false);
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+
+        cut.Find(".mud-popover-open .pg-index-reindex").Click();
+
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+        Operations.DidNotReceive().ReindexIndexAsync(Secret, Arg.Any<string?>(), Arg.Any<uint>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Drop_index_sends_a_destructive_detailed_request_then_drops_and_reloads()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        ConfirmationRequest? seen = null;
+        Confirmation.ConfirmAsync(Arg.Do<ConfirmationRequest>(r => seen = r), Arg.Any<CancellationToken>()).Returns(true);
+        Operations.DropIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()).Returns("public.idx_legacy");
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+
+        cut.Find(".mud-popover-open .pg-index-drop").Click();
+
+        cut.WaitForAssertion(() => Operations.Received(1).DropIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()));
+        seen!.Verb.Should().Be("Drop index");
+        seen.Target.Should().Be("idx_legacy");
+        seen.IsProd.Should().BeTrue();
+        seen.Destructive.Should().BeTrue();
+        seen.AuditAction.Should().Be("pg.index.drop");
+        seen.Consequence.Should().Contain("DROP INDEX CONCURRENTLY");
+        seen.Details.Should().Contain(d => d.Label == "definition" && d.Value.Contains("CREATE INDEX idx_legacy"));
+        seen.Details.Should().Contain(d => d.Label == "size" && d.Value == "6 GB");
+        seen.Details.Should().Contain(d => d.Label == "scans" && d.Value == "12");
+    }
+
+    [Fact]
+    public void Drop_is_disabled_for_an_index_that_backs_a_constraint()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "orders_pkey", backsConstraint: true)]));
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+
+        var drop = cut.Find(".mud-popover-open .pg-index-drop");
+        drop.ClassList.Should().Contain("mud-disabled");
+        drop.GetAttribute("title").Should().Be("This index backs a constraint — drop the constraint instead.");
+    }
+
+    [Fact]
+    public void Index_actions_are_disabled_on_a_read_only_connection()
+    {
+        Connections.ListAsync("postgres", Arg.Any<CancellationToken>()).Returns(
+        [
+            new ConnectionInfo(ConnectionId, ConnectionName, "postgres", ["prod"], true, Time.GetUtcNow(), null, Time.GetUtcNow(),
+                new Dictionary<string, string> { ["Server"] = "db:5432", ["Database"] = "app", ["Mode"] = "read-only" }),
+        ]);
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+
+        cut.Find(".mud-popover-open .pg-index-reindex").ClassList.Should().Contain("mud-disabled");
+        var drop = cut.Find(".mud-popover-open .pg-index-drop");
+        drop.ClassList.Should().Contain("mud-disabled");
+        drop.GetAttribute("title").Should().Be("Connection is read-only");
     }
 
     [Fact]

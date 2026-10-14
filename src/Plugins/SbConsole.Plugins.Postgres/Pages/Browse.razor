@@ -1,4 +1,4 @@
-@* Mockup 1b (dark: Data tab, light: Indexes tab). Read-only: nothing on this page writes. *@
+@* Mockup 1b (dark: Data tab, light: Indexes tab). Reading writes nothing; the index menu's REINDEX and Drop are the only mutations (confirmation-gated, read-write connections only). *@
 @page "/p/postgres/browse"
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.WebUtilities
@@ -9,6 +9,10 @@
 @inject GetDdlQueryHandler GetDdl
 @inject PreviewRowsQueryHandler PreviewRows
 @inject ExportTableCsvCommandHandler ExportCsv
+@inject ReindexIndexCommandHandler ReindexIndex
+@inject DropIndexCommandHandler DropIndex
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject TimeProvider Clock
@@ -296,6 +300,15 @@
     private int _ddlGen;
     private bool _disposed;
     private IJSObjectReference? _module;
+
+    private bool _indexBusy;
+
+    private bool ReadWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private string? DropTitle(PgIndex index) =>
+        !ReadWrite ? "Connection is read-only"
+        : index.BacksConstraint ? "This index backs a constraint — drop the constraint instead."
+        : null;
 
     private bool Busy => _treeLoading || _detailLoading || _rowsLoading;
     private bool Filtering => _filter.Trim().Length > 0;
@@ -1068,6 +1081,75 @@
         }
     };
 
+    private async Task ReindexAsync(PgIndex index)
+    {
+        if (_connection is not { } connection || _detail is not { } detail || _indexBusy || _disposed)
+        {
+            return;
+        }
+
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync("Reindex", index.Name, isProd: false),
+            () => ReindexIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, _database, index.Oid), _cts.Token),
+            $"Reindexed {index.Name}.");
+    }
+
+    private async Task DropAsync(PgIndex index)
+    {
+        if (_connection is not { } connection || _detail is not { } detail || _indexBusy || _disposed)
+        {
+            return;
+        }
+
+        var request = new ConfirmationRequest("Drop index", index.Name, connection.IsProd,
+            "DROP INDEX CONCURRENTLY — queries that used it fall back to other plans.",
+            [
+                new ConfirmationDetail("definition", index.Definition),
+                new ConfirmationDetail("size", PgFormat.Bytes(index.Bytes)),
+                new ConfirmationDetail("scans", PgFormat.Count(index.Scans)),
+            ], "pg.index.drop", Destructive: true);
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync(request),
+            () => DropIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, _database, index.Oid), _cts.Token),
+            $"Dropped {index.Name}.");
+    }
+
+    // REINDEX CONCURRENTLY replaces the index (new oid) and DROP removes it, so the detail is always reloaded afterwards.
+    private async Task RunIndexActionAsync(PgObjectDetail detail, Func<Task<bool>> confirm, Func<Task<PluginResult>> run, string success)
+    {
+        _indexBusy = true;
+        try
+        {
+            if (!await confirm())
+            {
+                return;
+            }
+
+            var result = await run();
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                Snackbar.Add(success, Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error ?? "The action failed.", Severity.Error);
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _indexBusy = false;
+        }
+
+        await SelectObjectAsync(detail.Oid, updateUrl: false);
+    }
+
     private static string OperatorLabel(PgFilterOp op) => Operators.First(o => o.Op == op).Label;
 
     private RenderFragment IndexesTab(PgObjectDetail d) => __builder =>
@@ -1101,7 +1183,10 @@
                     <MudTd>
                         <MudMenu Class="pg-index-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
                             <MudMenuItem Class="pg-index-copy" OnClick="() => CopyAsync(context.Definition)">Copy definition</MudMenuItem>
-                            @* Task 14 adds REINDEX CONCURRENTLY and Drop index… here (confirmation-gated). *@
+                            <MudMenuItem Class="pg-index-reindex" Disabled="!ReadWrite || _indexBusy" OnClick="() => ReindexAsync(context)">REINDEX CONCURRENTLY</MudMenuItem>
+                            <MudDivider />
+                            <MudMenuItem Class="pg-index-drop pg-menu-danger" Disabled="@(!ReadWrite || _indexBusy || context.BacksConstraint)" title="@DropTitle(context)"
+                                         OnClick="() => DropAsync(context)">Drop index…</MudMenuItem>
                         </MudMenu>
                     </MudTd>
             </RowTemplate>

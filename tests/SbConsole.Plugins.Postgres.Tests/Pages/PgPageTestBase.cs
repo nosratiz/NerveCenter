@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
 using NSubstitute;
+using SbConsole.Plugins.Postgres.Activity;
 using SbConsole.Plugins.Postgres.Browse;
 using SbConsole.Plugins.Postgres.Client;
 using SbConsole.Plugins.Postgres.Overview;
@@ -52,6 +53,7 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(Audit);
         Services.AddSingleton(Confirmation);
         Services.AddSingleton(Operations);
+        Confirmation.ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()).Returns(true);
         RegisterHandlers();
     }
 
@@ -70,6 +72,11 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new ExplainQueryQueryHandler(Operations, Connections, NullLogger<ExplainQueryQueryHandler>.Instance));
         Services.AddSingleton(new ExportQueryCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportQueryCsvCommandHandler>.Instance));
         Services.AddSingleton(new ListQueryHistoryQueryHandler(Store, Time));
+        Services.AddSingleton(new GetActivityQueryHandler(Operations, Connections, NullLogger<GetActivityQueryHandler>.Instance));
+        Services.AddSingleton(new CancelBackendCommandHandler(Operations, Connections, Audit, NullLogger<CancelBackendCommandHandler>.Instance));
+        Services.AddSingleton(new TerminateBackendCommandHandler(Operations, Connections, Audit, NullLogger<TerminateBackendCommandHandler>.Instance));
+        Services.AddSingleton(new ReindexIndexCommandHandler(Operations, Connections, Audit, NullLogger<ReindexIndexCommandHandler>.Instance));
+        Services.AddSingleton(new DropIndexCommandHandler(Operations, Connections, Audit, NullLogger<DropIndexCommandHandler>.Instance));
         Services.AddSingleton<AuthenticationStateProvider>(new FakeAuthStateProvider());
     }
 
