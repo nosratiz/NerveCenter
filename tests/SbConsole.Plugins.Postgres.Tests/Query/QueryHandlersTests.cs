@@ -49,7 +49,24 @@ public class QueryHandlersTests
         await QueryHistoryStore.AppendAsync(store, Id, new("a", false, 1, 0, null, "n", at, "h", null), at, default);
         await QueryHistoryStore.AppendAsync(store, Id, new("b", false, 1, 0, null, "n", at, "h", null), at, default);
 
-        (await new ListQueryHistoryQueryHandler(store).HandleAsync(Id)).Select(e => e.Sql).Should().Equal("b", "a");
+        (await new ListQueryHistoryQueryHandler(store, TimeProvider.System).HandleAsync(Id)).Select(e => e.Sql).Should().Equal("b", "a");
+    }
+
+    [Fact]
+    public async Task History_hides_entries_older_than_retention_on_read()
+    {
+        var store = new InMemoryPluginStore();
+        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero));
+        var old = clock.GetUtcNow();
+        await QueryHistoryStore.AppendAsync(store, Id, new("old", false, 1, 0, null, "n", old, "h", null), old, default);
+        clock.Advance(TimeSpan.FromDays(91));
+        var recent = clock.GetUtcNow();
+        await QueryHistoryStore.AppendAsync(store, Id, new("recent", false, 1, 0, null, "n", recent, "h", null), recent, default);
+        // Re-add the stale entry as if written long ago and never pruned.
+        await store.SetAsync(QueryHistoryStore.Key(Id),
+            System.Text.Json.JsonSerializer.Serialize(new[] { new QueryHistoryEntry("recent", false, 1, 0, null, "n", recent, "h", null), new QueryHistoryEntry("old", false, 1, 0, null, "n", old, "h", null) }), default);
+
+        (await new ListQueryHistoryQueryHandler(store, clock).HandleAsync(Id)).Select(e => e.Sql).Should().Equal("recent");
     }
 
     [Fact]
@@ -75,14 +92,25 @@ public class QueryHandlersTests
     }
 
     [Fact]
-    public async Task Export_failure_is_audited_failed_with_friendly_text()
+    public async Task Export_refusal_fails_with_friendly_text_and_no_audit()
     {
         _ops.ExportQueryCsvAsync("secret", null, "select 1", 30, Arg.Any<CancellationToken>()).ThrowsAsync(new PgSqlRefusedException("Nope."));
 
         var result = await Export().HandleAsync(new(Id, "pg", null, "select 1", 30));
 
         result.Error.Should().Be("Nope.");
+        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task Export_server_failure_is_audited_failed()
+    {
+        _ops.ExportQueryCsvAsync("secret", null, "select 1", 30, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("kaput"));
+
+        var result = await Export().HandleAsync(new(Id, "pg", null, "select 1", 30));
+
+        result.IsSuccess.Should().BeFalse();
         await _audit.Received(1).RecordAsync("pg.query.export", "pg/(default)", ActionRisk.Safe, false,
-            $"{QueryAudit.Hash("select 1")} · Nope.", Arg.Any<CancellationToken>());
+            Arg.Is<string?>(d => d!.StartsWith(QueryAudit.Hash("select 1"))), Arg.Any<CancellationToken>());
     }
 }

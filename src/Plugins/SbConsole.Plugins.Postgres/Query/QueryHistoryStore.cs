@@ -15,11 +15,12 @@ internal static class QueryHistoryStore
     public const int MaxSqlLength = 4000;
     public static readonly TimeSpan Retention = TimeSpan.FromDays(90);
 
+    // In-process only; SbConsole is single-host.
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> Locks = new();
 
     public static string Key(Guid connectionId) => $"history:{connectionId}";
 
-    public static async Task<IReadOnlyList<QueryHistoryEntry>> ReadAsync(IPluginStore store, Guid connectionId, CancellationToken ct)
+    public static async Task<IReadOnlyList<QueryHistoryEntry>> ReadAsync(IPluginStore store, Guid connectionId, CancellationToken ct, DateTimeOffset? now = null)
     {
         var json = await store.GetAsync(Key(connectionId), ct);
         if (json is null)
@@ -29,7 +30,14 @@ internal static class QueryHistoryStore
 
         try
         {
-            return JsonSerializer.Deserialize<List<QueryHistoryEntry>>(json) ?? [];
+            var all = JsonSerializer.Deserialize<List<QueryHistoryEntry>>(json) ?? [];
+            if (now is { } at)
+            {
+                var cutoff = at - Retention;
+                return all.Where(e => e.At >= cutoff).ToList();
+            }
+
+            return all;
         }
         catch (JsonException)
         {

@@ -27,6 +27,11 @@ public sealed class ExportQueryCsvCommandHandler(
         {
             export = await operations.ExportQueryCsvAsync(secret, cmd.Database, cmd.Sql, cmd.TimeoutS, ct);
         }
+        catch (PgSqlRefusedException ex)
+        {
+            // Nothing ran: no audit row.
+            return PluginResult<CsvExport>.Fail(FriendlyPostgresError.Describe(ex).Message);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             logger.LogError(ex, "{Action} on {Target} failed.", Action, target);

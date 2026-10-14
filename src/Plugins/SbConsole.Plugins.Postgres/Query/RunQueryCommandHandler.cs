@@ -44,7 +44,15 @@ public sealed class RunQueryCommandHandler(
             // Nothing ran: no audit row, no history.
             return PluginResult<QueryRun>.Ok(new QueryRun(null, FriendlyPostgresError.Describe(ex), action, hash));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The operations layer rolls a cancelled write back, but the attempt itself must leave a trace.
+            var elapsed = clock.GetElapsedTime(started);
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, action, target, risk, succeeded: false, $"{head} · cancelled");
+            await AppendHistoryAsync(cmd, hash, null, elapsed, null);
+            throw;
+        }
+        catch (Exception ex)
         {
             var elapsed = clock.GetElapsedTime(started);
             logger.LogError(ex, "{Action} on {Target} failed.", action, target);

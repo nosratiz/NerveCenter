@@ -111,7 +111,8 @@ public class RunQueryCommandHandlerTests
     {
         var cmd = Cmd("select\n  nope from orders");
         var pg = new Npgsql.PostgresException("column \"nope\" does not exist", "ERROR", "ERROR", "42703", null, null, 10);
-        _ops.RunQueryAsync("secret", "app", cmd.Request, Arg.Any<CancellationToken>()).ThrowsAsync(pg);
+        _ops.RunQueryAsync("secret", "app", cmd.Request, Arg.Any<CancellationToken>())
+            .Returns<Task<PgQueryResult>>(_ => { _clock.Advance(TimeSpan.FromSeconds(1.5)); throw pg; });
 
         var result = await Sut().HandleAsync(cmd);
 
@@ -121,7 +122,9 @@ public class RunQueryCommandHandlerTests
         result.Value.Error.Line.Should().Be(2);
         await _audit.Received(1).RecordAsync("pg.query.read", "pg-prod-eu/app", ActionRisk.Safe, false,
             $"{QueryAudit.Hash(cmd.Request.Sql)} · select nope from orders · SQLSTATE 42703", Arg.Any<CancellationToken>());
-        (await History()).Single().SqlState.Should().Be("42703");
+        var h = (await History()).Single();
+        h.SqlState.Should().Be("42703");
+        h.ElapsedSeconds.Should().BeApproximately(1.5, 0.001);
     }
 
     [Fact]
@@ -139,17 +142,21 @@ public class RunQueryCommandHandlerTests
     }
 
     [Fact]
-    public async Task Caller_cancellation_rethrows_and_records_nothing()
+    public async Task Caller_cancellation_is_audited_and_recorded_then_rethrown()
     {
         using var cts = new CancellationTokenSource();
+        var cmd = Cmd("update orders set a=1", write: true);
         _ops.RunQueryAsync("secret", "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>())
             .Returns<Task<PgQueryResult>>(_ => { cts.Cancel(); throw new OperationCanceledException(cts.Token); });
 
-        var act = () => Sut().HandleAsync(Cmd(), cts.Token);
+        var act = () => Sut().HandleAsync(cmd, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
-        (await History()).Should().BeEmpty();
+        var hash = QueryAudit.Hash(cmd.Request.Sql);
+        await _audit.Received(1).RecordAsync("pg.query.write", "pg-prod-eu/app", ActionRisk.Mutating, false,
+            $"{hash} · update orders set a=1 · cancelled", CancellationToken.None);
+        var h = (await History()).Single();
+        h.Should().Match<QueryHistoryEntry>(e => e.SqlState == null && e.Rows == null && e.Write && e.Hash == hash);
     }
 
     [Fact]
