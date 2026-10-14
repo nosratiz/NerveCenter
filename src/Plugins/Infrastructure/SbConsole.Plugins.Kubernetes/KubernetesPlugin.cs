@@ -31,7 +31,7 @@ public sealed class KubernetesPlugin : IPlugin
 
     // Metrics, problems and the badge all derive from one overview per connection per 15 s (success or failure).
     private static readonly TimeSpan OverviewTtl = TimeSpan.FromSeconds(15);
-    private readonly ConcurrentDictionary<string, (DateTimeOffset At, K8sOverview? Overview)> _overviewCache = new();
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, K8sOverview? Overview, Exception? Error)> _overviewCache = new();
 
     public string Id => PluginId;
     public string DisplayName => "Kubernetes";
@@ -91,17 +91,18 @@ public sealed class KubernetesPlugin : IPlugin
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
 
-    /// <summary>The cached overview for the secret, or null when the probe failed (failures are cached too).</summary>
-    private async Task<K8sOverview?> CachedOverviewAsync(string secret, CancellationToken ct)
+    /// <summary>The cached overview for the secret, or the cached failure (failures are cached too).</summary>
+    private async Task<(K8sOverview? Overview, Exception? Error)> CachedOverviewAsync(string secret, CancellationToken ct)
     {
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
         var now = _clock.GetUtcNow();
         if (_overviewCache.TryGetValue(key, out var cached) && now - cached.At < OverviewTtl)
         {
-            return cached.Overview;
+            return (cached.Overview, cached.Error);
         }
 
-        K8sOverview? overview;
+        K8sOverview? overview = null;
+        Exception? error = null;
         try
         {
             overview = await _operations!.GetOverviewAsync(secret, [], ct);
@@ -110,10 +111,10 @@ public sealed class KubernetesPlugin : IPlugin
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // No logger on the plugin instance; the host reports an unreachable connection on its own.
-            overview = null;
+            // No logger on the plugin instance; the failure is surfaced to callers that need it.
+            error = ex;
         }
 
         foreach (var entry in _overviewCache)
@@ -124,14 +125,14 @@ public sealed class KubernetesPlugin : IPlugin
             }
         }
 
-        _overviewCache[key] = (now, overview);
-        return overview;
+        _overviewCache[key] = (now, overview, error);
+        return (overview, error);
     }
 
     /// <summary>Nodes ready and crash-looping pods across the whole cluster; any failure reports nothing.</summary>
     public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
     {
-        if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { } overview)
+        if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { Overview: { } overview })
         {
             return [];
         }
@@ -147,9 +148,17 @@ public sealed class KubernetesPlugin : IPlugin
     public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default)
     {
-        if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { } overview)
+        if (_operations is null)
         {
             return [];
+        }
+
+        var (overview, error) = await CachedOverviewAsync(connectionString, ct);
+        if (overview is null)
+        {
+            // The host marks a connection "not checked" only when this throws; [] would read as healthy.
+            throw new InvalidOperationException(
+                FriendlyKubernetesError.From(error ?? new InvalidOperationException("No overview available.")), error);
         }
 
         return AttentionRules.Build(overview, _clock.GetUtcNow(), href => href)
@@ -168,7 +177,7 @@ public sealed class KubernetesPlugin : IPlugin
 
         try
         {
-            if (await CachedOverviewAsync(connectionString, ct) is not { } overview)
+            if (await CachedOverviewAsync(connectionString, ct) is not { Overview: { } overview })
             {
                 return null;
             }

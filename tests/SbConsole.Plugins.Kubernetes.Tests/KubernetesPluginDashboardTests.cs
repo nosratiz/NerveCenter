@@ -137,7 +137,10 @@ public class KubernetesPluginDashboardTests
         var plugin = Plugin();
 
         (await plugin.GetDashboardMetricsAsync("down")).Should().BeEmpty();
-        (await plugin.GetDashboardProblemsAsync(Guid.NewGuid(), "down", Substitute.For<IPluginStore>())).Should().BeEmpty();
+        var store = Substitute.For<IPluginStore>();
+        var first = async () => await plugin.GetDashboardProblemsAsync(Guid.NewGuid(), "down", store);
+        (await first.Should().ThrowAsync<InvalidOperationException>()).WithInnerException<HttpRequestException>();
+        (await first.Should().ThrowAsync<InvalidOperationException>()).WithInnerException<HttpRequestException>();
         (await plugin.GetNavBadgeAsync(KubernetesPlugin.OverviewHref, "down")).Should().BeNull();
         await _ops.Received(1).GetOverviewAsync("down", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
