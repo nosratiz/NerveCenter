@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
 using NSubstitute;
+using SbConsole.Plugins.Postgres.Browse;
 using SbConsole.Plugins.Postgres.Client;
 using SbConsole.Plugins.Postgres.Overview;
 using SbConsole.Sdk;
@@ -57,6 +58,11 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, Store, Time, NullLogger<GetOverviewQueryHandler>.Instance));
         Services.AddSingleton(new ListDatabasesQueryHandler(
             Operations, Connections, NullLogger<ListDatabasesQueryHandler>.Instance));
+        Services.AddSingleton(new ListSchemaQueryHandler(Operations, Connections, NullLogger<ListSchemaQueryHandler>.Instance));
+        Services.AddSingleton(new GetObjectDetailQueryHandler(Operations, Connections, NullLogger<GetObjectDetailQueryHandler>.Instance));
+        Services.AddSingleton(new GetDdlQueryHandler(Operations, Connections, NullLogger<GetDdlQueryHandler>.Instance));
+        Services.AddSingleton(new PreviewRowsQueryHandler(Operations, Connections, NullLogger<PreviewRowsQueryHandler>.Instance));
+        Services.AddSingleton(new ExportTableCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportTableCsvCommandHandler>.Instance));
     }
 
     /// <summary>MudMenu/MudSelect items render into a MudPopoverProvider (hosted by the real layout), so such tests render one alongside.</summary>
