@@ -49,6 +49,9 @@ internal static class TestData
                 new K8sRule(["batch"], ["jobs", "cronjobs"], ["get", "list", "watch"], []),
                 new K8sRule([""], ["pods", "pods/log", "services", "endpoints", "configmaps", "events", "namespaces", "nodes", "persistentvolumeclaims"], ["get", "list", "watch"], []),
                 new K8sRule(["policy"], ["poddisruptionbudgets"], ["get", "list", "watch"], []),
+                // system:basic-user, granted to every authenticated account.
+                new K8sRule(["authorization.k8s.io"], ["selfsubjectaccessreviews", "selfsubjectrulesreviews"], ["create"], []),
+                new K8sRule(["authentication.k8s.io"], ["selfsubjectreviews"], ["create"], []),
             ])],
             new Dictionary<string, bool>
             {

@@ -317,6 +317,83 @@ public class WorkloadsPageTests : K8sPageTestBase
     }
 
     [Fact]
+    public void Delete_on_a_non_prod_connection_is_not_flagged_prod()
+    {
+        Connections.ListAsync(KubernetesPlugin.Kind, Arg.Any<CancellationToken>()).Returns(
+        [
+            new ConnectionInfo(ConnectionId, ConnectionName, KubernetesPlugin.Kind, ["staging"], true, Time.GetUtcNow(), null, Time.GetUtcNow(),
+                new Dictionary<string, string> { ["Server"] = "aks-stg.example", ["Context"] = "aks-stg", ["TLS"] = "verified" }),
+        ]);
+        ArrangeList(K8sWorkloadKind.Deployment, Deploy("checkout", "api", 3, 3));
+        ConfirmationRequest? asked = null;
+        Confirmation.ConfirmAsync(Arg.Do<ConfirmationRequest>(r => asked = r), Arg.Any<CancellationToken>()).Returns(true);
+        var cut = RenderPage();
+
+        OpenMenu(cut, "api");
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-delete").Should().HaveCount(1));
+        cut.Find(".k8s-delete").Click();
+
+        cut.WaitForAssertion(() => asked.Should().NotBeNull());
+        asked!.IsProd.Should().BeFalse();
+        asked.Destructive.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Row_menu_divider_only_precedes_delete()
+    {
+        ArrangeList(K8sWorkloadKind.Deployment, Deploy("checkout", "api", 3, 3));
+        var cut = RenderPage();
+        OpenMenu(cut, "api");
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-delete").Should().HaveCount(1));
+        cut.FindAll(".mud-popover .mud-divider").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Viewer_row_menu_has_no_divider()
+    {
+        Operations.GetAccessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => TestData.ViewerAccess());
+        ArrangeList(K8sWorkloadKind.Deployment, Deploy("checkout", "api", 3, 3));
+        var cut = RenderPage();
+        OpenMenu(cut, "api");
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-menu-note").Should().HaveCount(1));
+        cut.FindAll(".mud-popover .mud-divider").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Tab_switch_before_the_first_load_finishes_still_fetches_permissions_and_counts()
+    {
+        var gate = new TaskCompletionSource<K8sAccessFacts>();
+        Operations.GetAccessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => gate.Task);
+        ArrangeList(K8sWorkloadKind.Deployment, Deploy("checkout", "api", 3, 3));
+        ArrangeList(K8sWorkloadKind.StatefulSet, TestData.Deployment("checkout", "postgres", 1, 1) with { Kind = K8sWorkloadKind.StatefulSet });
+        ArrangeCounts(Kinds.ToDictionary(k => k, _ => new K8sKindCount(7, false)));
+
+        RenderFragment fragment = builder =>
+        {
+            builder.OpenComponent<MudPopoverProvider>(0);
+            builder.CloseComponent();
+            builder.OpenComponent<MudDialogProvider>(1);
+            builder.CloseComponent();
+            builder.OpenComponent<WorkloadsPage>(2);
+            builder.CloseComponent();
+        };
+        var cut = Render(fragment);
+        cut.WaitForState(() => Operations.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IKubernetesOperations.GetAccessAsync)),
+            TimeSpan.FromSeconds(5));
+
+        cut.FindAll(".mud-tab")[1].Click();
+        await Task.Delay(50);
+        gate.SetResult(TestData.AdminAccess());
+
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-wl-row").Should().HaveCount(1), TimeSpan.FromSeconds(5));
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-scale").Should().HaveCount(1), TimeSpan.FromSeconds(5));
+        cut.WaitForAssertion(() => cut.FindAll(".mud-tab").Select(t => t.TextContent).Should().Contain(t => t.Contains('7')),
+            TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task Declined_delete_does_not_call_the_handler()
     {
         ArrangeList(K8sWorkloadKind.Deployment, Deploy("checkout", "api", 3, 3));

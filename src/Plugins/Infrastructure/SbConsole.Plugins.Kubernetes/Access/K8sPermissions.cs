@@ -46,8 +46,13 @@ public sealed class K8sPermissions
     /// <summary>True when any namespace's rule review was incomplete (the cluster's authorizer could not enumerate everything).</summary>
     public bool Incomplete { get; }
 
+    // system:basic-user grants every account create on the self-review APIs; they say nothing about the cluster's data.
+    private static readonly string[] SelfReviewGroups = ["authorization.k8s.io", "authentication.k8s.io"];
+
     public bool IsReadOnly =>
-        !_all && !_reviews.SelectMany(r => r.Rules).Any(rule => rule.Verbs.Any(v => v == "*" || WriteVerbs.Contains(v)));
+        !_all && !_reviews.SelectMany(r => r.Rules)
+            .Where(rule => !(rule.ApiGroups.Count > 0 && rule.ApiGroups.All(g => SelfReviewGroups.Contains(g))))
+            .Any(rule => rule.Verbs.Any(v => v == "*" || WriteVerbs.Contains(v)));
 
     public bool CanCluster(string check) => _all || (_cluster.TryGetValue(check, out var allowed) && allowed);
 

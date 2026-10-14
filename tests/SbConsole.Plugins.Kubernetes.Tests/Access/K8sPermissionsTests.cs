@@ -91,6 +91,30 @@ public class K8sPermissionsTests
         p.IsReadOnly.Should().BeTrue();
     }
 
+    [Fact]
+    public void View_role_plus_basic_user_self_review_rules_is_read_only()
+    {
+        var p = Perms(("default",
+        [
+            Rule(["", "apps"], ["pods", "deployments"], ["get", "list", "watch"]),
+            Rule(["authorization.k8s.io"], ["selfsubjectaccessreviews", "selfsubjectrulesreviews"], ["create"]),
+            Rule(["authentication.k8s.io"], ["selfsubjectreviews"], ["create"]),
+            Rule(["authorization.k8s.io", "authentication.k8s.io"], ["selfsubjectreviews"], ["create"]),
+        ]));
+        p.IsReadOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Create_on_everything_is_not_read_only_even_beside_self_review_rules()
+    {
+        Perms(("default", [Rule(["*"], ["*"], ["create"])])).IsReadOnly.Should().BeFalse();
+        Perms(("default",
+        [
+            Rule(["authorization.k8s.io"], ["selfsubjectaccessreviews"], ["create"]),
+            Rule(["authorization.k8s.io", "apps"], ["deployments"], ["create"]),
+        ])).IsReadOnly.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("create")]
     [InlineData("update")]

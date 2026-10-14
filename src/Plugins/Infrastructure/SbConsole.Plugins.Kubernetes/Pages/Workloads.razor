@@ -260,9 +260,9 @@
                 }
                 <MudMenuItem Class="k8s-view-yaml" Icon="@Icons.Material.Outlined.Code" OnClick="() => ViewYamlAsync(row)">View YAML</MudMenuItem>
                 <MudMenuItem Class="k8s-copy-kubectl" Icon="@Icons.Material.Outlined.ContentCopy" OnClick="() => CopyKubectlAsync(row)">Copy kubectl command</MudMenuItem>
-                <MudDivider />
                 @if (CanDelete(row))
                 {
+                    <MudDivider />
                     <MudMenuItem Class="k8s-delete" Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error" OnClick="() => DeleteAsync(row)">
                         <span class="mud-error-text">Delete…</span>
                     </MudMenuItem>
@@ -509,6 +509,13 @@
         if (_connection is not { } connection || _namespaces is not { } namespaces || _disposed)
         {
             return;
+        }
+
+        // A list-only load supersedes any in-flight full load (shared generation), so it must not leave the
+        // metadata unfetched: until permissions and counts exist, a "list-only" load is a full one.
+        if (listOnly && (_permissions is null || _counts is null))
+        {
+            listOnly = false;
         }
 
         var generation = ++_generation;
