@@ -3,6 +3,7 @@
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.Extensions.Logging
 @using SbConsole.Plugins.Postgres.Client
 @using SbConsole.Plugins.Postgres.Query
 @inject RunQueryCommandHandler RunQuery
@@ -14,6 +15,7 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject TimeProvider Clock
+@inject ILogger<Query> Logger
 @implements IAsyncDisposable
 
 <PageTitle>PostgreSQL query</PageTitle>
@@ -24,7 +26,7 @@
             <PgConnectionPicker Loading="_running" ManageUrl="false" SelectionChanged="OnConnectionChangedAsync" />
             @if (_connection is not null)
             {
-                <PgDatabasePicker ConnectionId="_connection.Id" Default="@(_connection.Summary.GetValueOrDefault("Database"))"
+                <PgDatabasePicker Loading="_running" ConnectionId="_connection.Id" Default="@(_connection.Summary.GetValueOrDefault("Database"))"
                                   ManageUrl="false" SelectedChanged="OnDatabaseChangedAsync" />
             }
         </Chips>
@@ -78,10 +80,10 @@
                     <div class="pg-gutter" aria-hidden="true">
                         @for (var line = 1; line <= LineCount; line++)
                         {
-                            <span class="@(_error?.Line == line ? "pg-gutter-error" : null)">@line</span>
+                            <span class="@(_failure?.Line == line ? "pg-gutter-error" : null)">@line</span>
                         }
                     </div>
-                    <MudTextField @ref="_editor" T="string" Class="pg-editor pg-mono" Variant="Variant.Text" Lines="10" Underline="false"
+                    <MudTextField @ref="_editor" T="string" Class="pg-editor pg-mono" Variant="Variant.Text" Lines="10" MaxLines="200" Sizing="InputSizing.Auto" Underline="false"
                                   Immediate="true" Value="_sql" ValueChanged="@(v => _sql = v ?? "")" Placeholder="Write SQL…" />
                 </div>
 
@@ -181,6 +183,7 @@
 </div>
 
 @code {
+    private const string ModulePath = "./_content/SbConsole.Plugins.Postgres/postgres.js";
     private const string QueryPath = "/p/postgres/query";
     private const int GridPreviewRows = 200;
     private static readonly int[] RowCaps = [100, 1_000, 10_000];
@@ -199,13 +202,13 @@
     private bool _running;
     private bool _exporting;
     private int _runGen;
+    private int _exportGen;
     private int _historyGen;
     private int _explainGen;
     private int _tab;
     private bool _showAll;
     private PgQueryResult? _result;
     private PgErrorInfo? _failure;
-    private PgErrorInfo? _error;
     private bool _auditedFailure;
     private bool _ranWrite;
     private string? _status;
@@ -218,6 +221,7 @@
     private ElementReference _editorWrap;
     private MudTextField<string>? _editor;
     private bool _shortcutRegistered;
+    private bool _registering;
     private bool _disposed;
     private IJSObjectReference? _module;
     private DotNetObjectReference<Query>? _self;
@@ -238,26 +242,60 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_shortcutRegistered || _disposed || _connection is null)
+        if (_shortcutRegistered || _registering || _disposed || _connection is null)
         {
             return;
         }
 
-        _shortcutRegistered = true;
+        _registering = true;
+        DotNetObjectReference<Query>? self = null;
         try
         {
-            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SbConsole.Plugins.Postgres/postgres.js");
-            _self = DotNetObjectReference.Create(this);
-            await _module.InvokeVoidAsync("registerRunShortcut", _editorWrap, _self);
+            var module = _module ?? await JS.InvokeAsync<IJSObjectReference>("import", ModulePath);
+            if (_disposed)
+            {
+                // Disposed while the import was in flight: DisposeAsync never saw this module.
+                if (!ReferenceEquals(module, _module))
+                {
+                    await module.DisposeAsync();
+                }
+
+                return;
+            }
+
+            _module = module;
+            self = DotNetObjectReference.Create(this);
+            await module.InvokeVoidAsync("registerRunShortcut", _editorWrap, self);
+            if (_disposed)
+            {
+                self.Dispose();
+                return;
+            }
+
+            _self = self;
+            self = null;
+            _shortcutRegistered = true;
         }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException)
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or OperationCanceledException)
         {
-            // The shortcut is a convenience; the Run button still works.
+            // The shortcut is a convenience; the Run button still works. (TaskCanceledException is an OperationCanceledException.)
+        }
+        finally
+        {
+            self?.Dispose();
+            _registering = false;
         }
     }
 
     [JSInvokable]
-    public Task RunFromShortcut() => InvokeAsync(RunAsync);
+    public Task RunFromShortcut() => InvokeAsync(async () =>
+    {
+        await RunAsync();
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    });
 
     // ---- selection --------------------------------------------------------------------------------------------
 
@@ -269,20 +307,24 @@
             await _cts.CancelAsync();
             _cts.Dispose();
             _cts = new CancellationTokenSource();
+            // _running stays set until the cancelled run has actually completed (RunAsync clears it).
             _runGen++;
-            _running = false;
+            _exportGen++;
             _database = null;
             _write = false;
             _toggleKey++;
+            _history = [];
             ClearResults();
             _connection = connection;
             UpdateUrl();
         }
 
         _connection = connection;
-        if (!WriteAllowed)
+        if (!WriteAllowed && _write)
         {
+            // Same connection re-selected after its Mode became read-only: the toggle must show it.
             _write = false;
+            _toggleKey++;
         }
 
         await LoadHistoryAsync();
@@ -297,14 +339,17 @@
 
         if (_database != null && _database != database)
         {
+            // Cancel the in-flight run (the operations layer rolls a cancelled write back) and keep Run disabled until it ends.
+            await _cts.CancelAsync();
+            _cts.Dispose();
+            _cts = new CancellationTokenSource();
             _runGen++;
-            _running = false;
+            _exportGen++;
             ClearResults();
         }
 
         _database = database;
         UpdateUrl();
-        await Task.CompletedTask;
     }
 
     // Composed from tracked state, never from Navigation.Uri: it lags a NavigateTo on Blazor Server. sql is not written back.
@@ -331,7 +376,6 @@
     {
         _result = null;
         _failure = null;
-        _error = null;
         _status = null;
         _errorMeta = null;
         _ranSql = null;
@@ -364,8 +408,28 @@
         }
 
         // IsProd comes from the picker's server-side ConnectionInfo, never from the client.
-        if (connection.IsProd && !await Confirmation.ConfirmAsync("Enter write mode on", connection.Name, true, ct: _cts.Token))
+        var capturedId = connection.Id;
+        var confirmed = true;
+        if (connection.IsProd)
         {
+            try
+            {
+                confirmed = await Confirmation.ConfirmAsync("Enter write mode on", connection.Name, true, ct: _cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                confirmed = false;
+            }
+        }
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!confirmed || _connection?.Id != capturedId)
+        {
+            // Cancelled, or the user moved to another connection while the dialog was open: stay read-only.
             _write = false;
             _toggleKey++;
             return;
@@ -396,6 +460,19 @@
         ClearResults();
         _running = true;
         StateHasChanged();
+        try
+        {
+            await RunCoreAsync(connection, generation, sql, write, token);
+        }
+        finally
+        {
+            // Only the completed (or cancelled) run releases the button, so a run abandoned by a switch can't overlap a new one.
+            _running = false;
+        }
+    }
+
+    private async Task RunCoreAsync(ConnectionInfo connection, int generation, string sql, bool write, CancellationToken token)
+    {
         var started = Clock.GetTimestamp();
         string? actor = await ActorAsync();
         PluginResult<QueryRun> result;
@@ -414,14 +491,12 @@
             return;
         }
 
-        _running = false;
         var elapsed = Clock.GetElapsedTime(started);
         _ranSql = sql;
         _ranWrite = write;
         if (!result.IsSuccess || result.Value is null)
         {
             _failure = new PgErrorInfo(result.Error ?? "The query failed.", null, null, null, null, null, false);
-            _error = _failure;
             _auditedFailure = false;
             return;
         }
@@ -430,7 +505,6 @@
         if (run.Error is { } error)
         {
             _failure = error;
-            _error = error;
             // A refusal never reached the server: no audit row, nothing to say about a rollback.
             _auditedFailure = error.SqlState is not null || error.IsConnectionFailure;
             _errorMeta = _auditedFailure
@@ -637,7 +711,7 @@
                     }
                     else
                     {
-                        writer.WriteStringValue(cell.Full ?? cell.Display);
+                        WriteTextCell(writer, r.Columns[c].TypeName, cell);
                     }
                 }
 
@@ -648,6 +722,44 @@
         }
 
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static readonly HashSet<string> JsonNumberTypes = ["int2", "int4", "int8", "numeric", "float4", "float8"];
+
+    // Numbers and booleans keep their JSON type; anything that isn't a valid JSON number (NaN, Infinity) stays a string.
+    private static void WriteTextCell(Utf8JsonWriter writer, string typeName, PgCell cell)
+    {
+        var text = cell.Full ?? cell.Display;
+        if (cell.Kind == PgCellKind.Text && text is not null)
+        {
+            if (JsonNumberTypes.Contains(typeName) && TryParse(text, out var number))
+            {
+                using (number)
+                {
+                    if (number.RootElement.ValueKind == JsonValueKind.Number)
+                    {
+                        number.RootElement.WriteTo(writer);
+                        return;
+                    }
+                }
+            }
+            else if (typeName == "bool")
+            {
+                if (text.Equals("true", StringComparison.OrdinalIgnoreCase) || text == "t")
+                {
+                    writer.WriteBooleanValue(true);
+                    return;
+                }
+
+                if (text.Equals("false", StringComparison.OrdinalIgnoreCase) || text == "f")
+                {
+                    writer.WriteBooleanValue(false);
+                    return;
+                }
+            }
+        }
+
+        writer.WriteStringValue(text);
     }
 
     private static bool TryParse(string text, out JsonDocument document)
@@ -675,22 +787,33 @@
 
         _exporting = true;
         var token = _cts.Token;
+        var generation = _exportGen;
         try
         {
             var result = await ExportQuery.HandleAsync(new ExportQueryCsvCommand(connection.Id, connection.Name, DatabaseArg, _sql, _timeoutS), token);
+            if (generation != _exportGen || _disposed)
+            {
+                // The connection or database changed while exporting: the file and its message belong to the old target.
+                return;
+            }
+
             if (!result.IsSuccess || result.Value is not { } export)
             {
                 _failure = new PgErrorInfo(result.Error ?? "The export failed.", null, null, null, null, null, false);
-                _error = _failure;
                 _auditedFailure = false;
                 _errorMeta = null;
                 return;
             }
 
-            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SbConsole.Plugins.Postgres/postgres.js");
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", ModulePath);
             using var stream = new MemoryStream(export.Content);
             using var streamRef = new DotNetStreamReference(stream);
             await _module.InvokeVoidAsync("downloadFromStream", export.FileName, streamRef);
+            if (generation != _exportGen || _disposed)
+            {
+                return;
+            }
+
             _status = export.Truncated
                 ? $"Exported the first {PgFormat.Count(export.RowCount)} rows to {export.FileName} — the query returns more (exports are capped at {PgFormat.Count(CsvExport.MaxRows)} rows or {PgFormat.Bytes(CsvExport.MaxBytes)})."
                 : $"Exported {PgFormat.Count(export.RowCount)} rows to {export.FileName}.";
@@ -700,8 +823,12 @@
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException)
         {
+            if (generation != _exportGen || _disposed)
+            {
+                return;
+            }
+
             _failure = new PgErrorInfo("The browser couldn't save the file.", null, null, null, null, null, false);
-            _error = _failure;
             _auditedFailure = false;
             _errorMeta = null;
         }
@@ -732,6 +859,14 @@
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Loading query history for connection {ConnectionId} failed", connection.Id);
+            if (generation == _historyGen && !_disposed)
+            {
+                _history = [];
+            }
         }
     }
 

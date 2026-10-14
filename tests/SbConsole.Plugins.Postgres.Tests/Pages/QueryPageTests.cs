@@ -240,4 +240,198 @@ public class QueryPageTests : PgPageTestBase
         cut.WaitForAssertion(() => Operations.Received(1).ExportQueryCsvAsync(Secret, "app", "select 1", 30, Arg.Any<CancellationToken>()));
         cut.WaitForAssertion(() => Audit.Received().RecordAsync("pg.query.export", Arg.Any<string>(), ActionRisk.Safe, true, Arg.Any<string?>(), Arg.Any<CancellationToken>()));
     }
+
+    // ---- fix round 1 -----------------------------------------------------------------------------------------
+
+    private readonly Guid _otherId = Guid.NewGuid();
+    private const string OtherSecret = "other-secret";
+    private const string ModulePath = "./_content/SbConsole.Plugins.Postgres/postgres.js";
+
+    private void AddSecondConnection()
+    {
+        Connections.ListAsync("postgres", Arg.Any<CancellationToken>()).Returns(
+        [
+            new ConnectionInfo(ConnectionId, ConnectionName, "postgres", ["prod"], true, Time.GetUtcNow(), null, Time.GetUtcNow(),
+                new Dictionary<string, string> { ["Server"] = "db:5432", ["Database"] = "app", ["Mode"] = "read-write" }),
+            new ConnectionInfo(_otherId, "pg-analytics", "postgres", [], true, Time.GetUtcNow(), null, Time.GetUtcNow(),
+                new Dictionary<string, string> { ["Server"] = "an:5432", ["Database"] = "app", ["Mode"] = "read-write" }),
+        ]);
+        Connections.GetSecretAsync(_otherId, Arg.Any<CancellationToken>()).Returns(OtherSecret);
+        Operations.ListDatabasesAsync(OtherSecret, Arg.Any<CancellationToken>()).Returns(["app"]);
+        Operations.RunQueryAsync(OtherSecret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>())
+            .Returns(c => Result(write: c.Arg<PgQueryRequest>().Write));
+    }
+
+    private static async Task SwitchToOtherAsync(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut)
+    {
+        await cut.Find(".pg-connection-menu .mud-menu-activator").KeyDownAsync(Bunit.Key.Enter);
+        cut.WaitForAssertion(() => cut.FindAll(".pg-connection-option").Should().HaveCount(2));
+        cut.FindAll(".pg-connection-option")[1].Click();
+        cut.WaitForAssertion(() => cut.Find(".pg-selected-connection").TextContent.Should().Be("pg-analytics"));
+    }
+
+    private static bool ToggleShows(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut, string label) =>
+        cut.FindAll(".pg-mode-toggle .mud-toggle-item").First(i => i.TextContent.Contains(label)).ClassList.Contains("mud-toggle-item-selected");
+
+    private static IRenderedComponent<SbConsole.Plugins.Postgres.Pages.Query> Page(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut) =>
+        cut.FindComponent<SbConsole.Plugins.Postgres.Pages.Query>();
+
+    [Fact]
+    public async Task Switching_connection_in_write_mode_returns_to_read_only_with_the_toggle_showing_it()
+    {
+        AddSecondConnection();
+        Confirmation.ConfirmAsync("Enter write mode on", ConnectionName, true, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        var cut = RenderQuery();
+        ClickWrite(cut);
+        cut.WaitForElement(".pg-write-banner");
+        ToggleShows(cut, "Write").Should().BeTrue();
+
+        await SwitchToOtherAsync(cut);
+
+        cut.WaitForAssertion(() => ToggleShows(cut, "Read-only").Should().BeTrue());
+        ToggleShows(cut, "Write").Should().BeFalse();
+        Run(cut);
+        cut.WaitForElement(".pg-status");
+        _ = Operations.Received().RunQueryAsync(OtherSecret, "app", Arg.Is<PgQueryRequest>(r => !r.Write), Arg.Any<CancellationToken>());
+        _ = Operations.DidNotReceive().RunQueryAsync(OtherSecret, "app", Arg.Is<PgQueryRequest>(r => r.Write), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_run_from_the_previous_connection_that_completes_after_a_switch_is_not_rendered()
+    {
+        AddSecondConnection();
+        var gate = new TaskCompletionSource<PgQueryResult>();
+        Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderQuery();
+        Run(cut);
+        cut.WaitForAssertion(() => cut.Find(".pg-run").HasAttribute("disabled").Should().BeTrue());
+
+        await SwitchToOtherAsync(cut);
+        gate.SetResult(Result());
+        for (var i = 0; i < 10; i++)
+        {
+            await cut.InvokeAsync(() => Task.CompletedTask);
+            await Task.Yield();
+        }
+
+        cut.FindAll(".pg-result-grid").Should().BeEmpty();
+        cut.FindAll(".pg-status").Should().BeEmpty();
+        cut.FindAll(".pg-history-item").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Ctrl_enter_while_the_prod_confirmation_is_open_runs_read_only()
+    {
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("Enter write mode on", ConnectionName, true, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderQuery();
+        Type(cut, "update t set a = 1");
+        ClickWrite(cut);
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Enter write mode on", ConnectionName, true, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+
+        cut.InvokeAsync(() => Page(cut).Instance.RunFromShortcut());
+
+        cut.WaitForAssertion(() => Operations.Received(1).RunQueryAsync(Secret, "app",
+            Arg.Is<PgQueryRequest>(r => !r.Write && r.Sql == "update t set a = 1"), Arg.Any<CancellationToken>()));
+        Operations.DidNotReceive().RunQueryAsync(Secret, "app", Arg.Is<PgQueryRequest>(r => r.Write), Arg.Any<CancellationToken>());
+        gate.SetResult(false);
+    }
+
+    [Fact]
+    public async Task Run_is_disabled_while_a_run_is_in_flight()
+    {
+        var gate = new TaskCompletionSource<PgQueryResult>();
+        Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderQuery();
+        Run(cut);
+
+        cut.WaitForAssertion(() => cut.Find(".pg-run").HasAttribute("disabled").Should().BeTrue());
+        gate.SetResult(Result());
+        cut.WaitForElement(".pg-result-grid");
+        cut.Find(".pg-run").HasAttribute("disabled").Should().BeFalse();
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_confirmation_that_resolves_true_after_a_connection_switch_does_not_enable_write_mode()
+    {
+        AddSecondConnection();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("Enter write mode on", ConnectionName, true, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderQuery();
+        ClickWrite(cut);
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Enter write mode on", ConnectionName, true, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+
+        await SwitchToOtherAsync(cut);
+        gate.SetResult(true);
+        for (var i = 0; i < 10; i++)
+        {
+            await cut.InvokeAsync(() => Task.CompletedTask);
+            await Task.Yield();
+        }
+
+        ToggleShows(cut, "Write").Should().BeFalse();
+        Run(cut);
+        cut.WaitForElement(".pg-status");
+        _ = Operations.DidNotReceive().RunQueryAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Is<PgQueryRequest>(r => r.Write), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Switching_database_cancels_the_in_flight_run_and_keeps_run_disabled_until_it_completes()
+    {
+        Operations.ListDatabasesAsync(Secret, Arg.Any<CancellationToken>()).Returns(["app", "other"]);
+        Operations.RunQueryAsync(Secret, "other", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(_ => Result());
+        var gate = new TaskCompletionSource<PgQueryResult>();
+        var seen = new List<CancellationToken>();
+        Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(c =>
+        {
+            seen.Add(c.Arg<CancellationToken>());
+            return gate.Task;
+        });
+        var cut = RenderQuery();
+        cut.WaitForAssertion(() => cut.FindAll(".pg-database-picker").Should().HaveCount(1));
+        Run(cut);
+        cut.WaitForAssertion(() => seen.Should().HaveCount(1));
+
+        cut.Find("div.mud-input-control.pg-database-picker").MouseDown(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        cut.WaitForAssertion(() => cut.FindAll(".mud-list-item").Should().HaveCountGreaterThan(1));
+        cut.FindAll(".mud-list-item").First(i => i.TextContent.Contains("other")).Click();
+
+        cut.WaitForAssertion(() => seen[0].IsCancellationRequested.Should().BeTrue());
+        cut.Find(".pg-run").HasAttribute("disabled").Should().BeTrue();
+
+        gate.SetCanceled();
+        cut.WaitForAssertion(() => cut.Find(".pg-run").HasAttribute("disabled").Should().BeFalse());
+        cut.FindAll(".pg-result-grid").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Json_tab_emits_numeric_and_boolean_columns_as_json_numbers_and_booleans()
+    {
+        Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(_ => new PgQueryResult(
+            [new PgResultColumn("n", "int8"), new PgResultColumn("ok", "bool"), new PgResultColumn("price", "numeric"), new PgResultColumn("s", "text"), new PgResultColumn("f", "float8")],
+            [[Text("42"), Text("true"), Text("9.50"), Text("7"), Text("NaN")]],
+            false, null, TimeSpan.FromSeconds(1), 1, "SELECT 1"));
+        var cut = RenderQuery();
+        Run(cut);
+        cut.WaitForElement(".pg-result-grid");
+
+        cut.FindAll(".mud-tab").First(t => t.TextContent.Contains("JSON")).Click();
+
+        var json = cut.WaitForElement(".pg-result-json").TextContent;
+        json.Should().Contain("\"n\": 42,").And.Contain("\"ok\": true").And.Contain("\"price\": 9.50").And.Contain("\"s\": \"7\"").And.Contain("\"f\": \"NaN\"");
+    }
+
+    [Fact]
+    public async Task The_run_shortcut_is_registered_on_render_and_unregistered_on_dispose()
+    {
+        var module = JSInterop.SetupModule(ModulePath);
+        module.Mode = JSRuntimeMode.Loose;
+        var cut = RenderQuery();
+
+        cut.WaitForAssertion(() => module.VerifyInvoke("registerRunShortcut"));
+        await DisposeComponentsAsync();
+
+        module.VerifyInvoke("unregisterRunShortcut");
+    }
 }

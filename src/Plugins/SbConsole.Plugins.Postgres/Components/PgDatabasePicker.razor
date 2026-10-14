@@ -13,6 +13,10 @@
             <MudSelectItem T="string" Value="@name">@name</MudSelectItem>
         }
     </MudSelect>
+    @if (Loading)
+    {
+        <MudProgressCircular Class="pg-page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
 }
 
 @code {
@@ -28,6 +32,9 @@
     /// True (default): the picker keeps ?db= in sync itself. False: the host page owns the URL and composes it from its own
     /// state; the picker then reads ?db= only for its first load (Navigation.Uri can lag a NavigateTo on Blazor Server).
     /// </summary>
+    /// <summary>True while the host page has work in flight that a database switch would orphan; shows the same busy spinner as the connection picker.</summary>
+    [Parameter] public bool Loading { get; set; }
+
     [Parameter] public bool ManageUrl { get; set; } = true;
 
     private IReadOnlyList<string> _databases = [];
