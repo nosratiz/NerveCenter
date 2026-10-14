@@ -125,4 +125,20 @@ public class QueryCompletionPageTests : PgPageTestBase
 
         _module.VerifyInvoke("detach");
     }
+
+    [Fact]
+    public async Task The_completion_module_is_detached_before_the_run_shortcut_is_unregistered()
+    {
+        var shortcut = JSInterop.SetupModule("./_content/SbConsole.Plugins.Postgres/postgres.js");
+        shortcut.Mode = JSRuntimeMode.Loose;
+        var cut = RenderQuery();
+        AttachedReference(cut);
+        cut.WaitForAssertion(() => shortcut.VerifyInvoke("registerRunShortcut"));
+
+        await DisposeComponentsAsync();
+
+        var order = JSInterop.Invocations.Select(i => i.Identifier).ToList();
+        order.Should().Contain(["detach", "unregisterRunShortcut"]);
+        order.IndexOf("detach").Should().BeLessThan(order.IndexOf("unregisterRunShortcut"));
+    }
 }

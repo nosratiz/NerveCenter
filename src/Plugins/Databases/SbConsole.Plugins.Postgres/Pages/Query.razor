@@ -340,6 +340,13 @@
             await module.InvokeVoidAsync("attach", _editorWrap, reference);
             if (_disposed)
             {
+                // Disposed during the attach round-trip: DisposeAsync saw no attached module, so release it here.
+                await module.InvokeVoidAsync("detach", _editorWrap);
+                if (ReferenceEquals(module, _completionModule))
+                {
+                    await module.DisposeAsync();
+                }
+
                 return;
             }
 
@@ -1009,6 +1016,25 @@
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+
+        // Detach first: once Blazor removes the page DOM, _editorWrap no longer resolves in JS.
+        if (_completionModule is not null)
+        {
+            try
+            {
+                if (_completionAttached)
+                {
+                    await _completionModule.InvokeVoidAsync("detach", _editorWrap);
+                }
+
+                await _completionModule.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException)
+            {
+                // The circuit is already gone; nothing to release.
+            }
+        }
+
         await _cts.CancelAsync();
         _cts.Dispose();
         if (_module is not null)
@@ -1021,23 +1047,6 @@
                 }
 
                 await _module.DisposeAsync();
-            }
-            catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException)
-            {
-                // The circuit is already gone; nothing to release.
-            }
-        }
-
-        if (_completionModule is not null)
-        {
-            try
-            {
-                if (_completionAttached)
-                {
-                    await _completionModule.InvokeVoidAsync("detach", _editorWrap);
-                }
-
-                await _completionModule.DisposeAsync();
             }
             catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException)
             {

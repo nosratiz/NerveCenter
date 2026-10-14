@@ -63,12 +63,13 @@ class Completion {
         this.onMouseDown = this.onMouseDown.bind(this);
         this.onScroll = this.onScroll.bind(this);
         this.close = this.close.bind(this);
+        this.onResize = this.onResize.bind(this);
         textarea.addEventListener("input", this.onInput);
         textarea.addEventListener("keydown", this.onKeyDown);
         textarea.addEventListener("blur", this.close);
         this.popup.addEventListener("mousedown", this.onMouseDown);
         window.addEventListener("scroll", this.onScroll, true);
-        window.addEventListener("resize", this.close);
+        window.addEventListener("resize", this.onResize);
         textarea.setAttribute("aria-autocomplete", "list");
         textarea.setAttribute("aria-controls", this.id);
     }
@@ -94,6 +95,11 @@ class Completion {
     }
 
     onKeyDown(e) {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            this.close(); // Ctrl/⌘+Enter runs the query (the wrapper's shortcut); no preventDefault, no pending popup
+            return;
+        }
+
         if (e.ctrlKey && !e.metaKey && !e.altKey && (e.code === "Space" || e.key === " ")) {
             e.preventDefault();
             this.schedule(0);
@@ -111,10 +117,6 @@ class Completion {
                 this.setActive(this.active + (e.key === "ArrowDown" ? 1 : -1));
                 break;
             case "Enter":
-                if (e.ctrlKey || e.metaKey) {
-                    this.close(); // Ctrl/⌘+Enter runs the query (the page's handler); never accept here
-                    break;
-                }
                 e.preventDefault();
                 this.accept(this.active);
                 break;
@@ -145,7 +147,28 @@ class Completion {
         }
     }
 
+    // The page's DOM can go before detach reaches us; never leave the popup and window listeners behind.
+    disposeIfOrphaned() {
+        if (this.textarea.isConnected) {
+            return false;
+        }
+
+        this.dispose();
+        controllers.delete(this.textarea);
+        return true;
+    }
+
+    onResize() {
+        if (!this.disposeIfOrphaned()) {
+            this.close();
+        }
+    }
+
     onScroll(e) {
+        if (this.disposeIfOrphaned()) {
+            return;
+        }
+
         if (e.target !== this.popup) {
             this.close();
         }
@@ -312,7 +335,7 @@ class Completion {
         this.textarea.removeEventListener("keydown", this.onKeyDown);
         this.textarea.removeEventListener("blur", this.close);
         window.removeEventListener("scroll", this.onScroll, true);
-        window.removeEventListener("resize", this.close);
+        window.removeEventListener("resize", this.onResize);
         for (const name of ["aria-autocomplete", "aria-controls"]) {
             this.textarea.removeAttribute(name);
         }
