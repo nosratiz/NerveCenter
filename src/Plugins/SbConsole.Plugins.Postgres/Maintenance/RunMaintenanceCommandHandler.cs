@@ -32,6 +32,11 @@ public sealed class RunMaintenanceCommandHandler(
             await HandlerRunner.AuditQuietlyAsync(audit, logger, action, $"{prefix}/{qualified}", risk, succeeded: true, null);
             return PluginResult<string>.Ok(qualified);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, action, target, risk, succeeded: false, "cancelled");
+            throw;
+        }
         catch (PgSqlRefusedException ex)
         {
             return PluginResult<string>.Fail(ex.Message);

@@ -189,6 +189,55 @@ public class MaintenancePageTests : PgPageTestBase
     }
 
     [Fact]
+    public void Bulk_vacuum_skips_tables_autovacuum_is_running_on_and_counts_only_the_ones_it_runs()
+    {
+        Arrange(Data([T(1, "hot", 41, running: true), T(2, "sessions", 38), T(3, "orders", 35)]));
+        Confirmation.ConfirmAsync("VACUUM", "2 flagged tables", false, 2, Arg.Any<CancellationToken>()).Returns(true);
+        var first = new TaskCompletionSource<string>();
+        Operations.RunMaintenanceAsync(Secret, "app", 2, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>()).Returns(_ => first.Task);
+        Operations.RunMaintenanceAsync(Secret, "app", 3, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>()).Returns("\"public\".\"orders\"");
+        var cut = RenderPage();
+        Text(cut, ".pg-vacuum-flagged").Should().Be("VACUUM 2 flagged");
+
+        cut.Find(".pg-vacuum-flagged").Click();
+
+        cut.WaitForAssertion(() => Text(cut, ".pg-bulk-progress").Should().Be("VACUUM 1 / 2…"));
+        first.SetResult("\"public\".\"sessions\"");
+        cut.WaitForAssertion(() => Operations.Received(1).RunMaintenanceAsync(Secret, "app", 3, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => cut.FindAll(".pg-bulk-progress").Should().BeEmpty());
+        Operations.DidNotReceive().RunMaintenanceAsync(Secret, "app", 1, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Relative_times_follow_the_capture_time_not_the_clock()
+    {
+        var captured = Time.GetUtcNow().AddHours(-5);
+        Arrange(new PgMaintenance(true, 3, [], 1, 2, false,
+            [new PgTableHealth(1, "public", "t", Gb, 1000, 10, 1, null, null, captured.AddHours(-2), null, null, false)], captured));
+        var cut = RenderPage();
+
+        // 2h before CapturedAt; against the (5h later) clock it would read 7h.
+        cut.Find(".pg-maintenance-row").TextContent.Should().Contain("2h 00m ago").And.NotContain("7h 00m ago");
+    }
+
+    [Fact]
+    public async Task Disposing_while_a_confirm_is_open_runs_nothing_and_throws_nothing()
+    {
+        Arrange();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("ANALYZE", "public.sessions", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderPage();
+        cut.FindAll(".pg-maintenance-row")[1].QuerySelector(".pg-analyze")!.Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("ANALYZE", "public.sessions", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+
+        await DisposeComponentsAsync();
+        gate.SetResult(true);
+        await Task.Delay(300);
+
+        await Operations.DidNotReceive().RunMaintenanceAsync(Secret, Arg.Any<string?>(), Arg.Any<uint>(), Arg.Any<PgMaintenanceKind>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public void Bulk_stops_on_the_first_failure()
     {
         Arrange();

@@ -31,10 +31,10 @@
                 {
                     <span class="pg-meta pg-bulk-progress">@_progress</span>
                 }
-                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-analyze-flagged" Disabled="BulkDisabled"
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-analyze-flagged" Disabled="BulkDisabled(Flagged.Count)"
                            title="@ReadOnlyTitle" OnClick="() => BulkAsync(PgMaintenanceKind.Analyze)">ANALYZE @Flagged.Count flagged</MudButton>
-                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-vacuum-flagged" Disabled="BulkDisabled"
-                           title="@ReadOnlyTitle" OnClick="() => BulkAsync(PgMaintenanceKind.Vacuum)">VACUUM @Flagged.Count flagged</MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-vacuum-flagged" Disabled="BulkDisabled(VacuumTargets.Count)"
+                           title="@ReadOnlyTitle" OnClick="() => BulkAsync(PgMaintenanceKind.Vacuum)">VACUUM @VacuumTargets.Count flagged</MudButton>
             }
         </Actions>
     </PgPageHeader>
@@ -182,7 +182,10 @@
 
     private string? ReadOnlyTitle => ReadWrite ? null : "Connection is read-only";
 
-    private bool BulkDisabled => !ReadWrite || _acting || Flagged.Count == 0;
+    private bool BulkDisabled(int count) => !ReadWrite || _acting || count == 0;
+
+    // Same rule as the row button: no VACUUM on a table autovacuum is already working on.
+    private IReadOnlyList<PgTableHealth> VacuumTargets => Flagged.Where(t => !t.AutovacuumRunning).ToList();
 
     private DateTimeOffset Now => _data is { CapturedAt: var at } && at != default ? at : Clock.GetUtcNow();
 
@@ -352,14 +355,20 @@
 
         _acting = true;
         var database = _database;
+        var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync(Verb(kind), Name(table), false))
+            if (!await Confirmation.ConfirmAsync(Verb(kind), Name(table), false, null, ct))
             {
                 return;
             }
 
-            var result = await RunMaintenance.HandleAsync(new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, kind), _cts.Token);
+            if (_disposed)
+            {
+                return;
+            }
+
+            var result = await RunMaintenance.HandleAsync(new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, kind), ct);
             Report(result, $"{Verb(kind)} finished on {Name(table)}.", Name(table), Verb(kind));
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
@@ -390,15 +399,21 @@
 
         _acting = true;
         var database = _database;
+        var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync(request))
+            if (!await Confirmation.ConfirmAsync(request, ct))
+            {
+                return;
+            }
+
+            if (_disposed)
             {
                 return;
             }
 
             var result = await RunMaintenance.HandleAsync(
-                new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, PgMaintenanceKind.VacuumFull), _cts.Token);
+                new MaintenanceCommand(connection.Id, connection.Name, database, table.Oid, PgMaintenanceKind.VacuumFull), ct);
             Report(result, $"VACUUM FULL finished on {Name(table)}.", Name(table), "VACUUM FULL");
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
@@ -420,7 +435,7 @@
             return;
         }
 
-        var targets = Flagged.ToList();
+        var targets = kind == PgMaintenanceKind.Vacuum ? VacuumTargets.ToList() : Flagged.ToList();
         if (targets.Count == 0)
         {
             return;
@@ -428,9 +443,15 @@
 
         _acting = true;
         var database = _database;
+        var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync(Verb(kind), $"{targets.Count} flagged tables", false, targets.Count))
+            if (!await Confirmation.ConfirmAsync(Verb(kind), $"{targets.Count} flagged tables", false, targets.Count, ct))
+            {
+                return;
+            }
+
+            if (_disposed)
             {
                 return;
             }
@@ -438,10 +459,15 @@
             var failed = false;
             for (var i = 0; i < targets.Count; i++)
             {
+                if (_disposed)
+                {
+                    break;
+                }
+
                 _progress = $"{Verb(kind)} {i + 1} / {targets.Count}…";
                 StateHasChanged();
                 var result = await RunMaintenance.HandleAsync(
-                    new MaintenanceCommand(connection.Id, connection.Name, database, targets[i].Oid, kind), _cts.Token);
+                    new MaintenanceCommand(connection.Id, connection.Name, database, targets[i].Oid, kind), ct);
                 if (!result.IsSuccess)
                 {
                     Report(result, "", Name(targets[i]), Verb(kind));

@@ -13,11 +13,10 @@ public sealed partial class PostgresOperations
             int maxWorkers;
             long freezeMaxAge, oldestXidAge;
             bool pgstattuple;
-            DateTimeOffset now;
             await using (var cmd = new NpgsqlCommand(
                 "SELECT current_setting('autovacuum') = 'on', current_setting('autovacuum_max_workers')::int, " +
                 "current_setting('autovacuum_freeze_max_age')::bigint, (SELECT max(age(datfrozenxid)) FROM pg_database)::bigint, " +
-                "EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgstattuple'), now()", conn, tx))
+                "EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgstattuple')", conn, tx))
             await using (var r = await cmd.ExecuteReaderAsync(ct))
             {
                 await r.ReadAsync(ct);
@@ -26,7 +25,6 @@ public sealed partial class PostgresOperations
                 freezeMaxAge = r.GetInt64(2);
                 oldestXidAge = r.IsDBNull(3) ? 0 : r.GetInt64(3);
                 pgstattuple = r.GetBoolean(4);
-                now = r.GetFieldValue<DateTimeOffset>(5);
             }
 
             var running = new List<PgVacuumProgress>();
@@ -69,6 +67,15 @@ public sealed partial class PostgresOperations
                 {
                     tables[i] = tables[i] with { BloatBytes = await BloatAsync(conn, tx, tables[i].Oid, ct) };
                 }
+            }
+
+            // Read last, after the bloat loop: it proves the savepoints kept the read transaction usable.
+            DateTimeOffset now;
+            await using (var cmd = new NpgsqlCommand("SELECT now()", conn, tx))
+            await using (var r = await cmd.ExecuteReaderAsync(ct))
+            {
+                await r.ReadAsync(ct);
+                now = r.GetFieldValue<DateTimeOffset>(0);
             }
 
             return new PgMaintenance(autovacuumOn, maxWorkers, running, oldestXidAge, freezeMaxAge, pgstattuple, tables, now);
@@ -133,8 +140,8 @@ public sealed partial class PostgresOperations
 
         var (verb, timeoutS) = kind switch
         {
-            PgMaintenanceKind.Vacuum => ("VACUUM (VERBOSE false)", Math.Clamp(settings.StatementTimeoutS, 1, PostgresConnectionSettings.MaxTimeoutS)),
-            PgMaintenanceKind.Analyze => ("ANALYZE", Math.Clamp(settings.StatementTimeoutS, 1, PostgresConnectionSettings.MaxTimeoutS)),
+            PgMaintenanceKind.Vacuum => ("VACUUM (VERBOSE false)", Math.Clamp(Math.Max(settings.StatementTimeoutS, 600), 1, PostgresConnectionSettings.MaxTimeoutS)),
+            PgMaintenanceKind.Analyze => ("ANALYZE", Math.Clamp(Math.Max(settings.StatementTimeoutS, 600), 1, PostgresConnectionSettings.MaxTimeoutS)),
             PgMaintenanceKind.VacuumFull => ("VACUUM FULL", 3600),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
@@ -145,8 +152,34 @@ public sealed partial class PostgresOperations
             await set.ExecuteNonQueryAsync(ct);
         }
 
-        await using var cmd = new NpgsqlCommand($"{verb} {qualified}", conn) { CommandTimeout = timeoutS + 5 };
-        await cmd.ExecuteNonQueryAsync(ct);
+        try
+        {
+            await using var cmd = new NpgsqlCommand($"{verb} {qualified}", conn) { CommandTimeout = timeoutS + 5 };
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            // A pooler that ignores Npgsql's reset-on-return must not hand the long timeout to the next user.
+            try
+            {
+                await using var reset = new NpgsqlCommand("RESET statement_timeout", conn);
+                await reset.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // The connection is already broken; nothing left to reset.
+            }
+        }
+
         return qualified;
+    }
+
+    // Test seam: the session-level statement_timeout a pooled connection for this secret currently carries.
+    internal async Task<string> ShowStatementTimeoutAsync(string secret, string? database, CancellationToken ct = default)
+    {
+        await using var conn = Open(PostgresConnectionSettings.Parse(secret), database);
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand("SHOW statement_timeout", conn);
+        return (string)(await cmd.ExecuteScalarAsync(ct))!;
     }
 }

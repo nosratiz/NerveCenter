@@ -61,6 +61,20 @@ public class MaintenanceHandlerTests
     }
 
     [Fact]
+    public async Task A_cancelled_run_is_audited_as_failed_and_rethrown()
+    {
+        using var cts = new CancellationTokenSource();
+        _ops.RunMaintenanceAsync("secret", "app", 16500, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>())
+            .Returns<Task<string>>(_ => { cts.Cancel(); throw new OperationCanceledException(cts.Token); });
+
+        var act = () => Run().HandleAsync(Cmd(PgMaintenanceKind.Vacuum), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await _audit.Received(1).RecordAsync("pg.maintenance.vacuum", "pg-prod-eu/app/oid 16500", ActionRisk.Mutating, false,
+            Arg.Is<string?>(d => d != null && d.Contains("cancelled")), CancellationToken.None);
+    }
+
+    [Fact]
     public async Task A_refusal_fails_with_its_message_and_no_audit()
     {
         _ops.RunMaintenanceAsync("secret", "app", 16500, PgMaintenanceKind.Vacuum, Arg.Any<CancellationToken>())

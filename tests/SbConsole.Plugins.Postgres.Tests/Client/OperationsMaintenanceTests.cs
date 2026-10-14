@@ -200,4 +200,62 @@ public sealed class OperationsMaintenanceTests(PostgresFixture fx)
             await index.Should().ThrowAsync<PgSqlRefusedException>().WithMessage("That table no longer exists.");
         });
     }
+
+    [DockerFact]
+    public async Task A_table_whose_bloat_call_fails_gets_no_estimate_and_the_read_transaction_survives()
+    {
+        // pgstattuple_approx does not check table privileges, so no role setup can make one call fail.
+        // A partitioned table is listed in pg_stat_user_tables but pgstattuple_approx rejects it with a
+        // PostgresException (wrong relation kind) -- exactly one table's call fails, the others succeed.
+        var db = "mnt_" + Guid.NewGuid().ToString("N")[..12];
+        await ExecAsync($"CREATE DATABASE {db}", "postgres");
+        try
+        {
+            await ExecAsync("CREATE EXTENSION pgstattuple; CREATE TABLE parted (id int) PARTITION BY RANGE (id);", db);
+            await WithScratchAsync(async (table, _) =>
+            {
+                var m = await PollMaintenanceAsync(table, db);
+
+                m.PgstattupleAvailable.Should().BeTrue();
+                m.Tables.Single(t => t.Name == "parted").BloatBytes.Should().BeNull();
+                m.Tables.Single(t => t.Name == table).BloatBytes.Should().BeGreaterThan(0);
+                // CapturedAt is read after the bloat loop: it only works if ROLLBACK TO SAVEPOINT kept the txn usable.
+                m.CapturedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1));
+            }, db, rows: 20000);
+        }
+        finally
+        {
+            await ExecAsync($"DROP DATABASE IF EXISTS {db} WITH (FORCE)", "postgres");
+        }
+    }
+
+    [DockerFact]
+    public async Task Mixed_case_and_quoted_names_are_vacuumed_and_returned_quoted()
+    {
+        await ExecAsync($"CREATE TABLE \"Mixed\"\"Case\" (id int); INSERT INTO \"Mixed\"\"Case\" SELECT generate_series(1, 100);");
+        try
+        {
+            var oid = await ScalarAsync<uint>("SELECT 'public.\"Mixed\"\"Case\"'::regclass::oid");
+
+            var qualified = await fx.Operations.RunMaintenanceAsync(fx.Secret(PgAccessMode.ReadWrite), "app", oid, PgMaintenanceKind.Vacuum);
+
+            qualified.Should().Be("\"public\".\"Mixed\"\"Case\"");
+        }
+        finally
+        {
+            await ExecAsync("DROP TABLE IF EXISTS \"Mixed\"\"Case\"");
+        }
+    }
+
+    [DockerFact]
+    public async Task Maintenance_does_not_leak_its_statement_timeout_onto_the_pooled_connection()
+    {
+        var secret = (PostgresConnectionSettings.Parse(fx.Secret(PgAccessMode.ReadWrite)) with { StatementTimeoutS = 7 }).ToSecretString();
+        await WithScratchAsync(async (_, oid) =>
+        {
+            await fx.Operations.RunMaintenanceAsync(secret, "app", oid, PgMaintenanceKind.Vacuum);
+
+            (await fx.Operations.ShowStatementTimeoutAsync(secret, "app")).Should().Be("0");
+        });
+    }
 }
