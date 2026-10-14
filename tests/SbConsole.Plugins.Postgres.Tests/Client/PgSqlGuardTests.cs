@@ -79,4 +79,38 @@ public class PgSqlGuardTests
     public void Read_mode_refuses_lexer_bypass_inputs(string sql) =>
         FluentActions.Invoking(() => PgSqlGuard.Check(sql, false))
             .Should().Throw<PgSqlRefusedException>();
+
+    [Theory]
+    [InlineData("CLUSTER orders USING orders_pkey", "CLUSTER")]
+    [InlineData("reindex table orders", "REINDEX")]
+    [InlineData("ANALYZE orders", "ANALYZE")]
+    [InlineData("LOAD 'auto_explain'", "LOAD")]
+    public void Refuses_lock_taking_maintenance_commands_in_read_mode(string sql, string kw) =>
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, write: false))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage($"`{kw}` can't run here — use Maintenance or Browse.");
+
+    [Theory]
+    [InlineData("CLUSTER orders USING orders_pkey")]
+    [InlineData("REINDEX TABLE orders")]
+    [InlineData("ANALYZE orders")]
+    public void Allows_maintenance_commands_in_write_mode(string sql) =>
+        PgSqlGuard.Check(sql, write: true).Should().HaveCount(1);
+
+    [Theory]
+    [InlineData("EXPLAIN ANALYZE SELECT 1")]
+    [InlineData("explain analyse select 1")]
+    [InlineData("/* c */ EXPLAIN (COSTS OFF, analyze) SELECT 1")]
+    [InlineData("EXPLAIN (ANALYZE true, FORMAT JSON) SELECT 1")]
+    public void Explain_tab_refuses_analyze(string sql) =>
+        FluentActions.Invoking(() => PgSqlGuard.CheckExplain(sql))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("EXPLAIN ANALYZE runs the statement — use Run, which is audited.");
+
+    [Theory]
+    [InlineData("EXPLAIN SELECT 1")]
+    [InlineData("EXPLAIN (COSTS OFF, FORMAT JSON) SELECT analyze FROM t")]
+    [InlineData("SELECT 1")]
+    public void Explain_tab_allows_plain_explain(string sql) =>
+        PgSqlGuard.CheckExplain(sql).Should().HaveCount(1);
 }

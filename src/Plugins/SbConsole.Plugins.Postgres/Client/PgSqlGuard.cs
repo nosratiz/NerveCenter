@@ -11,6 +11,12 @@ public static partial class PgSqlGuard
         "DISCARD", "LISTEN", "UNLISTEN", "NOTIFY", "COPY", "VACUUM", "CHECKPOINT", "DO", "CALL", "LOCK",
     };
 
+    // PostgreSQL permits these inside a READ ONLY transaction, yet they take heavy locks or load code.
+    private static readonly HashSet<string> ReadMaintenance = new(StringComparer.Ordinal)
+    {
+        "CLUSTER", "REINDEX", "ANALYZE", "LOAD",
+    };
+
     private static readonly HashSet<string> WriteRefused = new(StringComparer.Ordinal)
     {
         "BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "PREPARE", "VACUUM", "COPY",
@@ -47,6 +53,11 @@ public static partial class PgSqlGuard
                 throw new PgSqlRefusedException("VACUUM can't run in a transaction — use Maintenance.");
             }
 
+            if (!write && ReadMaintenance.Contains(statement.FirstKeyword))
+            {
+                throw new PgSqlRefusedException($"`{statement.FirstKeyword}` can't run here — use Maintenance or Browse.");
+            }
+
             if (refused.Contains(statement.FirstKeyword))
             {
                 throw new PgSqlRefusedException(
@@ -68,6 +79,24 @@ public static partial class PgSqlGuard
 
         return statements;
     }
+
+    /// <summary>
+    /// Read-mode check for the EXPLAIN tab, which is not audited: EXPLAIN ANALYZE executes the statement, so it is refused
+    /// here and left to Run (audited).
+    /// </summary>
+    public static IReadOnlyList<PgStatement> CheckExplain(string sql)
+    {
+        var statements = Check(sql, write: false);
+        if (statements[0].FirstKeyword == "EXPLAIN" && ExplainAnalyze().IsMatch(statements[0].Body))
+        {
+            throw new PgSqlRefusedException("EXPLAIN ANALYZE runs the statement — use Run, which is audited.");
+        }
+
+        return statements;
+    }
+
+    [GeneratedRegex(@"^EXPLAIN\s*(ANALY[ZS]E\b|\([^)]*\bANALY[ZS]E\b)", RegexOptions.IgnoreCase)]
+    private static partial Regex ExplainAnalyze();
 
     [GeneratedRegex(@"^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b", RegexOptions.IgnoreCase)]
     private static partial Regex CreateIndexConcurrently();

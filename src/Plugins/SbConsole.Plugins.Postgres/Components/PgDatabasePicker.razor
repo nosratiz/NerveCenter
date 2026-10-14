@@ -2,8 +2,14 @@
 @using SbConsole.Plugins.Postgres.Overview
 @inject ListDatabasesQueryHandler ListDatabases
 @inject NavigationManager Navigation
+@implements IDisposable
 
 @* Database axis for Browse/Query/Maintenance: ?db= keeps links shareable; defaults to the connection's own database. *@
+@if (_failed)
+{
+    <MudButton Class="pg-database-retry" Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+               OnClick="RetryAsync">Retry</MudButton>
+}
 @if (_databases.Count > 0)
 {
     <MudSelect T="string" Class="pg-database-picker" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -28,36 +34,72 @@
     /// <summary>Raised with the chosen database, or with an empty string when the selection was dropped (empty list or failed load).</summary>
     [Parameter] public EventCallback<string> SelectedChanged { get; set; }
 
+    /// <summary>True while the host page has work in flight that a database switch would orphan; shows the same busy spinner as the connection picker.</summary>
+    [Parameter] public bool Loading { get; set; }
+
     /// <summary>
     /// True (default): the picker keeps ?db= in sync itself. False: the host page owns the URL and composes it from its own
     /// state; the picker then reads ?db= only for its first load (Navigation.Uri can lag a NavigateTo on Blazor Server).
     /// </summary>
-    /// <summary>True while the host page has work in flight that a database switch would orphan; shows the same busy spinner as the connection picker.</summary>
-    [Parameter] public bool Loading { get; set; }
-
     [Parameter] public bool ManageUrl { get; set; } = true;
 
     private IReadOnlyList<string> _databases = [];
     private string? _selected;
     private Guid _loadedFor;
+    private Guid _inFlightFor;
     private int _generation;
+    private bool _failed;
+    private string? _reported;
+    private CancellationTokenSource _cts = new();
 
     protected override async Task OnParametersSetAsync()
     {
-        if (ConnectionId == Guid.Empty || ConnectionId == _loadedFor)
+        if (ConnectionId == Guid.Empty || ConnectionId == _loadedFor || ConnectionId == _inFlightFor)
         {
             return;
         }
 
+        await LoadAsync();
+    }
+
+    private Task RetryAsync() => ConnectionId == Guid.Empty ? Task.CompletedTask : LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connectionId = ConnectionId;
         var firstLoad = _loadedFor == Guid.Empty;
-        _loadedFor = ConnectionId;
+        // A different connection (or a retry) supersedes whatever is still loading.
+        _cts.Cancel();
+        _cts.Dispose();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
         var generation = ++_generation;
+        _inFlightFor = connectionId;
+        _failed = false;
         _databases = [];
         _selected = null;
-        var result = await ListDatabases.HandleAsync(ConnectionId);
+
+        PluginResult<IReadOnlyList<string>> result;
+        try
+        {
+            result = await ListDatabases.HandleAsync(connectionId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
         if (generation != _generation)
         {
             return;
+        }
+
+        _inFlightFor = Guid.Empty;
+        _failed = !result.IsSuccess;
+        if (result.IsSuccess)
+        {
+            // Only a successful load is remembered; after a failure the next render tries again.
+            _loadedFor = connectionId;
         }
 
         _databases = result.IsSuccess ? result.Value ?? [] : [];
@@ -73,7 +115,13 @@
                 }
             }
 
-            await SelectedChanged.InvokeAsync("");
+            // A parent re-render re-runs a failed load; reporting an unchanged "" again would loop the two.
+            if (_reported != "")
+            {
+                _reported = "";
+                await SelectedChanged.InvokeAsync("");
+            }
+
             return;
         }
 
@@ -93,6 +141,7 @@
     private async Task SelectAsync(string name)
     {
         _selected = name;
+        _reported = name;
         if (ManageUrl)
         {
             var uri = Navigation.GetUriWithQueryParameter("db", name);
@@ -103,5 +152,11 @@
         }
 
         await SelectedChanged.InvokeAsync(name);
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
     }
 }

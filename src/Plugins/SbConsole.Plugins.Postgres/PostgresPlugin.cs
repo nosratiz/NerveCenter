@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using SbConsole.Plugins.Postgres.Client;
 using SbConsole.Sdk;
@@ -18,6 +21,11 @@ public sealed class PostgresPlugin : IPlugin
     // Until then they fail closed.
     private IPostgresOperations? _operations;
     private TimeProvider _clock = TimeProvider.System;
+
+    // The badge is polled by the shell; one blocked-session probe per connection per 15 s is plenty.
+    // Keyed by a hash of the secret so the raw secret is never held as a dictionary key.
+    private static readonly TimeSpan BadgeTtl = TimeSpan.FromSeconds(15);
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, int? Count)> _badgeCache = new();
 
     public string Id => PluginId;
     public string DisplayName => "PostgreSQL";
@@ -91,16 +99,32 @@ public sealed class PostgresPlugin : IPlugin
             return null;
         }
 
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(connectionString)));
+        var now = _clock.GetUtcNow();
+        if (_badgeCache.TryGetValue(key, out var cached) && now - cached.At < BadgeTtl)
+        {
+            return cached.Count;
+        }
+
+        int? count;
         try
         {
             var blocked = await _operations.GetBlockedCountAsync(connectionString, ct);
-            return blocked > 0 ? blocked : null;
+            count = blocked > 0 ? blocked : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
         }
         catch (Exception)
         {
-            // No logger on the plugin instance; a badge is decoration, so a broken probe just hides it.
-            return null;
+            // No logger on the plugin instance; a badge is decoration, so a broken probe just hides it
+            // (and is not retried for 15 s, so a down server isn't hammered).
+            count = null;
         }
+
+        _badgeCache[key] = (now, count);
+        return count;
     }
 
     internal static IReadOnlyList<PluginDashboardProblem> ComputeProblems(PgOverview o)

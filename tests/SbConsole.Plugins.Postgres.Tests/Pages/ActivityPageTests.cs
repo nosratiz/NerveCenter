@@ -435,4 +435,41 @@ public class ActivityPageTests : PgPageTestBase
         note.TextContent.Should().Contain("Blocked rows are indented under their blocker").And.Contain("Cancel and Terminate are audited");
         note.QuerySelector("a")!.GetAttribute("href").Should().Be("/audit");
     }
+
+    [Fact]
+    public async Task Disposing_while_a_cancel_confirm_is_open_runs_nothing_and_throws_nothing()
+    {
+        Arrange();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(B(48230));
+        var cut = RenderPage();
+        RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+
+        await DisposeComponentsAsync();
+        gate.SetResult(true);
+        await Task.Delay(300);
+
+        await Operations.DidNotReceive().CancelBackendAsync(Secret, Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Disposing_while_a_terminate_confirm_is_open_runs_nothing_and_throws_nothing()
+    {
+        Arrange();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        Operations.GetBackendAsync(Secret, Blocker, Arg.Any<CancellationToken>()).Returns(B(Blocker, "idle in transaction"));
+        var cut = RenderPage();
+        OpenRowMenu(cut, Blocker);
+        cut.Find(".mud-popover-open .pg-terminate").Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()));
+
+        await DisposeComponentsAsync();
+        gate.SetResult(true);
+        await Task.Delay(300);
+
+        await Operations.DidNotReceive().TerminateBackendAsync(Secret, Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
 }

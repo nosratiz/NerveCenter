@@ -56,7 +56,7 @@
     // Errors show only once the user has edited that field, so a fresh empty form isn't invalid on open.
     private string? HostError => _hostTouched && string.IsNullOrWhiteSpace(_host) ? "A host is required." : null;
     private string? PortError => _portTouched && _port is < 1 or > 65535 ? "Port must be 1–65535." : null;
-    private string? ConnectError => _connectTouched && _connectTimeoutS is < 1 or > PostgresConnectionSettings.MaxConnectTimeoutS ? "Must be between 1 and 1024 s." : null;
+    private string? ConnectError => _connectTouched && _connectTimeoutS is < 1 or > PostgresConnectionSettings.MaxConnectTimeoutS ? $"Must be between 1 and {PostgresConnectionSettings.MaxConnectTimeoutS} s." : null;
     private string? StatementError => _statementTouched && _statementTimeoutS is < 1 or > PostgresConnectionSettings.MaxTimeoutS ? TimeoutRangeMessage : null;
 
     // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips whatever

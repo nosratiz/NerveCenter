@@ -1099,8 +1099,10 @@
             return;
         }
 
-        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync("Reindex", index.Name, isProd: false),
-            () => ReindexIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, _database, index.Oid), _cts.Token),
+        var ct = _cts.Token;
+        var database = _database;
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync("Reindex", index.Name, false, null, ct),
+            () => ReindexIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, database, index.Oid), ct),
             $"Reindexed {index.Name}.");
     }
 
@@ -1118,8 +1120,10 @@
                 new ConfirmationDetail("size", PgFormat.Bytes(index.Bytes)),
                 new ConfirmationDetail("scans", PgFormat.Count(index.Scans)),
             ], "pg.index.drop", Destructive: true);
-        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync(request),
-            () => DropIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, _database, index.Oid), _cts.Token),
+        var ct = _cts.Token;
+        var database = _database;
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync(request, ct),
+            () => DropIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, database, index.Oid), ct),
             $"Dropped {index.Name}.");
     }
 
@@ -1130,6 +1134,11 @@
         try
         {
             if (!await confirm())
+            {
+                return;
+            }
+
+            if (_disposed)
             {
                 return;
             }

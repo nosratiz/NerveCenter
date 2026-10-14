@@ -53,8 +53,25 @@ public sealed partial class PostgresOperations
             await set.ExecuteNonQueryAsync(ct);
         }
 
-        await using var cmd = new NpgsqlCommand($"{verb} {qualified}", conn) { CommandTimeout = 3600 + 5 };
-        await cmd.ExecuteNonQueryAsync(ct);
+        try
+        {
+            await using var cmd = new NpgsqlCommand($"{verb} {qualified}", conn) { CommandTimeout = 3600 + 5 };
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            // A pooler that ignores Npgsql's reset-on-return must not hand the long timeout to the next user.
+            try
+            {
+                await using var reset = new NpgsqlCommand("RESET statement_timeout", conn);
+                await reset.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // The connection is already broken; nothing left to reset.
+            }
+        }
+
         return qualified;
     }
 }

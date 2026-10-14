@@ -1732,7 +1732,10 @@ plugin only. This section records the decisions and the places review changed th
   that re-opens against the chosen database. Every connection the plugin opens sets
   `application_name=sbconsole`, which is how Activity recognises its own backends: "this console"
   chip, excluded from blocker/idle problems, and Cancel/Terminate refuse them (matched on the
-  application name server-side, not on a pid the client sent).
+  application name server-side, not on a pid the client sent). Consequence: any other client that
+  connects with `application_name = 'sbconsole'` can't be cancelled or terminated from the console.
+- **The Activity nav badge is cached for 15 s** per connection (keyed by a hash of the secret, never
+  the raw secret), including failed probes, so shell polling doesn't hit the server each time.
 - **The read-only guard is a seatbelt, not a privilege boundary.** Read mode runs in
   `BEGIN READ ONLY` with `SET LOCAL statement_timeout`; `PgSqlLexer` splits statements and refuses
   transaction/session control up front for a friendly message. The enforcement is on the server:
@@ -1746,8 +1749,16 @@ plugin only. This section records the decisions and the places review changed th
 - **Write mode** needs `Mode=ReadWrite` in the saved secret (re-read per run; the page switch is a
   convenience). A script runs as one transaction made of **one single-command batch per statement**
   (so the position of a server error maps to the failing statement via `PgQueryException(inner,
-  start)`); any error rolls back. Statements that can't run in a transaction block (`VACUUM`,
-  `COPY`, `CREATE DATABASE`, `CREATE INDEX CONCURRENTLY`) are refused.
+  start)`); any error rolls back. The guard refuses transaction control (`BEGIN`, `START`, `COMMIT`,
+  `END`, `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`), `PREPARE`, `CHECKPOINT`, `VACUUM`, and the
+  statements the server won't run in a transaction block (`CREATE INDEX CONCURRENTLY`,
+  `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `ALTER SYSTEM`). `COPY` is refused because
+  there is no stdin/stdout channel to feed it.
+- **`CLUSTER`, `REINDEX`, `ANALYZE` and `LOAD` are refused in read mode**, because PostgreSQL
+  permits them inside a `READ ONLY` transaction (verified on PG16) and `CLUSTER`/`REINDEX` take
+  `ACCESS EXCLUSIVE` locks. Write mode allows them; Maintenance and Browse are the audited routes.
+- **The EXPLAIN tab refuses `ANALYZE`** (`EXPLAIN ANALYZE …` and `EXPLAIN (… ANALYZE …)`), since
+  it executes the statement and the tab is not audited; Run accepts it and audits it as a read.
 - **Every user-SQL run is audited**, reads included (`pg.query.read` / `pg.query.write`), because
   free-form SQL against a shared server is what an audit log is for; this makes Query's Run a
   command handler. Catalog/metric reads are queries and are not. A cancelled run is audited

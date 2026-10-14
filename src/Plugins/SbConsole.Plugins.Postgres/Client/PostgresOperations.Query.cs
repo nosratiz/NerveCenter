@@ -196,7 +196,7 @@ public sealed partial class PostgresOperations
 
     public Task<string> ExplainAsync(string secret, string? database, string sql, int timeoutS, CancellationToken ct = default)
     {
-        var alreadyExplain = PgSqlGuard.Check(sql, write: false)[0].FirstKeyword == "EXPLAIN";
+        var alreadyExplain = PgSqlGuard.CheckExplain(sql)[0].FirstKeyword == "EXPLAIN";
         var text = alreadyExplain ? sql : ExplainPrefix + sql;
         var prefix = alreadyExplain ? 0 : ExplainPrefix.Length;
         return ReadAsync(secret, database, async (conn, tx) =>

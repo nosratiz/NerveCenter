@@ -79,4 +79,28 @@ public class IndexCommandHandlerTests
         await _audit.Received(1).RecordAsync("pg.index.reindex", "pg-prod-eu/app/oid 16500", ActionRisk.Mutating, false,
             Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task A_cancelled_drop_is_audited_as_cancelled_and_rethrown()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _ops.DropIndexAsync("secret", "app", 16500, Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await FluentActions.Awaiting(() => Drop().HandleAsync(Cmd(), cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        await _audit.Received(1).RecordAsync("pg.index.drop", "pg-prod-eu/app/oid 16500", ActionRisk.Destructive, false, "cancelled", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_cancelled_reindex_is_audited_as_cancelled_and_rethrown()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _ops.ReindexIndexAsync("secret", "app", 16500, Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await FluentActions.Awaiting(() => Reindex().HandleAsync(Cmd(), cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        await _audit.Received(1).RecordAsync("pg.index.reindex", "pg-prod-eu/app/oid 16500", ActionRisk.Mutating, false, "cancelled", Arg.Any<CancellationToken>());
+    }
 }

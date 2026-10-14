@@ -27,6 +27,11 @@ public sealed class ExportQueryCsvCommandHandler(
         {
             export = await operations.ExportQueryCsvAsync(secret, cmd.Database, cmd.Sql, cmd.TimeoutS, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Safe, succeeded: false, "cancelled");
+            throw;
+        }
         catch (PgSqlRefusedException ex)
         {
             // Nothing ran: no audit row.

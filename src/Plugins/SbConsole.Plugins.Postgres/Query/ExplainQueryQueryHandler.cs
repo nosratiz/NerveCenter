@@ -4,7 +4,7 @@ using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Postgres.Query;
 
-/// <summary>Plain EXPLAIN (never ANALYZE): reads nothing, so it is not audited.</summary>
+/// <summary>Plain EXPLAIN: reads nothing, so it is not audited. EXPLAIN ANALYZE executes the statement and is refused here; Run audits it.</summary>
 public sealed class ExplainQueryQueryHandler(
     IPostgresOperations operations, IConnectionProvider connections, ILogger<ExplainQueryQueryHandler> logger) : IScopedService
 {

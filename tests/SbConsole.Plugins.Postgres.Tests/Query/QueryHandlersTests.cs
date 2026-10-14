@@ -113,4 +113,16 @@ public class QueryHandlersTests
         await _audit.Received(1).RecordAsync("pg.query.export", "pg/(default)", ActionRisk.Safe, false,
             Arg.Is<string?>(d => d!.StartsWith(QueryAudit.Hash("select 1"))), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Export_cancelled_is_audited_as_cancelled_and_rethrown()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _ops.ExportQueryCsvAsync("secret", "app", "select 1", 30, Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await FluentActions.Awaiting(() => Export().HandleAsync(new(Id, "pg", "app", "select 1", 30), cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        await _audit.Received(1).RecordAsync("pg.query.export", "pg/app", ActionRisk.Safe, false, "cancelled", Arg.Any<CancellationToken>());
+    }
 }

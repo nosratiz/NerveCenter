@@ -25,6 +25,11 @@ public sealed class DropIndexCommandHandler(
             await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, $"{prefix}/{qualified}", ActionRisk.Destructive, succeeded: true, null);
             return PluginResult.Ok();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Destructive, succeeded: false, "cancelled");
+            throw;
+        }
         catch (PgSqlRefusedException ex)
         {
             return PluginResult.Fail(ex.Message);

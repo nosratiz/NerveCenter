@@ -27,6 +27,11 @@ public sealed class ReindexIndexCommandHandler(
             await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, $"{prefix}/{qualified}", ActionRisk.Mutating, succeeded: true, null);
             return PluginResult.Ok();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await HandlerRunner.AuditQuietlyAsync(audit, logger, Action, target, ActionRisk.Mutating, succeeded: false, "cancelled");
+            throw;
+        }
         catch (PgSqlRefusedException ex)
         {
             return PluginResult.Fail(ex.Message);

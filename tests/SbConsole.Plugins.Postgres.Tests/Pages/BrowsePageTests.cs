@@ -647,4 +647,40 @@ public class BrowsePageTests : PgPageTestBase
         Operations.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IPostgresOperations.PreviewRowsAsync)
                                               && ((PgRowsRequest)c.GetArguments()[2]!).Filters.Count == 1).Should().Be(1, "blur after the commit must not reload");
     }
+
+    [Fact]
+    public async Task Disposing_while_a_reindex_confirm_is_open_runs_nothing_and_throws_nothing()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+        cut.Find(".mud-popover-open .pg-index-reindex").Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+
+        await DisposeComponentsAsync();
+        gate.SetResult(true);
+        await Task.Delay(300);
+
+        await Operations.DidNotReceive().ReindexIndexAsync(Secret, Arg.Any<string?>(), Arg.Any<uint>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Disposing_while_a_drop_confirm_is_open_runs_nothing_and_throws_nothing()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+        cut.Find(".mud-popover-open .pg-index-drop").Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()));
+
+        await DisposeComponentsAsync();
+        gate.SetResult(true);
+        await Task.Delay(300);
+
+        await Operations.DidNotReceive().DropIndexAsync(Secret, Arg.Any<string?>(), Arg.Any<uint>(), Arg.Any<CancellationToken>());
+    }
 }

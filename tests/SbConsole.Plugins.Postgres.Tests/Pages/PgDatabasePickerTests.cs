@@ -125,4 +125,86 @@ public class PgDatabasePickerTests : PgPageTestBase
 
         selected.Should().Equal("");
     }
+
+    [Fact]
+    public void A_failed_load_shows_retry_and_retrying_loads_the_list()
+    {
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns((string?)null);
+        var selected = new List<string>();
+        var cut = RenderPicker(ConnectionId, null, selected);
+        cut.WaitForAssertion(() => cut.Find(".pg-database-retry").TextContent.Should().Contain("Retry"));
+        cut.FindAll(".pg-database-picker").Should().BeEmpty();
+
+        Arrange(ConnectionId, "app", "analytics");
+        cut.Find(".pg-database-retry").Click();
+
+        cut.WaitForAssertion(() => selected.Should().Equal("", "app"));
+        cut.FindAll(".pg-database-retry").Should().BeEmpty();
+        cut.FindAll(".pg-database-picker").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void A_later_render_after_a_failure_retries_the_load()
+    {
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns((string?)null);
+        var selected = new List<string>();
+        var cut = RenderPicker(ConnectionId, null, selected);
+        cut.WaitForAssertion(() => cut.FindAll(".pg-database-retry").Should().HaveCount(1));
+
+        Arrange(ConnectionId, "app");
+        cut.Render(p => p.Add(c => c.Default, "app"));
+
+        cut.WaitForAssertion(() => selected.Should().Equal("", "app"));
+    }
+
+    [Fact]
+    public void A_persistent_failure_reports_the_dropped_selection_only_once()
+    {
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns((string?)null);
+        var selected = new List<string>();
+        var cut = RenderPicker(ConnectionId, null, selected);
+
+        cut.Render(p => p.Add(c => c.Default, "x"));
+        cut.Render(p => p.Add(c => c.Default, "y"));
+
+        selected.Should().Equal("");
+    }
+
+    [Fact]
+    public async Task Disposing_cancels_the_in_flight_load()
+    {
+        var token = default(CancellationToken);
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns(Secret);
+        Operations.ListDatabasesAsync(Secret, Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            token = ci.Arg<CancellationToken>();
+            return new TaskCompletionSource<IReadOnlyList<string>>().Task;
+        });
+        var cut = RenderPicker(ConnectionId, null, []);
+        cut.WaitForAssertion(() => token.CanBeCanceled.Should().BeTrue());
+        token.IsCancellationRequested.Should().BeFalse();
+
+        await DisposeComponentsAsync();
+
+        token.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Changing_the_connection_cancels_the_previous_load()
+    {
+        var token = default(CancellationToken);
+        Connections.GetSecretAsync(ConnectionId, Arg.Any<CancellationToken>()).Returns(Secret + "first");
+        Operations.ListDatabasesAsync(Secret + "first", Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            token = ci.Arg<CancellationToken>();
+            return new TaskCompletionSource<IReadOnlyList<string>>().Task;
+        });
+        Arrange(_other, "fresh");
+        var cut = RenderPicker(ConnectionId, null, []);
+        cut.WaitForAssertion(() => token.CanBeCanceled.Should().BeTrue());
+
+        cut.Render(p => p.Add(c => c.ConnectionId, _other));
+
+        token.IsCancellationRequested.Should().BeTrue();
+    }
 }

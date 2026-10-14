@@ -287,11 +287,38 @@ public sealed class OperationsQueryTests(PostgresFixture fx)
     {
         var table = await ScratchAsync();
 
-        var ex = await FluentActions.Awaiting(() =>
-            fx.Operations.ExplainAsync(fx.Secret(PgAccessMode.ReadWrite), null, $"EXPLAIN ANALYZE DELETE FROM {table}", 30)).Should().ThrowAsync<Exception>();
+        await FluentActions.Awaiting(() =>
+            fx.Operations.ExplainAsync(fx.Secret(PgAccessMode.ReadWrite), null, $"EXPLAIN ANALYZE DELETE FROM {table}", 30)).Should().ThrowAsync<PgSqlRefusedException>();
 
-        SqlStateOf(ex.Which).Should().Be("25006");
         (await CountAsync(table)).Should().Be(3);
+    }
+
+    [DockerFact]
+    public async Task Explain_tab_refuses_the_parenthesised_analyze_option()
+    {
+        var table = await ScratchAsync();
+
+        await FluentActions.Awaiting(() => fx.Operations.ExplainAsync(fx.Secret(), null, $"explain (costs off, analyze) SELECT * FROM {table}", 30))
+            .Should().ThrowAsync<PgSqlRefusedException>().WithMessage("EXPLAIN ANALYZE runs the statement — use Run, which is audited.");
+    }
+
+    [DockerFact]
+    public async Task Run_still_runs_explain_analyze()
+    {
+        var table = await ScratchAsync();
+
+        var r = await fx.Operations.RunQueryAsync(fx.Secret(), null, Read($"EXPLAIN ANALYZE SELECT * FROM {table}"));
+
+        r.Rows.Should().NotBeEmpty();
+    }
+
+    [DockerFact]
+    public async Task Read_mode_refuses_reindex()
+    {
+        var table = await ScratchAsync();
+
+        await FluentActions.Awaiting(() => fx.Operations.RunQueryAsync(fx.Secret(), null, Read($"REINDEX TABLE {table}")))
+            .Should().ThrowAsync<PgSqlRefusedException>();
     }
 
     [DockerFact]

@@ -400,14 +400,20 @@
 
         var pid = row.Backend.Pid;
         _acting = true;
+        var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync("Cancel query of", $"pid {pid}", isProd: false))
+            if (!await Confirmation.ConfirmAsync("Cancel query of", $"pid {pid}", false, null, ct))
             {
                 return;
             }
 
-            var result = await CancelBackend.HandleAsync(new BackendCommand(connection.Id, connection.Name, pid), _cts.Token);
+            if (_disposed)
+            {
+                return;
+            }
+
+            var result = await CancelBackend.HandleAsync(new BackendCommand(connection.Id, connection.Name, pid), ct);
             Report(result, $"Cancel sent to pid {pid}.");
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
@@ -442,14 +448,20 @@
         ], "pg.backend.terminate", Destructive: true);
 
         _acting = true;
+        var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync(request))
+            if (!await Confirmation.ConfirmAsync(request, ct))
             {
                 return;
             }
 
-            var result = await TerminateBackend.HandleAsync(new BackendCommand(connection.Id, connection.Name, b.Pid), _cts.Token);
+            if (_disposed)
+            {
+                return;
+            }
+
+            var result = await TerminateBackend.HandleAsync(new BackendCommand(connection.Id, connection.Name, b.Pid), ct);
             Report(result, $"Terminated pid {b.Pid}.");
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)

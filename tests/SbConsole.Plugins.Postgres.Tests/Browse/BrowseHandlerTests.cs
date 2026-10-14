@@ -137,4 +137,27 @@ public class BrowseHandlerTests
         await _audit.Received(1).RecordAsync("pg.table.export", "pg-prod-eu/app/public.orders", ActionRisk.Safe, false,
             Arg.Is<string?>(s => s != null && s.Contains("Can't reach the server")), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Export_refusal_fails_with_its_message_and_no_audit()
+    {
+        _ops.ExportTableCsvAsync("secret", "app", Request, Arg.Any<CancellationToken>()).ThrowsAsync(new PgSqlRefusedException("Nope."));
+
+        var result = await Export().HandleAsync(Command());
+
+        result.Error.Should().Be("Nope.");
+        await _audit.DidNotReceiveWithAnyArgs().RecordAsync(default!, default!, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task Export_cancelled_is_audited_as_cancelled_and_rethrown()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _ops.ExportTableCsvAsync("secret", "app", Request, Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await FluentActions.Awaiting(() => Export().HandleAsync(Command(), cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        await _audit.Received(1).RecordAsync("pg.table.export", "pg-prod-eu/app/public.orders", ActionRisk.Safe, false, "cancelled", Arg.Any<CancellationToken>());
+    }
 }

@@ -112,4 +112,18 @@ public sealed class OperationsIndexTests(PostgresFixture fx)
         await reindex.Should().ThrowAsync<PgSqlRefusedException>().WithMessage("*read-only*");
         await drop.Should().ThrowAsync<PgSqlRefusedException>().WithMessage("*read-only*");
     }
+
+    [DockerFact]
+    public async Task Index_ddl_does_not_leak_its_statement_timeout_onto_the_pooled_connection()
+    {
+        var secret = (PostgresConnectionSettings.Parse(fx.Secret(PgAccessMode.ReadWrite)) with { StatementTimeoutS = 7 }).ToSecretString();
+        await WithScratchAsync("CREATE INDEX {t}_v ON {t} (v);", async table =>
+        {
+            var oid = await IndexOid($"{table}_v");
+
+            await fx.Operations.ReindexIndexAsync(secret, null, oid);
+
+            (await fx.Operations.ShowStatementTimeoutAsync(secret, null)).Should().Be("0");
+        });
+    }
 }

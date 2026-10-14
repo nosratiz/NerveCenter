@@ -193,4 +193,27 @@ public class PostgresPluginDashboardTests
         ops.GetBlockedCountAsync("s", Arg.Any<CancellationToken>()).ThrowsAsync(new TimeoutException());
         (await plugin.GetNavBadgeAsync(PostgresPlugin.ActivityHref, "s")).Should().BeNull();
     }
+
+    [Fact]
+    public async Task Nav_badge_is_cached_for_fifteen_seconds_per_secret()
+    {
+        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var plugin = new PostgresPlugin();
+        var ops = Substitute.For<IPostgresOperations>();
+        ops.GetBlockedCountAsync("s", Arg.Any<CancellationToken>()).Returns(4);
+        ops.GetBlockedCountAsync("other", Arg.Any<CancellationToken>()).Returns(1);
+        plugin.InitializeForTesting(ops, clock);
+
+        (await plugin.GetNavBadgeAsync(PostgresPlugin.ActivityHref, "s")).Should().Be(4);
+        clock.Advance(TimeSpan.FromSeconds(14));
+        (await plugin.GetNavBadgeAsync(PostgresPlugin.ActivityHref, "s")).Should().Be(4);
+        await ops.Received(1).GetBlockedCountAsync("s", Arg.Any<CancellationToken>());
+
+        (await plugin.GetNavBadgeAsync(PostgresPlugin.ActivityHref, "other")).Should().Be(1);
+
+        clock.Advance(TimeSpan.FromSeconds(2));
+        ops.GetBlockedCountAsync("s", Arg.Any<CancellationToken>()).Returns(0);
+        (await plugin.GetNavBadgeAsync(PostgresPlugin.ActivityHref, "s")).Should().BeNull();
+        await ops.Received(2).GetBlockedCountAsync("s", Arg.Any<CancellationToken>());
+    }
 }
