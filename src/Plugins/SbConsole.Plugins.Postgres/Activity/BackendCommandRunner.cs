@@ -24,6 +24,8 @@ internal static class BackendCommandRunner
         var ended = $"pid {cmd.Pid} had already ended.";
         try
         {
+            // Deliberately before the read-only check: re-read the row just before acting. A dead pid on a read-only
+            // connection is therefore audited as failed ("already ended") rather than refused as read-only.
             var backend = await operations.GetBackendAsync(secret, cmd.Pid, ct);
             if (backend is null)
             {

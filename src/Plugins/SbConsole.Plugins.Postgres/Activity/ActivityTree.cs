@@ -7,14 +7,14 @@ public sealed record ActivityRow(PgBackend Backend, int Depth, int BlocksCount, 
 public static class ActivityTree
 {
     /// <summary>
-    /// Top level: backends with no blockers, ordered by transaction start (nulls last) then pid; each blocker is followed by
-    /// its victims (depth 1, a victim's first blocker only), recursively, each backend once. Cycles: the remaining backends
-    /// are appended at depth 0. Idle rows are hidden when <paramref name="activeOnly"/> is set and <paramref name="showIdle"/>
-    /// is not; the hidden count is returned separately.
+    /// Top level: backends whose blockers are not visible, ordered by transaction start (nulls last) then pid; each blocker
+    /// is followed by its victims (depth 1, a victim's first visible blocker only), recursively, each backend once.
+    /// Cycles: the remaining backends are appended flat at depth 0. Visibility: <paramref name="activeOnly"/> shows only
+    /// 'active' backends; otherwise idle backends are hidden unless <paramref name="showIdle"/> is set. HiddenIdle is the
+    /// number of 'idle' backends not visible. BlocksCount is counted over all backends, visible or not.
     /// </summary>
     public static (IReadOnlyList<ActivityRow> Rows, int HiddenIdle) Build(PgActivity activity, bool activeOnly, bool showIdle)
     {
-        var hide = activeOnly && !showIdle;
         var all = activity.Backends;
         var blocks = new Dictionary<int, int>();
         foreach (var b in all)
@@ -25,8 +25,8 @@ public static class ActivityTree
             }
         }
 
-        var visible = all.Where(b => !(hide && b.State == "idle")).ToList();
-        var hidden = all.Count - visible.Count;
+        var visible = all.Where(b => activeOnly ? b.State == "active" : (showIdle || b.State != "idle")).ToList();
+        var hidden = all.Count(b => b.State == "idle") - visible.Count(b => b.State == "idle");
         var present = visible.Select(b => b.Pid).ToHashSet();
 
         int? FirstBlocker(PgBackend b) => b.BlockedBy.Cast<int?>().FirstOrDefault(p => present.Contains(p!.Value));
@@ -38,7 +38,7 @@ public static class ActivityTree
         var rows = new List<ActivityRow>();
         var seen = new HashSet<int>();
 
-        void Add(PgBackend b, int depth)
+        void Add(PgBackend b, int depth, bool recurse = true)
         {
             if (!seen.Add(b.Pid))
             {
@@ -46,7 +46,7 @@ public static class ActivityTree
             }
 
             rows.Add(new ActivityRow(b, depth, blocks.GetValueOrDefault(b.Pid), b.Pid == activity.OwnPid));
-            if (children.TryGetValue(b.Pid, out var kids))
+            if (recurse && children.TryGetValue(b.Pid, out var kids))
             {
                 foreach (var kid in kids)
                 {
@@ -60,18 +60,21 @@ public static class ActivityTree
             Add(b, 0);
         }
 
-        // Anything left is in a blocking cycle.
+        // Anything left is in a blocking cycle: flat, no recursion.
         foreach (var b in ordered)
         {
-            Add(b, 0);
+            Add(b, 0, recurse: false);
         }
 
         return (rows, hidden);
     }
 
-    /// <summary>The row blocking the most sessions; ties go to the longest duration.</summary>
-    public static ActivityRow? WorstBlocker(IReadOnlyList<ActivityRow> rows) =>
-        rows.Where(r => r.BlocksCount > 0)
+    /// <summary>
+    /// The row blocking the most sessions; ties go to the longest duration. Computed over all backends, independent of the
+    /// view filter, so the banner still names an idle-in-transaction blocker when Active only is on.
+    /// </summary>
+    public static ActivityRow? WorstBlocker(PgActivity activity) =>
+        Build(activity, false, true).Rows.Where(r => r.BlocksCount > 0)
             .OrderByDescending(r => r.BlocksCount).ThenByDescending(r => r.Backend.Duration ?? TimeSpan.Zero)
             .FirstOrDefault();
 }

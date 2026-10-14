@@ -10,6 +10,8 @@ public sealed partial class PostgresOperations
     public Task<string> DropIndexAsync(string secret, string? database, uint indexOid, CancellationToken ct = default) =>
         RunIndexDdlAsync(secret, database, indexOid, "DROP INDEX CONCURRENTLY", refuseConstraintBacked: true, ct);
 
+    // Caveats: a failed or cancelled CONCURRENTLY operation can leave an invalid "_ccnew" index behind.
+    // Partitioned-table indexes (relkind 'I') are not supported; only plain indexes (relkind 'i') are resolved.
     // CONCURRENTLY cannot run inside a transaction block, so this uses a plain autocommit connection (not ReadAsync).
     // verb is a literal from the callers above; the name is resolved from the catalog by oid and quoted.
     private static async Task<string> RunIndexDdlAsync(
