@@ -74,6 +74,9 @@ internal static class K8sMappers
             meta.Annotations?.ContainsKey("kubernetes.io/config.mirror") ?? false);
     }
 
+    /// <summary>Σ a pod template's app-container requests (one pod's worth): CPU millicores, memory bytes.</summary>
+    public static (long Cpu, long Mem) TemplateRequests(V1PodTemplateSpec? template) => Sum(template?.Spec?.Containers, r => r.Requests);
+
     /// <summary>Σ app-container limits (init containers ignored): CPU millicores, memory bytes.</summary>
     public static (long Cpu, long Mem) PodLimits(V1Pod pod) => Sum(pod.Spec?.Containers, r => r.Limits);
 

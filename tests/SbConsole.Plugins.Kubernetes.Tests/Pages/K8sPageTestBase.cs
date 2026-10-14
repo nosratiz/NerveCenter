@@ -11,6 +11,7 @@ using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Namespaces;
 using SbConsole.Plugins.Kubernetes.Overview;
+using SbConsole.Plugins.Kubernetes.Workloads;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kubernetes.Tests.Pages;
@@ -77,6 +78,20 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<ListNamespacesQueryHandler>.Instance));
         Services.AddSingleton(new GetOverviewQueryHandler(
             Operations, Connections, Store, Time, NullLogger<GetOverviewQueryHandler>.Instance));
+        Services.AddSingleton(new ListWorkloadsQueryHandler(
+            Operations, Connections, NullLogger<ListWorkloadsQueryHandler>.Instance));
+        Services.AddSingleton(new CountWorkloadsQueryHandler(
+            Operations, Connections, NullLogger<CountWorkloadsQueryHandler>.Instance));
+        Services.AddSingleton(new GetScaleInfoQueryHandler(
+            Operations, Connections, NullLogger<GetScaleInfoQueryHandler>.Instance));
+        Services.AddSingleton(new GetResourceYamlQueryHandler(
+            Operations, Connections, NullLogger<GetResourceYamlQueryHandler>.Instance));
+        Services.AddSingleton(new ScaleWorkloadCommandHandler(
+            Operations, Connections, Audit, NullLogger<ScaleWorkloadCommandHandler>.Instance));
+        Services.AddSingleton(new RestartWorkloadCommandHandler(
+            Operations, Connections, Audit, Time, NullLogger<RestartWorkloadCommandHandler>.Instance));
+        Services.AddSingleton(new DeleteWorkloadCommandHandler(
+            Operations, Connections, Audit, NullLogger<DeleteWorkloadCommandHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

@@ -64,27 +64,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
 
     // ---- Not implemented yet: each later task replaces its own. ----
 
-    public Task<IReadOnlyList<K8sWorkload>> ListWorkloadsAsync(string secret, K8sWorkloadKind kind, IReadOnlyList<string> namespaces, string? labelSelector, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<IReadOnlyDictionary<K8sWorkloadKind, K8sKindCount>> CountWorkloadsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<K8sScaleInfo> GetScaleInfoAsync(string secret, K8sWorkloadKind kind, string ns, string name, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<int> ScaleAsync(string secret, K8sWorkloadKind kind, string ns, string name, int replicas, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task RestartAsync(string secret, K8sWorkloadKind kind, string ns, string name, DateTimeOffset at, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task DeleteWorkloadAsync(string secret, K8sWorkloadKind kind, string ns, string name, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<string?> GetYamlAsync(string secret, K8sResourceKind kind, string? ns, string name, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
     public Task<K8sDeploymentDetail?> GetDeploymentDetailAsync(string secret, string ns, string name, CancellationToken ct = default) =>
         throw new NotImplementedException();
 
