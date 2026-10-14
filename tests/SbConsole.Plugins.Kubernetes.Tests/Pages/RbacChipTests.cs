@@ -47,4 +47,31 @@ public class RbacChipTests : K8sPageTestBase
 
         cut.Find(".k8s-rbac-chip").TextContent.Should().Contain("limited (RBAC)");
     }
+
+    [Fact]
+    public void Cluster_needs_the_account_fails_are_listed_in_the_tooltip()
+    {
+        var admin = TestData.AdminAccess("ops");
+        var facts = admin with
+        {
+            ClusterChecks = new Dictionary<string, bool>(admin.ClusterChecks) { ["nodes/patch"] = false, ["pods/eviction/create"] = false },
+        };
+
+        var cut = Render<RbacChip>(p => p
+            .Add(c => c.Permissions, K8sPermissions.From(facts))
+            .Add(c => c.ClusterNeeds, K8sPermissions.NodeClusterActions));
+
+        cut.Find(".k8s-rbac-chip").TextContent.Should().Contain("limited (RBAC)");
+        cut.Instance.TooltipText.Should().Be("Connected as ops. Missing for this page: nodes · patch, pods/eviction · create. Reads work normally.");
+    }
+
+    [Fact]
+    public void Granted_cluster_needs_render_nothing()
+    {
+        var cut = Render<RbacChip>(p => p
+            .Add(c => c.Permissions, K8sPermissions.From(TestData.AdminAccess()))
+            .Add(c => c.ClusterNeeds, K8sPermissions.NodeClusterActions));
+
+        cut.Markup.Trim().Should().BeEmpty();
+    }
 }

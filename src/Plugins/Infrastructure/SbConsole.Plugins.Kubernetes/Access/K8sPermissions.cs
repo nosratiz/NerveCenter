@@ -20,10 +20,15 @@ public sealed class K8sPermissions
 
     public static readonly (string Group, string Resource, string Verb)[] PodActions = [("", "pods", "delete")];
     public static readonly (string Group, string Resource, string Verb)[] ConfigActions = [("", "configmaps", "update")];
-    public static readonly (string Group, string Resource, string Verb)[] NodeActions = [("", "nodes", "patch")];
 
     /// <summary>ClusterChecks key: may this account cordon / uncordon nodes.</summary>
     public const string NodesPatch = "nodes/patch";
+
+    /// <summary>ClusterChecks key: may this account evict pods in every namespace (drain).</summary>
+    public const string PodsEvictionCreate = "pods/eviction/create";
+
+    /// <summary>The Nodes page's cluster-scoped writes: cordon / uncordon and drain.</summary>
+    public static readonly string[] NodeClusterActions = [NodesPatch, PodsEvictionCreate];
 
     private readonly IReadOnlyList<K8sRulesReview> _reviews;
     private readonly IReadOnlyDictionary<string, bool> _cluster;
@@ -84,6 +89,13 @@ public sealed class K8sPermissions
     public IReadOnlyList<string> Missing(IEnumerable<(string Group, string Resource, string Verb)> needs, string? ns = null) =>
         needs.Where(n => !Can(n.Group, n.Resource, n.Verb, ns))
             .Select(n => $"{n.Resource} · {n.Verb}")
+            .Distinct()
+            .ToList();
+
+    /// <summary>The cluster checks this account fails, as "resource · verb" ("pods/eviction/create" → "pods/eviction · create").</summary>
+    public IReadOnlyList<string> MissingCluster(IEnumerable<string> checks) =>
+        checks.Where(c => !CanCluster(c))
+            .Select(c => c.LastIndexOf('/') is var i and > 0 ? $"{c[..i]} · {c[(i + 1)..]}" : c)
             .Distinct()
             .ToList();
 

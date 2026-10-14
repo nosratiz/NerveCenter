@@ -1,0 +1,391 @@
+@using System.Globalization
+@using SbConsole.Plugins.Kubernetes.Nodes
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject PreviewDrainQueryHandler Preview
+@inject DrainNodeCommandHandler DrainHandler
+@inject SetNodeSchedulableCommandHandler SetSchedulable
+@inject TimeProvider Clock
+@implements IDisposable
+
+@* Drain (mockup 3h, spec §10.1): the eviction preview grouped by what will happen, PDB-blocked pods on top, the options,
+   and — on PROD — type-the-node-name. This dialog is the confirmation: it does not also call IConfirmationService.
+   "Cordon only" is the Mutating escape hatch. While draining it shows per-pod progress; Stop cancels (the node stays
+   cordoned). *@
+<MudDialog Class="k8s-drain-dialog">
+    <TitleContent>
+        <div class="k8s-drain-title">
+            <MudIcon Icon="@Icons.Material.Outlined.Logout" Color="Color.Error" Size="Size.Small" />
+            <span class="k8s-drain-title-text">Drain node</span>
+            <span class="k8s-mono">@Node.Name</span>
+            @if (IsProd)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Class="k8s-prod-chip">PROD</MudChip>
+            }
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_plan is null && _error is null)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="k8s-drain-loading" />
+        }
+
+        @if (_error is not null)
+        {
+            <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" />
+        }
+
+        @if (_plan is { } plan)
+        {
+            <div class="k8s-drain-body">
+                <div class="k8s-drain-intro">@Intro(plan)</div>
+
+                <div class="k8s-drain-tiles">
+                    <K8sStatTile Class="k8s-drain-evict" Label="Will evict" Value="@plan.WillEvict.ToString(Inv)" />
+                    <K8sStatTile Class="k8s-drain-ds" Label="DaemonSet (ignored)" Value="@plan.DaemonSets.ToString(Inv)" />
+                    <K8sStatTile Class="k8s-drain-blocked" Label="Blocked by PDB" Value="@plan.Blocked.ToString(Inv)" Warning="@(plan.Blocked > 0)" />
+                    <K8sStatTile Class="k8s-drain-time" Label="Est. time" Value="@("~" + K8sFormat.Age(DrainPlanner.Estimate(plan.WillEvict, _grace)))" />
+                </div>
+
+                @if (_running || _result is not null)
+                {
+                    @Progress()
+                }
+                else
+                {
+                    @PodList(plan)
+                    @Options(plan)
+                }
+
+                <div class="k8s-meta k8s-drain-audit">
+                    Audited as <span class="k8s-mono">@DrainNodeCommandHandler.Action</span> with your name, the node, the options and the list of evicted pods.
+                </div>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_running)
+        {
+            <MudButton Class="k8s-drain-stop" Variant="Variant.Outlined" Color="Color.Error" Disabled="_stopping" OnClick="Stop">Stop</MudButton>
+        }
+        else if (_result is not null)
+        {
+            <MudButton Class="k8s-drain-close" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => MudDialog.Close(DialogResult.Ok(_result)))">Close</MudButton>
+        }
+        else
+        {
+            <MudButton Class="k8s-drain-cancel" Disabled="_busy" OnClick="@(() => MudDialog.Cancel())">Cancel</MudButton>
+            <MudButton Class="k8s-cordon-only" Variant="Variant.Outlined" Disabled="_busy" OnClick="CordonOnlyAsync">Cordon only</MudButton>
+            <MudButton Class="@("k8s-drain-run" + (CanRun ? "" : " k8s-disabled-soft"))" Variant="Variant.Outlined" Color="Color.Error"
+                       Disabled="@(!CanRun)" OnClick="RunAsync">Drain node</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private const int RowCap = 30;
+    private const int DefaultGraceSeconds = 30;
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public Guid ConnectionId { get; set; }
+
+    [Parameter, EditorRequired] public string ConnectionName { get; set; } = "";
+
+    /// <summary>From the server-side connection lookup the page made; never from the query string.</summary>
+    [Parameter] public bool IsProd { get; set; }
+
+    [Parameter, EditorRequired] public K8sNodeInfo Node { get; set; } = default!;
+
+    private readonly CancellationTokenSource _cts = new();
+    private DrainPlan? _plan;
+    private string? _error;
+    private string _filter = "";
+    private bool _emptyDir = true; // mockup 3h ships it checked
+    private bool _force;
+    private int _grace = DefaultGraceSeconds;
+    private string _confirm = "";
+    private bool _busy;
+    private bool _running;
+    private bool _stopping;
+    private int _done;
+    private int _total;
+    private readonly List<DrainPodResult> _results = [];
+    private DrainResult? _result;
+    private bool _disposed;
+
+    public static Task<IDialogReference> ShowAsync(IDialogService dialogs, ConnectionInfo connection, K8sNodeInfo node) =>
+        dialogs.ShowAsync<DrainDialog>($"Drain node {node.Name}",
+            new DialogParameters<DrainDialog>
+            {
+                { d => d.ConnectionId, connection.Id }, { d => d.ConnectionName, connection.Name },
+                { d => d.IsProd, connection.IsProd }, { d => d.Node, node },
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true, BackdropClick = false });
+
+    private bool CanRun => _plan is not null && !_busy && (!IsProd || string.Equals(_confirm, Node.Name, StringComparison.Ordinal));
+
+    private string Intro(DrainPlan plan)
+    {
+        var moving = plan.Pods.Count(p => p.Group is DrainGroup.WillEvict or DrainGroup.BlockedByPdb or DrainGroup.Unmanaged);
+        var text = "Cordons the node, then evicts every pod below through the Eviction API, honouring PodDisruptionBudgets. "
+                   + $"{moving.ToString(Inv)} {(moving == 1 ? "pod" : "pods")} will be rescheduled";
+        text += plan.Blocked > 0
+            ? $"; {plan.Blocked.ToString(Inv)} can't be and will block the drain unless you force."
+            : ".";
+        if (Node.ReadyStatus != "True")
+        {
+            text += " This node is already NotReady, so the pods aren't serving anyway.";
+        }
+
+        return text;
+    }
+
+    private string ForceLabel(DrainPlan plan)
+    {
+        var names = plan.Pods.Where(p => p.Group == DrainGroup.BlockedByPdb).Select(p => p.Pod.Name).ToList();
+        return names.Count == 0 ? "Force past PDBs" : $"Force past PDBs (evicts {JoinAnd(names)})";
+    }
+
+    private static string JoinAnd(IReadOnlyList<string> items) =>
+        items.Count <= 1 ? string.Concat(items) : string.Join(", ", items.Take(items.Count - 1)) + " and " + items[^1];
+
+    private RenderFragment PodList(DrainPlan plan) => __builder =>
+    {
+        var filtered = string.IsNullOrWhiteSpace(_filter)
+            ? plan.Pods
+            : plan.Pods.Where(p => p.Pod.Name.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase)
+                                   || p.Pod.Namespace.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        <MudPaper Outlined="true" Class="k8s-drain-pods">
+            <div class="k8s-drain-pods-head">
+                <span class="k8s-muted">Pods on this node</span>
+                <MudTextField T="string" Class="k8s-drain-filter" Placeholder="filter" Value="_filter" ValueChanged="v => _filter = v ?? string.Empty"
+                              Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Outlined.Search" />
+            </div>
+            <MudSimpleTable Dense="true" Elevation="0" Class="k8s-drain-pods-table">
+                <tbody>
+                    @foreach (var p in filtered.Take(RowCap))
+                    {
+                        <tr class="@("k8s-drain-pod-row" + RowClass(p.Group))" @key="p.Pod.Namespace + '/' + p.Pod.Name">
+                            <td class="k8s-mono k8s-muted">@p.Pod.Namespace</td>
+                            <td class="k8s-mono">@p.Pod.Name</td>
+                            <td class="k8s-muted">@(p.Pod.Owner?.Kind ?? "—")</td>
+                            <td><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@NoteColor(p)" Class="k8s-drain-note">@p.Note</MudChip></td>
+                            <td class="k8s-num k8s-mono k8s-muted">@K8sFormat.Age(Clock.GetUtcNow() - p.Pod.CreatedAt)</td>
+                        </tr>
+                    }
+                    @if (filtered.Count > RowCap)
+                    {
+                        <tr><td colspan="5" class="k8s-muted k8s-drain-more">@((filtered.Count - RowCap).ToString(Inv)) more…</td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    };
+
+    private RenderFragment Options(DrainPlan plan) => __builder =>
+    {
+        <div class="k8s-drain-options">
+            <MudCheckBox T="bool" Class="k8s-drain-emptydir" @bind-Value="_emptyDir" Label="Delete emptyDir data" Dense="true" />
+            <MudCheckBox T="bool" Class="k8s-drain-force" @bind-Value="_force" Label="@ForceLabel(plan)" Color="Color.Error" Dense="true" />
+            <MudNumericField T="int" Class="k8s-drain-grace" Label="Grace period (s)" Value="_grace" ValueChanged="OnGraceChanged"
+                             Min="0" Max="3600" Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        </div>
+        @if (IsProd)
+        {
+            <MudTextField T="string" Class="k8s-drain-confirm" Label="@($"Type {Node.Name} to confirm")" Value="_confirm"
+                          ValueChanged="v => _confirm = v ?? string.Empty" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        }
+    };
+
+    private RenderFragment Progress() => __builder =>
+    {
+        var fraction = _total > 0 ? (double)_done / _total : 1;
+        <div class="k8s-drain-run-state">
+            <div class="k8s-drain-progress">
+                <MudProgressLinear Value="fraction" Min="0" Max="1" Color="Color.Primary" Size="Size.Small" />
+                <span class="k8s-mono k8s-drain-progress-text">@_done.ToString(Inv) / @_total.ToString(Inv)</span>
+            </div>
+            <div class="k8s-drain-results">
+                @foreach (var r in _results)
+                {
+                    <div class="k8s-drain-result" @key="r.Namespace + '/' + r.Name">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@OutcomeColor(r.Outcome)" Class="k8s-drain-outcome">@r.Outcome</MudChip>
+                        <span class="k8s-mono">@r.Namespace/@r.Name</span>
+                        @if (r.Reason is not null)
+                        {
+                            <span class="k8s-muted">@r.Reason</span>
+                        }
+                    </div>
+                }
+            </div>
+            @if (_result is { } result)
+            {
+                <div class="k8s-drain-summary">@Summary(result)</div>
+            }
+        </div>
+    };
+
+    private static string RowClass(DrainGroup group) => group switch
+    {
+        DrainGroup.BlockedByPdb => " k8s-drain-blocked-row",
+        DrainGroup.DaemonSet => " k8s-drain-ignored-row",
+        _ => "",
+    };
+
+    private static Color NoteColor(DrainPodPlan p) => p.Group switch
+    {
+        DrainGroup.BlockedByPdb or DrainGroup.Unmanaged => Color.Warning,
+        DrainGroup.DaemonSet => Color.Default,
+        _ => p.Note == "brief outage" ? Color.Warning : Color.Success,
+    };
+
+    private static Color OutcomeColor(DrainPodOutcome o) => o switch
+    {
+        DrainPodOutcome.Evicted => Color.Success,
+        DrainPodOutcome.Deleted => Color.Warning,
+        DrainPodOutcome.Skipped => Color.Default,
+        _ => Color.Error,
+    };
+
+    private string Summary(DrainResult r)
+    {
+        int Count(DrainPodOutcome o) => r.Pods.Count(p => p.Outcome == o);
+        var head = r.Cancelled ? "Stopped — the node stays cordoned." : r.TimedOut ? "Timed out." : "Done.";
+        return $"{head} {Count(DrainPodOutcome.Evicted).ToString(Inv)} evicted · {Count(DrainPodOutcome.Deleted).ToString(Inv)} deleted · "
+               + $"{Count(DrainPodOutcome.Blocked).ToString(Inv)} blocked · {Count(DrainPodOutcome.Skipped).ToString(Inv)} skipped · "
+               + $"{Count(DrainPodOutcome.Failed).ToString(Inv)} failed";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await Preview.HandleAsync(ConnectionId, Node.Name, _grace, _cts.Token);
+        if (result is { IsSuccess: true, Value: { } plan })
+        {
+            _plan = plan;
+        }
+        else
+        {
+            _error = result.Error ?? "Couldn't preview the drain.";
+        }
+    }
+
+    private void OnGraceChanged(int value) => _grace = Math.Clamp(value, 0, 3600);
+
+    private async Task CordonOnlyAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await SetSchedulable.HandleAsync(
+                new SetSchedulableCommand(new K8sTarget(ConnectionId, ConnectionName, null, Node.Name), Unschedulable: true), _cts.Token);
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok("cordoned"));
+                return;
+            }
+
+            _error = result.Error ?? "Cordon failed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RunAsync()
+    {
+        if (!CanRun || _plan is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _running = true;
+        _error = null;
+        _total = _plan.Pods.Count(p => p.Group != DrainGroup.DaemonSet);
+        var progress = new UiProgress(p => InvokeAsync(() => OnProgress(p)));
+        try
+        {
+            var result = await DrainHandler.HandleAsync(
+                new DrainCommand(new K8sTarget(ConnectionId, ConnectionName, null, Node.Name), new DrainOptions(_emptyDir, _force, _grace)),
+                progress, _cts.Token);
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (result is { IsSuccess: true, Value: { } drain })
+            {
+                _result = drain;
+                _results.Clear();
+                _results.AddRange(drain.Pods);
+                _done = drain.Pods.Count;
+            }
+            else
+            {
+                _error = result.Error ?? "Drain failed.";
+            }
+        }
+        finally
+        {
+            _running = false;
+            _busy = false;
+        }
+    }
+
+    private void OnProgress(DrainProgress p)
+    {
+        if (_disposed || _result is not null)
+        {
+            return;
+        }
+
+        _total = p.Total;
+        _done = Math.Max(_done, p.Done);
+        if (p.Last is { } last)
+        {
+            _results.Add(last);
+        }
+
+        StateHasChanged();
+    }
+
+    private void Stop()
+    {
+        _stopping = true;
+        _cts.Cancel();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+
+    /// <summary>Marshals each report onto the renderer; a report after the circuit is gone is dropped.</summary>
+    private sealed class UiProgress(Func<DrainProgress, Task> onReport) : IProgress<DrainProgress>
+    {
+        public void Report(DrainProgress value) => _ = SafeAsync(value);
+
+        private async Task SafeAsync(DrainProgress value)
+        {
+            try
+            {
+                await onReport(value);
+            }
+            catch (Exception)
+            {
+                // The dialog closed or the circuit went away mid-drain: the handler's result and audit row still stand.
+            }
+        }
+    }
+}

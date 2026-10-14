@@ -407,6 +407,21 @@ internal static class K8sMappers
             labels);
     }
 
+    /// <summary>
+    /// A policy/v1 PodDisruptionBudget. Only matchLabels are kept: a selector that also has matchExpressions is
+    /// treated as its labels alone, which can only over-report pods as blocked (the eviction API stays authoritative).
+    /// </summary>
+    public static K8sPdb Pdb(V1PodDisruptionBudget pdb)
+    {
+        var spec = pdb.Spec;
+        var rule = spec?.MinAvailable is { } min ? $"minAvailable {min.Value}"
+            : spec?.MaxUnavailable is { } max ? $"maxUnavailable {max.Value}"
+            : "no rule";
+        return new K8sPdb(
+            pdb.Metadata.NamespaceProperty ?? string.Empty, pdb.Metadata.Name, Dict(spec?.Selector?.MatchLabels),
+            pdb.Status?.DisruptionsAllowed ?? 0, rule, pdb.Status?.CurrentHealthy ?? 0, pdb.Status?.DesiredHealthy ?? 0);
+    }
+
     /// <summary>The Nodes page order: not-Ready nodes first (they need attention), then by name.</summary>
     public static IReadOnlyList<K8sNodeInfo> InNodeDisplayOrder(IEnumerable<K8sNodeInfo> nodes) =>
         nodes.OrderBy(n => n.ReadyStatus == "True" ? 1 : 0)

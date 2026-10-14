@@ -21,9 +21,14 @@ public sealed partial class KubernetesOperations
         return K8sMappers.InNodeDisplayOrder(NodesWithPods(nodesTask.Result.Items, podsTask.Result.Items.Select(K8sMappers.Pod)));
     }
 
+    /// <summary>
+    /// The node's active pods (finished ones excluded, so the list matches the node's pod count and the drain plan),
+    /// by namespace then name.
+    /// </summary>
     public async Task<IReadOnlyList<K8sPodSummary>> ListPodsOnNodeAsync(string secret, string node, CancellationToken ct = default)
     {
-        var pods = await Client(secret).CoreV1.ListPodForAllNamespacesAsync(fieldSelector: $"spec.nodeName={node}", cancellationToken: ct);
+        var pods = await Client(secret).CoreV1.ListPodForAllNamespacesAsync(
+            fieldSelector: $"spec.nodeName={node},{ActivePodsSelector}", cancellationToken: ct);
         return pods.Items.Select(K8sMappers.Pod)
             .OrderBy(p => p.Namespace, StringComparer.Ordinal)
             .ThenBy(p => p.Name, StringComparer.Ordinal)

@@ -15,6 +15,9 @@
 
     [Parameter] public IEnumerable<(string Group, string Resource, string Verb)> Needs { get; set; } = [];
 
+    /// <summary>Cluster checks (K8sPermissions.ClusterChecks keys) the page's controls are gated on, e.g. "nodes/patch".</summary>
+    [Parameter] public IEnumerable<string> ClusterNeeds { get; set; } = [];
+
     /// <summary>The namespace the page is scoped to; null = every probed namespace must grant it.</summary>
     [Parameter] public string? Namespace { get; set; }
 
@@ -26,5 +29,5 @@
         $"Connected as {Permissions?.Identity}. Missing for this page: {string.Join(", ", _missing)}. Reads work normally.";
 
     protected override void OnParametersSet() =>
-        _missing = Permissions is null ? [] : Permissions.Missing(Needs, Namespace);
+        _missing = Permissions is null ? [] : [.. Permissions.Missing(Needs, Namespace), .. Permissions.MissingCluster(ClusterNeeds)];
 }

@@ -541,4 +541,28 @@ public class K8sMappersTests
         w.Images.Should().Equal("backup:1");
         w.IsUnhealthy.Should().BeFalse();
     }
+
+    [Fact]
+    public void Pdb_maps_selector_rule_and_status()
+    {
+        var pdb = new V1PodDisruptionBudget
+        {
+            Metadata = new V1ObjectMeta { Name = "kafka", NamespaceProperty = "platform" },
+            Spec = new V1PodDisruptionBudgetSpec
+            {
+                MaxUnavailable = "25%",
+                Selector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["app"] = "kafka" } },
+            },
+            Status = new V1PodDisruptionBudgetStatus { DisruptionsAllowed = 0, CurrentHealthy = 3, DesiredHealthy = 3, ExpectedPods = 3 },
+        };
+
+        var mapped = K8sMappers.Pdb(pdb);
+
+        mapped.Should().BeEquivalentTo(new K8sPdb("platform", "kafka", new Dictionary<string, string> { ["app"] = "kafka" }, 0, "maxUnavailable 25%", 3, 3));
+        K8sMappers.Pdb(new V1PodDisruptionBudget
+        {
+            Metadata = new V1ObjectMeta { Name = "ledger", NamespaceProperty = "payments" },
+            Spec = new V1PodDisruptionBudgetSpec { MinAvailable = 3, Selector = new V1LabelSelector() },
+        }).Rule.Should().Be("minAvailable 3");
+    }
 }

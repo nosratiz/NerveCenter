@@ -209,14 +209,82 @@ public class NodesPageTests : K8sPageTestBase
     }
 
     [Fact]
-    public void Menu_offers_yaml_pods_and_kubectl_and_ends_there()
+    public void Menu_offers_yaml_pods_kubectl_and_drain()
     {
         var cut = RenderPage();
 
         OpenMenu(cut, NotReady);
 
         cut.FindAll(".mud-menu-item").Select(i => i.TextContent.Trim()).Should()
-            .Equal("View YAML", "Show 34 pods on this node", "Copy kubectl command");
+            .Equal("View YAML", "Show 34 pods on this node", "Copy kubectl command", "Drain node…");
+        cut.FindAll(".k8s-drain").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Drain_is_hidden_without_the_eviction_cluster_check()
+    {
+        var admin = TestData.AdminAccess();
+        Operations.GetAccessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => admin with { ClusterChecks = new Dictionary<string, bool>(admin.ClusterChecks) { ["pods/eviction/create"] = false } });
+        var cut = RenderPage();
+
+        OpenMenu(cut, Healthy);
+
+        cut.FindAll(".mud-menu-item").Select(i => i.TextContent.Trim()).Should().NotContain("Drain node…");
+        cut.FindAll(".k8s-cordon").Should().NotBeEmpty("nodes/patch is still allowed");
+    }
+
+    [Fact]
+    public void Rbac_chip_follows_the_cluster_checks_the_buttons_use()
+    {
+        var admin = TestData.AdminAccess("ops");
+        Operations.GetAccessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => admin with { ClusterChecks = new Dictionary<string, bool>(admin.ClusterChecks) { ["nodes/patch"] = false } });
+        var cut = RenderPage();
+
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-rbac-chip").Should().HaveCount(1));
+        cut.Find(".k8s-rbac-chip").TextContent.Should().Contain("limited (RBAC)");
+        var chip = cut.FindComponent<RbacChip>();
+        chip.Instance.TooltipText.Should().Contain("nodes · patch").And.NotContain("pods/eviction");
+        cut.FindAll(".k8s-cordon").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Admin_sees_no_rbac_chip()
+    {
+        var cut = RenderPage();
+
+        cut.FindAll(".k8s-rbac-chip").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Conditions_lay_out_in_a_div_inside_the_cell()
+    {
+        var cut = RenderPage();
+
+        Row(cut, Pressured).QuerySelector("td > div.k8s-node-conditions .k8s-pressure").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Drain_opens_the_drain_dialog_with_polling_paused_and_reloads_after_close()
+    {
+        Operations.GetDrainInputsAsync(Secret, Healthy, Arg.Any<CancellationToken>())
+            .Returns(_ => new K8sDrainInputs(TestData.Nodes().Single(n => n.Name == Healthy), [], [], new Dictionary<string, int>()));
+        var cut = RenderPage();
+
+        OpenMenu(cut, Healthy);
+        ClickMenuItem(cut, "Drain node…");
+
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-drain-dialog").Should().HaveCount(1));
+        cut.Find(".k8s-drain-title").TextContent.Should().Contain(Healthy);
+        var lists = ListCalls();
+        Time.Advance(TimeSpan.FromSeconds(10));
+        ListCalls().Should().Be(lists, "the poller is paused while the dialog is open");
+
+        cut.Find(".k8s-drain-cancel").Click();
+
+        cut.WaitForAssertion(() => cut.FindAll(".k8s-drain-dialog").Should().BeEmpty());
+        cut.WaitForAssertion(() => ListCalls().Should().BeGreaterThan(lists));
     }
 
     [Fact]

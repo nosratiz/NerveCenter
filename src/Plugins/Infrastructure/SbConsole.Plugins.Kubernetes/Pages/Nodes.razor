@@ -25,7 +25,7 @@
     <K8sPageHeader Title="Nodes">
         <Chips>
             <K8sConnectionPicker Loading="_loading" SelectionChanged="OnConnectionChangedAsync" />
-            <RbacChip Permissions="_permissions" Needs="K8sPermissions.NodeActions" />
+            <RbacChip Permissions="_permissions" ClusterNeeds="K8sPermissions.NodeClusterActions" />
         </Chips>
         <Meta>
             @if (_nodes is not null)
@@ -134,7 +134,8 @@
                                 <div class="k8s-mono k8s-node-name">@node.Name</div>
                                 <div class="k8s-mono k8s-muted k8s-node-caption">@Caption(node)</div>
                             </td>
-                            <td class="k8s-node-conditions">
+                            <td>
+                                <div class="k8s-node-conditions">
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(ready ? Color.Success : Color.Error)"
                                          Class="k8s-node-ready">@(ready ? "Ready" : "NotReady")</MudChip>
                                 @if (!ready)
@@ -145,6 +146,7 @@
                                 {
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" Class="k8s-pressure">@pressure</MudChip>
                                 }
+                                </div>
                             </td>
                             <td class="k8s-mono k8s-node-roles">@string.Join(" · ", node.Roles.Concat(node.Taints))</td>
                             <td class="k8s-mono k8s-node-kubelet">@node.KubeletVersion</td>
@@ -213,6 +215,11 @@
                     Show @node.PodCount.ToString(Inv) @(node.PodCount == 1 ? "pod" : "pods") on this node
                 </MudMenuItem>
                 <MudMenuItem Class="k8s-copy-kubectl" Icon="@Icons.Material.Outlined.ContentCopy" OnClick="() => CopyKubectlAsync(node)">Copy kubectl command</MudMenuItem>
+                @if (CanDrain)
+                {
+                    <MudDivider />
+                    <MudMenuItem Class="k8s-drain" Icon="@Icons.Material.Outlined.Logout" IconColor="Color.Error" OnClick="() => DrainAsync(node)">Drain node…</MudMenuItem>
+                }
             </MudMenu>
         </div>
     };
@@ -244,6 +251,9 @@
     // RBAC (spec §11): cordon/uncordon is a cluster-scoped nodes patch, answered by the cluster check (not a namespaced
     // rules review). Until the probe answers nothing mutating renders; the server's 403 stays the backstop.
     private bool CanPatchNodes => _permissions is { } p && p.CanCluster(K8sPermissions.NodesPatch);
+
+    // Drain cordons (nodes patch) and then evicts (pods/eviction create, cluster-wide check).
+    private bool CanDrain => CanPatchNodes && _permissions!.CanCluster(K8sPermissions.PodsEvictionCreate);
 
     private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
 
@@ -450,6 +460,25 @@
                 () => ListNodePods.HandleAsync(connection.Id, node.Name, ct), Link);
             return await reference.Result;
         });
+    }
+
+    /// <summary>The drain dialog does its own preview, typed confirmation and progress; the page reloads once it closes.</summary>
+    private async Task DrainAsync(K8sNodeInfo node)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await DrainDialog.ShowAsync(Dialogs, connection, node);
+            return await reference.Result;
+        });
+        if (!_disposed)
+        {
+            await LoadAsync();
+        }
     }
 
     private async Task ViewYamlAsync(K8sNodeInfo node)

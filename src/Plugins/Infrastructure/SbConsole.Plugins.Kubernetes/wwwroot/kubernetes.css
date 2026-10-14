@@ -203,9 +203,34 @@ pre.k8s-log mark.k8s-log-mark-current { background: var(--mud-palette-warning); 
 .k8s-header .k8s-pool-filter { width: 160px; flex: none; }
 .k8s-header .k8s-pool-filter .mud-input-control { margin-top: 0; }
 .k8s-node-caption { font-size: 0.72rem; }
-.k8s-node-conditions { display: flex; flex-wrap: wrap; gap: 4px; }
+.k8s-node-conditions { display: flex; flex-wrap: wrap; gap: 4px; } /* a div inside the cell: flex on a <td> breaks table layout */
 .k8s-node-usage { display: flex; flex-direction: column; gap: 3px; min-width: 96px; }
 .k8s-node-usage-text { font-size: 0.78rem; }
 .k8s-node-notready { background: var(--mud-palette-error-hover); }
 .k8s-node-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .k8s-nodes-audited { margin-left: 8px; }
+
+/* Drain dialog (mockup 3h) */
+.k8s-drain { color: var(--mud-palette-error); }
+.k8s-drain-title { display: flex; align-items: center; gap: 10px; }
+.k8s-drain-title-text { color: var(--mud-palette-error); font-weight: 500; }
+.k8s-drain-title .k8s-prod-chip { margin-left: auto; }
+.k8s-drain-body { display: flex; flex-direction: column; gap: 12px; }
+.k8s-drain-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 600px) { .k8s-drain-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.k8s-drain-tiles .k8s-tile { padding: 8px 10px; }
+.k8s-drain-tiles .k8s-tile-value { font-size: 1.1rem; }
+.k8s-drain-pods { max-height: 300px; overflow: auto; }
+.k8s-drain-pods-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--mud-palette-divider); font-size: 0.75rem; }
+.k8s-drain-pods-head .k8s-drain-filter { margin-left: auto; max-width: 180px; }
+.k8s-drain-blocked-row { background: var(--mud-palette-warning-hover); }
+.k8s-drain-ignored-row { color: var(--mud-palette-text-secondary); }
+.k8s-drain-options { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.k8s-drain-options .k8s-drain-grace { max-width: 140px; margin-left: auto; }
+.k8s-drain-audit { font-size: 0.72rem; }
+.k8s-disabled-soft { opacity: 0.45; }
+.k8s-drain-progress { display: flex; align-items: center; gap: 10px; }
+.k8s-drain-progress .mud-progress-linear { flex: 1; }
+.k8s-drain-results { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; }
+.k8s-drain-result { display: flex; align-items: center; gap: 8px; }
+.k8s-drain-summary { font-weight: 500; }

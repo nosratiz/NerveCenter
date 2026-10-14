@@ -43,6 +43,46 @@ public class NodeOperationsTests(K3sFixture k3s)
     }
 
     [DockerFact]
+    public async Task Finished_pods_are_not_listed_on_the_node_so_the_list_matches_the_pod_count()
+    {
+        const string name = "sbc-finished";
+        var node = await NodeNameAsync();
+        await k3s.EnsureNamespaceAsync(K3sFixture.TestNamespace);
+        try
+        {
+            await k3s.Admin.CoreV1.CreateNamespacedPodAsync(new k8s.Models.V1Pod
+            {
+                Metadata = new k8s.Models.V1ObjectMeta { Name = name },
+                Spec = new k8s.Models.V1PodSpec
+                {
+                    RestartPolicy = "Never",
+                    Containers = [new k8s.Models.V1Container { Name = "done", Image = "busybox:1.36", Command = ["true"] }],
+                },
+            }, K3sFixture.TestNamespace);
+            await K3sFixture.WaitAsync(async () =>
+                (await k3s.Admin.CoreV1.ReadNamespacedPodAsync(name, K3sFixture.TestNamespace)).Status?.Phase == "Succeeded",
+                TimeSpan.FromMinutes(2));
+
+            var pods = await k3s.Operations.ListPodsOnNodeAsync(k3s.AdminSecret, node);
+            var listed = (await k3s.Operations.ListNodesAsync(k3s.AdminSecret)).Single();
+
+            pods.Should().NotContain(p => p.Name == name);
+            pods.Should().HaveCount(listed.PodCount);
+        }
+        finally
+        {
+            try
+            {
+                await k3s.Admin.CoreV1.DeleteNamespacedPodAsync(name, K3sFixture.TestNamespace, gracePeriodSeconds: 0);
+            }
+            catch (HttpOperationException)
+            {
+                // Already gone.
+            }
+        }
+    }
+
+    [DockerFact]
     public async Task Cordon_sets_unschedulable_and_uncordon_clears_it()
     {
         var name = await NodeNameAsync();
