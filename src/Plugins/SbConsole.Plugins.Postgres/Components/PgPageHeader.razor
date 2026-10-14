@@ -1,0 +1,28 @@
+@* The header bar every PostgreSQL page opens with (mockup 1a-1g): title, connection chips, mono meta,
+   right-aligned actions. Also links the plugin stylesheet, so no host wiring is needed. *@
+<HeadContent>
+    <link rel="stylesheet" href="_content/SbConsole.Plugins.Postgres/postgres.css" />
+</HeadContent>
+
+<div class="pg-header @Class">
+    <span class="pg-title">@Title</span>
+    @Chips
+    @if (Meta is not null)
+    {
+        <span class="pg-meta">@Meta</span>
+    }
+    <span class="pg-spacer"></span>
+    <div class="pg-actions">@Actions</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    [Parameter] public RenderFragment? Chips { get; set; }
+
+    [Parameter] public RenderFragment? Meta { get; set; }
+
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+}

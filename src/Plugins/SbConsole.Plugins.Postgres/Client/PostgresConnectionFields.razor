@@ -1,0 +1,119 @@
+@* src/Plugins/SbConsole.Plugins.Postgres/Client/PostgresConnectionFields.razor -- structured connection form
+   (host, port, database, credentials, SSL mode, timeouts, access mode). *@
+@using MudBlazor
+
+<MudTextField T="string" Class="pg-conn-host" Label="Host" Value="_host" ValueChanged="OnHostChanged" Immediate="true"
+              Error="@(HostError is not null)" ErrorText="@HostError" />
+
+@* No Min/Max on the numeric fields: MudBlazor would silently clamp and hide the validation message. *@
+<MudNumericField T="int" Class="mt-3 pg-conn-port" Label="Port" Value="_port" ValueChanged="OnPortChanged" Immediate="true"
+                 Error="@(PortError is not null)" ErrorText="@PortError" />
+
+<MudTextField T="string" Class="mt-3 pg-conn-database" Label="Database" Value="_database" ValueChanged="OnDatabaseChanged" Immediate="true" />
+<MudTextField T="string" Class="mt-3 pg-conn-username" Label="Username" Value="_username" ValueChanged="OnUsernameChanged" Immediate="true" />
+<MudTextField T="string" Class="mt-3 pg-conn-password" Label="Password" InputType="InputType.Password" Value="_password" ValueChanged="OnPasswordChanged" Immediate="true" />
+
+<MudSelect T="string" Class="mt-3 pg-conn-ssl" Label="SSL mode" Value="_sslMode" ValueChanged="OnSslChanged">
+    @foreach (var mode in PostgresConnectionSettings.SslModes)
+    {
+        <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
+    }
+</MudSelect>
+
+<MudRadioGroup T="PgAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
+    <MudRadio T="PgAccessMode" Value="PgAccessMode.ReadOnly" Class="pg-conn-mode-readonly">Read-only</MudRadio>
+    <MudRadio T="PgAccessMode" Value="PgAccessMode.ReadWrite" Class="pg-conn-mode-readwrite">Read-write</MudRadio>
+</MudRadioGroup>
+<MudText Typo="Typo.caption" Class="pg-conn-mode-help">Read-only runs statements in a read-only transaction. It is not a privilege boundary — for hard enforcement connect as a read-only role.</MudText>
+
+<MudNumericField T="int" Class="mt-3 pg-conn-connect-timeout" Label="Connect timeout (s)" Value="_connectTimeoutS" ValueChanged="OnConnectTimeoutChanged" Immediate="true"
+                 Error="@(ConnectError is not null)" ErrorText="@ConnectError" />
+<MudNumericField T="int" Class="mt-3 pg-conn-statement-timeout" Label="Statement timeout (s)" Value="_statementTimeoutS" ValueChanged="OnStatementTimeoutChanged" Immediate="true"
+                 Error="@(StatementError is not null)" ErrorText="@StatementError" />
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    // Part of the host contract for connection forms; unused here.
+    [Parameter] public bool IsProd { get; set; }
+
+    private const string TimeoutRangeMessage = "Must be between 1 and 3600 s.";
+
+    private string _host = "";
+    private int _port = 5432;
+    private string _database = "postgres";
+    private string _username = "";
+    private string _password = "";
+    private string _sslMode = "Prefer";
+    private PgAccessMode _mode = PgAccessMode.ReadOnly;
+    private int _connectTimeoutS = 5;
+    private int _statementTimeoutS = 30;
+    private bool _hostTouched;
+    private bool _portTouched;
+    private bool _connectTouched;
+    private bool _statementTouched;
+
+    // Errors show only once the user has edited that field, so a fresh empty form isn't invalid on open.
+    private string? HostError => _hostTouched && string.IsNullOrWhiteSpace(_host) ? "A host is required." : null;
+    private string? PortError => _portTouched && _port is < 1 or > 65535 ? "Port must be 1–65535." : null;
+    private string? ConnectError => _connectTouched && _connectTimeoutS is < 1 or > PostgresConnectionSettings.MaxConnectTimeoutS ? $"Must be between 1 and {PostgresConnectionSettings.MaxConnectTimeoutS} s." : null;
+    private string? StatementError => _statementTouched && _statementTimeoutS is < 1 or > PostgresConnectionSettings.MaxTimeoutS ? TimeoutRangeMessage : null;
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips whatever
+    // this component last emitted back into InitialSecret, and re-parsing would fight in-progress typing.
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(InitialSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var s = PostgresConnectionSettings.Parse(InitialSecret);
+            _host = s.Host;
+            _port = s.Port;
+            _database = s.Database;
+            _username = s.Username;
+            _password = s.Password;
+            _sslMode = s.SslMode;
+            _mode = s.Mode;
+            _connectTimeoutS = s.ConnectTimeoutS;
+            _statementTimeoutS = s.StatementTimeoutS;
+        }
+        catch (FormatException)
+        {
+            // Unparsable initial secret: keep the defaults so the form still renders.
+        }
+    }
+
+    private Task OnHostChanged(string? v) { _hostTouched = true; _host = v ?? ""; return RaiseChangedAsync(); }
+    private Task OnPortChanged(int v) { _portTouched = true; _port = v; return RaiseChangedAsync(); }
+    private Task OnDatabaseChanged(string? v) { _database = v ?? ""; return RaiseChangedAsync(); }
+    private Task OnUsernameChanged(string? v) { _username = v ?? ""; return RaiseChangedAsync(); }
+    private Task OnPasswordChanged(string? v) { _password = v ?? ""; return RaiseChangedAsync(); }
+    private Task OnSslChanged(string? v) { _sslMode = v ?? "Prefer"; return RaiseChangedAsync(); }
+    private Task OnModeChanged(PgAccessMode v) { _mode = v; return RaiseChangedAsync(); }
+    private Task OnConnectTimeoutChanged(int v) { _connectTouched = true; _connectTimeoutS = v; return RaiseChangedAsync(); }
+    private Task OnStatementTimeoutChanged(int v) { _statementTouched = true; _statementTimeoutS = v; return RaiseChangedAsync(); }
+
+    private Task RaiseChangedAsync()
+    {
+        // Mid-typing states (empty host, port 0, a 0 timeout) can't be formatted: skip this keystroke's
+        // SecretChanged so the last good secret stays in effect -- throwing out of a Blazor event handler
+        // would kill the circuit.
+        string secret;
+        try
+        {
+            secret = new PostgresConnectionSettings(_host.Trim(), _port,
+                string.IsNullOrWhiteSpace(_database) ? "postgres" : _database.Trim(),
+                _username, _password, _sslMode, _connectTimeoutS, _statementTimeoutS, _mode).ToSecretString();
+        }
+        catch (ArgumentException)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SecretChanged.InvokeAsync(secret);
+    }
+}

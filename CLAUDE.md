@@ -9,7 +9,8 @@ SbConsole: a team-hosted Blazor web app that acts as a **plugin host platform**.
 encrypted secrets, settings, audit log, plugin storage. Plugins provide domain features:
 `SbConsole.Plugins.ServiceBus` (Azure Service Bus), `SbConsole.Plugins.Kafka` (Apache Kafka),
 `SbConsole.Plugins.Aws` (AWS SQS/SNS), `SbConsole.Plugins.RabbitMq` (RabbitMQ), `SbConsole.Plugins.Redis` (Redis) and
-`SbConsole.Plugins.Sqlite` (SQLite files: read-only browsing and queries, opt-in write mode, backups and restore).
+`SbConsole.Plugins.Sqlite` (SQLite files: read-only browsing and queries, opt-in write mode, backups and restore) and
+`SbConsole.Plugins.Postgres` (PostgreSQL servers: overview, browse, query, live activity and blocking chains, maintenance).
 Full architecture and decision history: [docs/design.md](docs/design.md) — read it before making
 any non-trivial change; it documents *why* things are shaped the way they are, not just what
 exists.
@@ -41,6 +42,7 @@ Local dev stack (brokers the plugins talk to — see [docker/README.md](docker/R
 docker compose up -d                              # Kafka (KRaft, seeded topics) + Kafka UI
 docker compose --profile servicebus up -d         # + Azure Service Bus emulator (SQL Server-backed)
 docker compose --profile rabbitmq up -d           # + RabbitMQ 3.13 (management + shovel), seeded vhost /orders, AMQP on 5673
+docker compose --profile postgres up -d           # + PostgreSQL 16 (host port 5433; databases app, analytics, billing; a live lock-contention demo for Activity)
 docker compose --profile sqlite --profile app up -d --build   # + SQLite demo DBs (reports, shop, corrupt, reference, new) at /sqlite; demo connections auto-created (SBC_DEMO_CONNECTIONS)
 docker compose --profile app up -d --build        # SbConsole itself, containerized (needs .env, see .env.example)
 docker compose --profile servicebus --profile app down -v   # full reset, drops volumes
@@ -60,7 +62,8 @@ src/
     ├── SbConsole.Plugins.Kafka/
     ├── SbConsole.Plugins.Aws/
     ├── SbConsole.Plugins.RabbitMq/
-    └── SbConsole.Plugins.Sqlite/
+    ├── SbConsole.Plugins.Sqlite/
+    └── SbConsole.Plugins.Postgres/
 tests/  — one xUnit project per src project, plus SbConsole.IntegrationTests (Testcontainers, not yet built)
 ```
 
@@ -96,7 +99,7 @@ The seam every plugin is built against — read `docs/design.md` §3 for the ful
 
 - Core handlers: xUnit + FluentAssertions + NSubstitute (substitute `IAuditWriter`, stores, clock via `Microsoft.Extensions.TimeProvider.Testing`).
 - Blazor components: bUnit.
-- Plugins (Service Bus, Kafka, AWS, RabbitMQ): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further. Deliberate exception: SQLite plugin operations are tested against real temp-file databases (no Docker, no network); handlers and pages still use a substituted operations interface (see docs/design.md §15).
+- Plugins (Service Bus, Kafka, AWS, RabbitMQ, Redis): unit tests only, against a substitute of the plugin's operations interface — no Testcontainers, no real broker traffic, by deliberate choice until the plugin shape proves out further. Deliberate exception: SQLite plugin operations are tested against real temp-file databases (no Docker, no network); handlers and pages still use a substituted operations interface (see docs/design.md §15). Second exception: Postgres plugin operations are tested against a real `postgres:16` Testcontainer, skipped when Docker is unavailable (see docs/design.md §18).
 - `SbConsole.IntegrationTests` (Testcontainers + real/emulated brokers) is planned but not yet built.
 
 ### Stack (non-negotiable, per design doc §9)

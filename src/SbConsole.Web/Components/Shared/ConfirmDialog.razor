@@ -1,8 +1,18 @@
 @* src/SbConsole.Web/Components/Shared/ConfirmDialog.razor *@
-<MudDialog>
+@using SbConsole.Sdk
+<MudDialog Class="@(Detailed && Destructive ? "confirm-destructive" : null)"
+           Style="@(Detailed && Destructive ? "border: 1px solid var(--mud-palette-error);" : null)">
     <DialogContent>
+        @if (Detailed && IsProd)
+        {
+            <MudText Typo="Typo.overline" Color="Color.Error" Class="confirm-prod-chip mb-2">PROD</MudText>
+        }
         <MudText Class="mb-2">
-            @if (Count is { } count)
+            @if (!string.IsNullOrEmpty(Consequence))
+            {
+                @Consequence
+            }
+            else if (Count is { } count)
             {
                 <text>This will @Verb.ToLowerInvariant() @count item(s) from <strong>@Target</strong>. This cannot be undone.</text>
             }
@@ -11,18 +21,32 @@
                 <text>This will @Verb.ToLowerInvariant() <strong>@Target</strong>. This cannot be undone.</text>
             }
         </MudText>
+        @if (Details is { Count: > 0 })
+        {
+            <dl class="confirm-details mb-2" style="display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0;">
+                @foreach (var d in Details)
+                {
+                    <dt style="color: var(--mud-palette-text-secondary);">@d.Label</dt>
+                    <dd style="margin: 0; word-break: break-word; white-space: pre-wrap; max-height: 12em; overflow: auto;">@d.Value</dd>
+                }
+            </dl>
+        }
         @if (RequireTypedConfirmation)
         {
             <MudText Typo="Typo.body2" Class="mb-1">Type <strong>@Target</strong> to confirm.</MudText>
             <MudTextField T="string" @bind-Value="_typedValue" Immediate="true" Placeholder="@Target" />
         }
+        @if (!string.IsNullOrEmpty(AuditAction))
+        {
+            <MudText Typo="Typo.caption" Class="mt-2">Audited as @AuditAction with your name.</MudText>
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Class="confirm-action" Color="Color.Error" Variant="Variant.Filled"
+        <MudButton Class="confirm-action" Color="@(Detailed && !Destructive ? Color.Primary : Color.Error)" Variant="Variant.Filled"
                    Disabled="@(RequireTypedConfirmation && _typedValue != Target)"
                    OnClick="Confirm">
-            @Verb
+            @(Detailed ? $"{Verb} {Target}" : Verb)
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -34,6 +58,12 @@
     [Parameter, EditorRequired] public string Target { get; set; } = "";
     [Parameter] public int? Count { get; set; }
     [Parameter] public bool RequireTypedConfirmation { get; set; }
+    [Parameter] public bool IsProd { get; set; }
+    [Parameter] public string? Consequence { get; set; }
+    [Parameter] public IReadOnlyList<ConfirmationDetail>? Details { get; set; }
+    [Parameter] public string? AuditAction { get; set; }
+    [Parameter] public bool Destructive { get; set; }
+    [Parameter] public bool Detailed { get; set; }
 
     private string _typedValue = "";
 

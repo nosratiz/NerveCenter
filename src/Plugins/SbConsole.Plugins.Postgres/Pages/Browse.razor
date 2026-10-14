@@ -1,0 +1,1239 @@
+@* Mockup 1b (dark: Data tab, light: Indexes tab). Reading writes nothing; the index menu's REINDEX and Drop are the only mutations (confirmation-gated, read-write connections only). *@
+@page "/p/postgres/browse"
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Postgres.Client
+@using SbConsole.Plugins.Postgres.Browse
+@inject ListSchemaQueryHandler ListSchema
+@inject GetObjectDetailQueryHandler GetDetail
+@inject GetDdlQueryHandler GetDdl
+@inject PreviewRowsQueryHandler PreviewRows
+@inject ExportTableCsvCommandHandler ExportCsv
+@inject ReindexIndexCommandHandler ReindexIndex
+@inject DropIndexCommandHandler DropIndex
+@inject IConfirmationService Confirmation
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject TimeProvider Clock
+@implements IAsyncDisposable
+
+<PageTitle>PostgreSQL browse</PageTitle>
+
+<div class="pg-page">
+    <PgPageHeader Title="Browse">
+        <Chips>
+            <PgConnectionPicker Loading="Busy" ManageUrl="false" SelectionChanged="OnConnectionChangedAsync" />
+            @if (_connection is not null)
+            {
+                <PgDatabasePicker ConnectionId="_connection.Id" Default="@(_connection.Summary.GetValueOrDefault("Database"))"
+                                  ManageUrl="false" SelectedChanged="OnDatabaseChangedAsync" />
+            }
+        </Chips>
+        <Actions>
+            @if (_detail is { } current && current.Kind != PgObjectKind.Function)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-open-in-query" Href="@OpenInQueryHref(current)">Open in Query</MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-export-csv" Disabled="_exporting" OnClick="ExportAsync">@(_exporting ? "Exporting…" : "Export CSV")</MudButton>
+            }
+        </Actions>
+    </PgPageHeader>
+
+    @if (_connection is not null)
+    {
+        @if (_database == "")
+        {
+            <div class="pg-body">
+                <div class="pg-browse-empty pg-no-database">
+                    <strong>No database selected.</strong>
+                    <div class="pg-muted">This connection lists no databases it can open. Check the role's CONNECT privilege, or pick another connection.</div>
+                </div>
+            </div>
+        }
+        else if (_treeError is not null)
+        {
+            <div class="pg-body">
+                <PgErrorAlert Info="@(new PgErrorInfo(_treeError, null, null, null, null, null, false))" Title="Couldn't load the schema." Class="pg-browse-error">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-browse-retry" OnClick="RetryTreeAsync">Retry</MudButton>
+                </PgErrorAlert>
+            </div>
+        }
+        else
+        {
+            <div class="pg-browse">
+                <div class="pg-tree-panel">
+                    <MudTextField T="string" Class="pg-tree-filter" Value="_filter" ValueChanged="OnFilterChanged" Immediate="true" DebounceInterval="250"
+                                  Placeholder="Filter objects…" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
+                    @if (_tree is null)
+                    {
+                        <div class="pg-tree-loading">
+                            @for (var i = 0; i < 6; i++)
+                            {
+                                <MudSkeleton Width="@($"{90 - i * 8}%")" />
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="pg-tree">
+                            @foreach (var schema in VisibleSchemas)
+                            {
+                                var schemaOpen = IsOpen(SchemaKey(schema.Name), schema.Match > 0);
+                                <button type="button" class="pg-tree-schema" aria-expanded="@(schemaOpen ? "true" : "false")"
+                                        @onclick="() => Toggle(SchemaKey(schema.Name))">
+                                    <MudIcon Icon="@(schemaOpen ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                                    <MudIcon Icon="@(schemaOpen ? Icons.Material.Filled.FolderOpen : Icons.Material.Filled.Folder)" Size="Size.Small" />
+                                    <span class="pg-tree-name">@schema.Name</span>
+                                    <span class="pg-tree-badge">@(Filtering ? $"{schema.Match} of {schema.Total}" : schema.Total.ToString())</span>
+                                </button>
+                                @if (schemaOpen)
+                                {
+                                    @foreach (var group in schema.Groups)
+                                    {
+                                        var groupKey = GroupKey(schema.Name, group.Title);
+                                        var groupOpen = IsOpen(groupKey, true);
+                                        var shown = _showAll.Contains(groupKey) ? group.Items.Count : Math.Min(group.Items.Count, MaxItems);
+                                        <button type="button" class="pg-tree-group" aria-expanded="@(groupOpen ? "true" : "false")"
+                                                @onclick="() => Toggle(groupKey)">
+                                            <MudIcon Icon="@(groupOpen ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                                            @group.Title
+                                            <span class="pg-tree-badge">@group.Items.Count</span>
+                                        </button>
+                                        @if (groupOpen)
+                                        {
+                                            @foreach (var node in group.Items.Take(shown))
+                                            {
+                                                var nodeOid = node.Oid;
+                                                <button type="button" class="@("pg-tree-item" + (node.Oid == _selectedOid ? " pg-selected" : ""))"
+                                                        aria-current="@(node.Oid == _selectedOid ? "true" : null)" @onclick="() => SelectObjectAsync(nodeOid)">
+                                                    <MudIcon Icon="@KindIcon(node.Kind)" Size="Size.Small" />
+                                                    <span class="pg-tree-name">@node.Name</span>
+                                                    @if (node.RowEstimate is { } estimate and >= 0)
+                                                    {
+                                                        <span class="pg-tree-badge">@PgFormat.Compact(estimate)</span>
+                                                    }
+                                                </button>
+                                            }
+                                            @if (shown < group.Items.Count)
+                                            {
+                                                <button type="button" class="pg-tree-more" @onclick="() => _showAll.Add(groupKey)">@(group.Items.Count - shown) more…</button>
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        </div>
+                        <div class="pg-footnote">Row badges are <span class="pg-mono">reltuples</span> estimates.</div>
+                    }
+                </div>
+
+                <div class="pg-object-panel">
+                    @if (_exportMessage is not null)
+                    {
+                        <MudAlert Severity="@(_exportFailed ? Severity.Error : Severity.Success)" Dense="true" Variant="Variant.Outlined" Class="pg-export-status"
+                                  ShowCloseIcon="true" CloseIconClicked="() => _exportMessage = null">@_exportMessage</MudAlert>
+                    }
+                    @if (_selectedOid is null)
+                    {
+                        <div class="pg-browse-empty pg-muted">Select a table, view or function from the tree.</div>
+                    }
+                    else if (_detailError is not null)
+                    {
+                        <PgErrorAlert Info="@(new PgErrorInfo(_detailError, null, null, null, null, null, false))" Title="Couldn't load this object." Class="pg-detail-error" />
+                    }
+                    else if (_detailMissing)
+                    {
+                        <div class="pg-browse-empty pg-muted pg-detail-missing">This object no longer exists. It may have been dropped or renamed — refresh the tree.</div>
+                    }
+                    else if (_detail is not { } d)
+                    {
+                        <MudSkeleton Width="40%" />
+                        <MudSkeleton Width="70%" />
+                        <MudSkeleton Height="120px" SkeletonType="SkeletonType.Rectangle" />
+                    }
+                    else
+                    {
+                        <div class="pg-object-head">
+                            <span class="pg-object-title pg-mono">@d.Schema.@d.Name</span>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-object-kind">@KindLabel(d.Kind)</MudChip>
+                            <span class="pg-object-meta pg-mono">@Meta(d)</span>
+                            <span class="pg-object-note">reads only — nothing on this page writes</span>
+                        </div>
+
+                        <MudTabs Elevation="0" Rounded="false" ActivePanelIndex="TabIndex" ActivePanelIndexChanged="OnTabChangedAsync" Class="pg-tabs" KeepPanelsAlive="false">
+                            <MudTabPanel Text="Data" Disabled="@(d.Kind == PgObjectKind.Function)">
+                                @DataTab(d)
+                            </MudTabPanel>
+                            <MudTabPanel>
+                                <TabContent>Columns <span class="pg-mono pg-tab-count">@d.Columns.Count</span></TabContent>
+                                <ChildContent>
+                                    <MudTable T="PgColumn" Class="pg-columns" Items="d.Columns" Dense="true" Hover="true" Elevation="0">
+                                        <HeaderContent>
+                                            <MudTh>Name</MudTh><MudTh>Type</MudTh><MudTh>Nullable</MudTh><MudTh>Default</MudTh><MudTh>Key</MudTh><MudTh>Comment</MudTh>
+                                        </HeaderContent>
+                                        <RowTemplate>
+                                            <MudTd Class="pg-mono">@context.Name</MudTd>
+                                            <MudTd Class="pg-mono">@context.Type</MudTd>
+                                            <MudTd>@(context.Nullable ? "yes" : "no")</MudTd>
+                                            <MudTd Class="pg-mono">@context.Default</MudTd>
+                                            <MudTd>
+                                                @if (context.IsPrimaryKey)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">PK</MudChip>
+                                                }
+                                                @if (context.References is { } reference)
+                                                {
+                                                    <span class="pg-mono">→ @reference</span>
+                                                }
+                                            </MudTd>
+                                            <MudTd>@context.Comment</MudTd>
+                                        </RowTemplate>
+                                    </MudTable>
+                                </ChildContent>
+                            </MudTabPanel>
+                            <MudTabPanel>
+                                <TabContent>Indexes <span class="pg-mono pg-tab-count">@d.Indexes.Count</span></TabContent>
+                                <ChildContent>@IndexesTab(d)</ChildContent>
+                            </MudTabPanel>
+                            <MudTabPanel>
+                                <TabContent>Constraints <span class="pg-mono pg-tab-count">@d.Constraints.Count</span></TabContent>
+                                <ChildContent>
+                                    <MudTable T="PgConstraint" Class="pg-constraints" Items="d.Constraints" Dense="true" Hover="true" Elevation="0">
+                                        <HeaderContent><MudTh>Name</MudTh><MudTh>Type</MudTh><MudTh>Definition</MudTh></HeaderContent>
+                                        <RowTemplate>
+                                            <MudTd Class="pg-mono">@context.Name</MudTd>
+                                            <MudTd>@context.Type</MudTd>
+                                            <MudTd Class="pg-mono">@context.Definition</MudTd>
+                                        </RowTemplate>
+                                    </MudTable>
+                                </ChildContent>
+                            </MudTabPanel>
+                            <MudTabPanel Text="DDL">
+                                @if (_ddlError is not null)
+                                {
+                                    <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined" Class="pg-ddl-error">@_ddlError</MudAlert>
+                                }
+                                else if (_ddlLoading)
+                                {
+                                    <MudSkeleton Height="120px" SkeletonType="SkeletonType.Rectangle" />
+                                }
+                                else if (_ddl is null)
+                                {
+                                    <div class="pg-muted">No DDL is available for this object.</div>
+                                }
+                                else
+                                {
+                                    <div class="pg-actions">
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" Class="pg-ddl-copy" OnClick="() => CopyAsync(_ddl)">Copy</MudButton>
+                                    </div>
+                                    <pre class="pg-ddl">@_ddl</pre>
+                                }
+                            </MudTabPanel>
+                        </MudTabs>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private const int MaxItems = 50;
+    private const string BrowsePath = "/p/postgres/browse";
+    private static readonly string[] TabNames = ["data", "columns", "indexes", "constraints", "ddl"];
+    private static readonly int[] PageSizes = [25, 50, 100];
+
+    private static readonly (PgFilterOp Op, string Label)[] Operators =
+    [
+        (PgFilterOp.Eq, "="), (PgFilterOp.NotEq, "<>"), (PgFilterOp.Gt, ">"), (PgFilterOp.Gte, ">="), (PgFilterOp.Lt, "<"), (PgFilterOp.Lte, "<="),
+        (PgFilterOp.Like, "like"), (PgFilterOp.ILike, "ilike"), (PgFilterOp.IsNull, "is null"), (PgFilterOp.IsNotNull, "is not null"), (PgFilterOp.Contains, "@>"),
+    ];
+
+    private sealed record TreeGroup(string Title, IReadOnlyList<PgObjectNode> Items);
+    private sealed record TreeSchema(string Name, int Total, int Match, IReadOnlyList<TreeGroup> Groups);
+
+    private readonly CancellationTokenSource _cts = new();
+    private readonly HashSet<string> _expanded = [];
+    private readonly HashSet<string> _collapsed = [];
+    private readonly HashSet<string> _showAll = [];
+    private readonly HashSet<(int Row, int Col)> _jsonOpen = [];
+    private readonly Dictionary<string, PgFilterOp> _ops = [];
+    private readonly Dictionary<string, string?> _values = [];
+
+    private ConnectionInfo? _connection;
+    private string? _database;
+    private (Guid, string)? _treeKey;
+    private PgSchemaTree? _tree;
+    private string? _treeError;
+    private string _filter = "";
+    private uint? _pendingOid;
+    private uint? _selectedOid;
+    private PgObjectDetail? _detail;
+    private bool _detailLoading;
+    private bool _detailMissing;
+    private string? _detailError;
+    private string _tab = "data";
+    private string _userTab = "data";
+    private string? _urlDb;
+    private string _lastUrl = "";
+    private (string Filter, PgSchemaTree Tree)? _viewKey;
+    private IReadOnlyList<TreeSchema> _view = [];
+    private PgRowPage? _rows;
+    private bool _rowsLoading;
+    private string? _rowsError;
+    private string? _sortColumn;
+    private bool _sortDescending;
+    private int _offset;
+    private int _limit = 50;
+    private string? _ddl;
+    private bool _ddlLoaded;
+    private bool _ddlLoading;
+    private string? _ddlError;
+    private bool _exporting;
+    private bool _exportFailed;
+    private string? _exportMessage;
+    private bool _treeLoading;
+    private int _treeGen;
+    private int _detailGen;
+    private int _rowsGen;
+    private int _ddlGen;
+    private bool _disposed;
+    private IJSObjectReference? _module;
+
+    private bool _indexBusy;
+
+    private bool ReadWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private string? DropTitle(PgIndex index) =>
+        !ReadWrite ? "Connection is read-only"
+        : index.BacksConstraint ? "This index backs a constraint — drop the constraint instead."
+        : null;
+
+    private bool Busy => _treeLoading || _detailLoading || _rowsLoading;
+    private bool Filtering => _filter.Trim().Length > 0;
+    private int TabIndex => Math.Max(0, Array.IndexOf(TabNames, _tab));
+
+    protected override void OnInitialized()
+    {
+        _lastUrl = Navigation.Uri;
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        if (query.TryGetValue("oid", out var oid) && uint.TryParse(oid.ToString(), out var parsed))
+        {
+            _pendingOid = parsed;
+        }
+
+        if (query.TryGetValue("db", out var urlDb))
+        {
+            _urlDb = urlDb.ToString();
+        }
+
+        if (query.TryGetValue("tab", out var tab) && TabNames.Contains(tab.ToString()))
+        {
+            _tab = tab.ToString();
+            _userTab = _tab;
+        }
+    }
+
+    // ---- selection of connection and database ----------------------------------------------------------------
+
+    private void ResetSelection()
+    {
+        _detailGen++;
+        _rowsGen++;
+        _ddlGen++;
+        _selectedOid = null;
+        _exportMessage = null;
+        _detail = null;
+        _detailLoading = false;
+        _detailMissing = false;
+        _detailError = null;
+        ResetObjectState();
+    }
+
+    private void ResetObjectState()
+    {
+        _rows = null;
+        _rowsLoading = false;
+        _rowsError = null;
+        _sortColumn = null;
+        _sortDescending = false;
+        _offset = 0;
+        _ops.Clear();
+        _values.Clear();
+        _jsonOpen.Clear();
+        _ddl = null;
+        _ddlLoaded = false;
+        _ddlLoading = false;
+        _ddlError = null;
+    }
+
+    private async Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_connection is not null && _connection.Id != connection.Id)
+        {
+            // Another connection's tree and object must never sit under this connection's name.
+            _treeGen++;
+            _treeLoading = false;
+            _database = null;
+            _tree = null;
+            _treeKey = null;
+            _treeError = null;
+            _pendingOid = null;
+            _urlDb = null;
+            ResetSelection();
+            _connection = connection;
+            UpdateUrl();
+        }
+
+        _connection = connection;
+        await Task.CompletedTask;
+    }
+
+    private async Task OnDatabaseChangedAsync(string database)
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        if (database == "")
+        {
+            _treeGen++;
+            _treeLoading = false;
+            _database = "";
+            _tree = null;
+            _treeKey = null;
+            _treeError = null;
+            ResetSelection();
+            UpdateUrl();
+            return;
+        }
+
+        if (_treeKey == (connection.Id, database) && (_tree is not null || _treeLoading))
+        {
+            return;
+        }
+
+        // Object ids are per-database: a ?oid= only survives when the resolved database is the one the URL named.
+        var first = _treeKey is null && _pendingOid is not null && database == _urlDb;
+        _database = database;
+        _treeKey = (connection.Id, database);
+        if (!first)
+        {
+            // Changing database clears the selection (object ids are per-database).
+            _pendingOid = null;
+            ResetSelection();
+            UpdateUrl();
+        }
+
+        await LoadTreeAsync();
+    }
+
+    private Task RetryTreeAsync() => LoadTreeAsync();
+
+    private async Task LoadTreeAsync()
+    {
+        if (_connection is not { } connection || _database is not { Length: > 0 } database || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_treeGen;
+        _tree = null;
+        _treeError = null;
+        _treeLoading = true;
+        StateHasChanged();
+        PluginResult<PgSchemaTree> result;
+        try
+        {
+            result = await ListSchema.HandleAsync(connection.Id, database, _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (generation != _treeGen || _disposed)
+        {
+            return;
+        }
+
+        _treeLoading = false;
+        if (!result.IsSuccess || result.Value is null)
+        {
+            _treeError = result.Error ?? "Couldn't load the schema.";
+            return;
+        }
+
+        _tree = result.Value;
+        _expanded.Clear();
+        _collapsed.Clear();
+        _showAll.Clear();
+        var open = _tree.Schemas.FirstOrDefault(s => s.Name == "public") ?? _tree.Schemas.FirstOrDefault();
+        if (open is not null)
+        {
+            _expanded.Add(SchemaKey(open.Name));
+        }
+
+        if (_pendingOid is { } oid)
+        {
+            _pendingOid = null;
+            await SelectObjectAsync(oid, updateUrl: false);
+        }
+    }
+
+    // ---- tree --------------------------------------------------------------------------------------------------
+
+    private static string SchemaKey(string schema) => "s:" + schema;
+    private static string GroupKey(string schema, string group) => $"g:{schema}:{group}";
+
+    private bool IsOpen(string key, bool matched) =>
+        Filtering ? matched : _expanded.Contains(key) || (!_collapsed.Contains(key) && key.StartsWith("g:", StringComparison.Ordinal) && IsTablesGroup(key));
+
+    private static bool IsTablesGroup(string key) => key.EndsWith(":Tables", StringComparison.Ordinal);
+
+    private void Toggle(string key)
+    {
+        if (Filtering)
+        {
+            return;
+        }
+
+        var open = IsOpen(key, false);
+        if (open)
+        {
+            _expanded.Remove(key);
+            _collapsed.Add(key);
+        }
+        else
+        {
+            _collapsed.Remove(key);
+            _expanded.Add(key);
+        }
+    }
+
+    private void OnFilterChanged(string? value) => _filter = value ?? "";
+
+    private IReadOnlyList<TreeSchema> VisibleSchemas
+    {
+        get
+        {
+            if (_tree is null)
+            {
+                return [];
+            }
+
+            var needle = _filter.Trim();
+            if (_viewKey == (needle, _tree))
+            {
+                return _view;
+            }
+
+            bool Matches(PgObjectNode n) => needle.Length == 0 || n.Name.Contains(needle, StringComparison.OrdinalIgnoreCase);
+            var schemas = new List<TreeSchema>();
+            foreach (var s in _tree.Schemas)
+            {
+                var all = new (string Title, IReadOnlyList<PgObjectNode> Items)[]
+                {
+                    ("Tables", s.Tables), ("Views", s.Views), ("Materialized views", s.MaterializedViews), ("Functions", s.Functions),
+                };
+                var groups = all.Select(g => new TreeGroup(g.Title, g.Items.Where(Matches).ToList())).Where(g => g.Items.Count > 0).ToList();
+                var total = all.Sum(g => g.Items.Count);
+                var match = groups.Sum(g => g.Items.Count);
+                if (needle.Length > 0 && match == 0)
+                {
+                    continue;
+                }
+
+                schemas.Add(new TreeSchema(s.Name, total, match, groups));
+            }
+
+            _viewKey = (needle, _tree);
+            _view = schemas;
+            return schemas;
+        }
+    }
+
+    private static string KindIcon(PgObjectKind kind) => kind switch
+    {
+        PgObjectKind.View or PgObjectKind.MaterializedView => Icons.Material.Filled.Visibility,
+        PgObjectKind.Function => Icons.Material.Filled.Functions,
+        _ => Icons.Material.Filled.TableChart,
+    };
+
+    private static string KindLabel(PgObjectKind kind) => kind switch
+    {
+        PgObjectKind.MaterializedView => "materialized view",
+        PgObjectKind.PartitionedTable => "partitioned table",
+        PgObjectKind.ForeignTable => "foreign table",
+        _ => kind.ToString().ToLowerInvariant(),
+    };
+
+    // ---- object detail -------------------------------------------------------------------------------------------
+
+    private async Task SelectObjectAsync(uint oid) => await SelectObjectAsync(oid, updateUrl: true);
+
+    private async Task SelectObjectAsync(uint oid, bool updateUrl)
+    {
+        if (_connection is not { } connection || _database is not { Length: > 0 } database || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_detailGen;
+        _rowsGen++;
+        _ddlGen++;
+        _selectedOid = oid;
+        _detail = null;
+        _detailMissing = false;
+        _detailError = null;
+        _detailLoading = true;
+        ResetObjectState();
+        if (updateUrl)
+        {
+            UpdateUrl();
+        }
+
+        StateHasChanged();
+        PluginResult<PgObjectDetail?> result;
+        try
+        {
+            result = await GetDetail.HandleAsync(connection.Id, database, oid, _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (generation != _detailGen || _disposed)
+        {
+            return;
+        }
+
+        _detailLoading = false;
+        if (!result.IsSuccess)
+        {
+            _detailError = result.Error;
+            return;
+        }
+
+        if (result.Value is not { } detail)
+        {
+            _detailMissing = true;
+            return;
+        }
+
+        _detail = detail;
+        // A function has no Data tab, so it opens on DDL; any other object returns to the tab the user last chose.
+        var wanted = detail.Kind == PgObjectKind.Function && _userTab == "data" ? "ddl" : _userTab;
+        if (wanted != _tab)
+        {
+            _tab = wanted;
+            UpdateUrl();
+        }
+
+        await EnsureTabDataAsync();
+    }
+
+    private async Task OnTabChangedAsync(int index)
+    {
+        _tab = TabNames[Math.Clamp(index, 0, TabNames.Length - 1)];
+        _userTab = _tab;
+        UpdateUrl();
+        await EnsureTabDataAsync();
+    }
+
+    private async Task EnsureTabDataAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        if (_tab == "data" && _rows is null && !_rowsLoading)
+        {
+            await LoadRowsAsync();
+        }
+        else if (_tab == "ddl" && !_ddlLoaded && !_ddlLoading)
+        {
+            await LoadDdlAsync();
+        }
+    }
+
+    // Composed from tracked state, never from Navigation.Uri: on Blazor Server that lags a NavigateTo until the client
+    // round-trips, so deriving from it would resurrect a stale ?db= or ?oid=.
+    private void UpdateUrl()
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var uri = Navigation.GetUriWithQueryParameters(Navigation.ToAbsoluteUri(BrowsePath).ToString(), new Dictionary<string, object?>
+        {
+            ["connectionId"] = connection.Id.ToString(),
+            ["db"] = string.IsNullOrEmpty(_database) ? null : _database,
+            ["oid"] = _selectedOid?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["tab"] = _selectedOid is null || _tab == "data" ? null : _tab,
+        });
+        if (uri != _lastUrl)
+        {
+            _lastUrl = uri;
+            Navigation.NavigateTo(uri, replace: true);
+        }
+    }
+
+    private string Meta(PgObjectDetail d)
+    {
+        var parts = new List<string>();
+        if (d.RowEstimate is { } rows and >= 0)
+        {
+            parts.Add($"{PgFormat.Count(rows)} rows ≈");
+        }
+
+        if (d.Kind is PgObjectKind.Table or PgObjectKind.PartitionedTable or PgObjectKind.MaterializedView)
+        {
+            parts.Add($"{PgFormat.Bytes(d.HeapBytes)} + {PgFormat.Bytes(d.IndexBytes)} indexes");
+        }
+
+        parts.Add($"owner {d.Owner}");
+        return string.Join(" · ", parts);
+    }
+
+    private string OpenInQueryHref(PgObjectDetail d)
+    {
+        var sql = $"SELECT * FROM {PgIdent.Qualified(d.Schema, d.Name)} LIMIT 100";
+        return $"{PostgresPlugin.QueryHref}?connectionId={_connection?.Id}&db={Uri.EscapeDataString(_database ?? "")}&sql={Uri.EscapeDataString(sql)}";
+    }
+
+    // ---- rows ----------------------------------------------------------------------------------------------------
+
+    private IReadOnlyList<string> GridColumns =>
+        _rows is { } page ? page.Columns.Select(c => c.Name).ToList() : _detail?.Columns.Select(c => c.Name).ToList() ?? [];
+
+    private PgFilterOp OpFor(string column) => _ops.GetValueOrDefault(column, PgFilterOp.Eq);
+
+    private static bool TakesNoValue(PgFilterOp op) => op is PgFilterOp.IsNull or PgFilterOp.IsNotNull;
+
+    private IReadOnlyList<PgFilter> ActiveFilters()
+    {
+        var filters = new List<PgFilter>();
+        foreach (var column in GridColumns)
+        {
+            var op = OpFor(column);
+            if (TakesNoValue(op))
+            {
+                filters.Add(new PgFilter(column, op, null));
+            }
+            else if (!string.IsNullOrEmpty(_values.GetValueOrDefault(column)))
+            {
+                filters.Add(new PgFilter(column, op, _values[column]));
+            }
+        }
+
+        return filters;
+    }
+
+    private PgRowsRequest BuildRequest(uint oid, bool export = false) =>
+        new(oid, ActiveFilters(), _sortColumn, _sortDescending, export ? 0 : _offset, export ? CsvExport.MaxRows : _limit);
+
+    private async Task LoadRowsAsync()
+    {
+        if (_connection is not { } connection || _database is not { Length: > 0 } database || _detail is not { } detail || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_rowsGen;
+        _rowsError = null;
+        _rowsLoading = true;
+        StateHasChanged();
+        PluginResult<PgRowPage> result;
+        try
+        {
+            result = await PreviewRows.HandleAsync(connection.Id, database, BuildRequest(detail.Oid), _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (generation != _rowsGen || _disposed)
+        {
+            return;
+        }
+
+        _rowsLoading = false;
+        if (result.IsSuccess && result.Value is not null)
+        {
+            _rows = result.Value;
+            _jsonOpen.Clear();
+        }
+        else
+        {
+            // Keep the last good rows: a refused filter must not wipe the grid.
+            _rowsError = result.Error;
+        }
+    }
+
+    private async Task OnFilterValueAsync(string column, string? value)
+    {
+        value = string.IsNullOrEmpty(value) ? null : value;
+        if (_values.GetValueOrDefault(column) == value)
+        {
+            return;
+        }
+
+        _values[column] = value;
+        if (!TakesNoValue(OpFor(column)))
+        {
+            _offset = 0;
+            await LoadRowsAsync();
+        }
+    }
+
+    private async Task OnOperatorAsync(string column, PgFilterOp op)
+    {
+        var previous = OpFor(column);
+        if (previous == op)
+        {
+            return;
+        }
+
+        _ops[column] = op;
+        var hadValue = !string.IsNullOrEmpty(_values.GetValueOrDefault(column));
+        if (TakesNoValue(op) || TakesNoValue(previous) || hadValue)
+        {
+            _offset = 0;
+            await LoadRowsAsync();
+        }
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        _ops.Clear();
+        _values.Clear();
+        _offset = 0;
+        await LoadRowsAsync();
+    }
+
+    private async Task SortAsync(string column)
+    {
+        _sortDescending = _sortColumn == column && !_sortDescending;
+        _sortColumn = column;
+        _offset = 0;
+        await LoadRowsAsync();
+    }
+
+    private async Task ClearSortAsync()
+    {
+        _sortColumn = null;
+        _sortDescending = false;
+        _offset = 0;
+        await LoadRowsAsync();
+    }
+
+    private async Task PageAsync(int direction)
+    {
+        _offset = Math.Max(0, _offset + direction * _limit);
+        await LoadRowsAsync();
+    }
+
+    private async Task OnLimitAsync(int limit)
+    {
+        _limit = limit;
+        _offset = 0;
+        await LoadRowsAsync();
+    }
+
+    private void ToggleJson(int row, int column)
+    {
+        if (!_jsonOpen.Remove((row, column)))
+        {
+            _jsonOpen.Add((row, column));
+        }
+    }
+
+    // ---- DDL, copy, export ------------------------------------------------------------------------------------------
+
+    private async Task LoadDdlAsync()
+    {
+        if (_connection is not { } connection || _database is not { Length: > 0 } database || _detail is not { } detail || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_ddlGen;
+        _ddlLoading = true;
+        _ddlError = null;
+        StateHasChanged();
+        PluginResult<string?> result;
+        try
+        {
+            result = await GetDdl.HandleAsync(connection.Id, database, detail.Oid, _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (generation != _ddlGen || _disposed)
+        {
+            return;
+        }
+
+        _ddlLoading = false;
+        _ddlLoaded = result.IsSuccess;
+        _ddl = result.IsSuccess ? result.Value : null;
+        _ddlError = result.IsSuccess ? null : result.Error;
+    }
+
+    private async Task CopyAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException)
+        {
+            // Clipboard access can be refused (insecure context, permissions); copying is a convenience.
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (_connection is not { } connection || _detail is not { } detail || _exporting || _disposed)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportMessage = null;
+        var token = _cts.Token;
+        try
+        {
+            var qualified = $"{detail.Schema}.{detail.Name}";
+            var result = await ExportCsv.HandleAsync(
+                new ExportTableCsvCommand(connection.Id, connection.Name, _database, qualified, BuildRequest(detail.Oid, export: true)), token);
+            if (!result.IsSuccess || result.Value is not { } export)
+            {
+                _exportFailed = true;
+                _exportMessage = result.Error ?? "The export failed.";
+                return;
+            }
+
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SbConsole.Plugins.Postgres/postgres.js");
+            using var stream = new MemoryStream(export.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await _module.InvokeVoidAsync("downloadFromStream", export.FileName, streamRef);
+            _exportFailed = false;
+            _exportMessage = export.Truncated
+                ? $"Exported the first {PgFormat.Count(export.RowCount)} rows to {export.FileName} — the table has more (exports are capped at {PgFormat.Count(CsvExport.MaxRows)} rows or {PgFormat.Bytes(CsvExport.MaxBytes)})."
+                : $"Exported {PgFormat.Count(export.RowCount)} rows to {export.FileName}.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException)
+        {
+            _exportFailed = true;
+            _exportMessage = "The browser couldn't save the file.";
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                _exporting = false;
+            }
+        }
+    }
+
+    // ---- indexes -----------------------------------------------------------------------------------------------------
+
+    private static bool IsUnused(PgIndex index) => index.Scans == 0 && !index.IsPrimary && !index.IsUnique;
+
+    private int? DaysSinceReset(PgObjectDetail d) =>
+        d.StatsResetAt is { } reset ? Math.Max(0, (int)(Clock.GetUtcNow() - reset).TotalDays) : null;
+
+    // ---- render fragments ----------------------------------------------------------------------------------------------
+
+    private RenderFragment DataTab(PgObjectDetail d) => __builder =>
+    {
+        var filters = ActiveFilters();
+        var columns = GridColumns;
+        <div class="pg-data-toolbar">
+            @if (filters.Count > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Class="pg-filter-count" OnClose="ClearFiltersAsync">Filters @filters.Count</MudChip>
+            }
+            @if (_sortColumn is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-sort-chip" OnClose="ClearSortAsync">Sort @_sortColumn @(_sortDescending ? "desc" : "asc")</MudChip>
+            }
+        </div>
+        @if (_rowsError is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="pg-rows-error">@_rowsError</MudAlert>
+        }
+        @if (_rows is null && _rowsError is null)
+        {
+            <MudSkeleton Height="140px" SkeletonType="SkeletonType.Rectangle" />
+        }
+        else
+        {
+            <MudSimpleTable Class="@("pg-data-grid" + (_rowsLoading ? " pg-loading" : ""))" Dense="true" Hover="true" Elevation="0">
+                <thead>
+                    <tr>
+                        @foreach (var column in columns)
+                        {
+                            var name = column;
+                            <th><button type="button" class="pg-sort" @onclick="() => SortAsync(name)">@name@(_sortColumn == name ? (_sortDescending ? " ▼" : " ▲") : "")</button></th>
+                        }
+                    </tr>
+                    <tr class="pg-filter-row">
+                        @for (var i = 0; i < columns.Count; i++)
+                        {
+                            var name = columns[i];
+                            var op = OpFor(name);
+                            <th>
+                                <MudSelect T="PgFilterOp" Class="@($"pg-filter-op pg-filter-op-{i}")" Value="op" ValueChanged="v => OnOperatorAsync(name, v)"
+                                           Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" ToStringFunc="OperatorLabel">
+                                    @foreach (var (candidate, label) in Operators)
+                                    {
+                                        <MudSelectItem T="PgFilterOp" Value="candidate">@label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTextField T="string" Class="@($"pg-filter-value pg-filter-value-{i}")" Value="@_values.GetValueOrDefault(name)"
+                                              ValueChanged="v => OnFilterValueAsync(name, v)" Disabled="TakesNoValue(op)"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="value" aria-label="@($"Filter value for {name}")" />
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_rows is { } page)
+                    {
+                        @for (var r = 0; r < page.Rows.Count; r++)
+                        {
+                            var row = page.Rows[r];
+                            var rowIndex = r;
+                            <tr>
+                                @for (var c = 0; c < row.Count; c++)
+                                {
+                                    var cell = row[c];
+                                    var cellIndex = c;
+                                    <td title="@(cell.Kind == PgCellKind.Null ? null : cell.Full ?? cell.Display)">
+                                        @switch (cell.Kind)
+                                        {
+                                            case PgCellKind.Null:
+                                                <PgNullChip />
+                                                break;
+                                            case PgCellKind.Json:
+                                                <PgJsonCell Cell="cell" Expanded="_jsonOpen.Contains((rowIndex, cellIndex))" OnToggle="() => ToggleJson(rowIndex, cellIndex)" />
+                                                break;
+                                            default:
+                                                <span>@cell.Display</span>
+                                                break;
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                            @for (var c = 0; c < row.Count; c++)
+                            {
+                                @if (row[c].Kind == PgCellKind.Json && _jsonOpen.Contains((rowIndex, c)))
+                                {
+                                    <tr class="pg-json-row"><td colspan="@row.Count"><pre class="pg-json">@(row[c].Full ?? row[c].Display)</pre></td></tr>
+                                }
+                            }
+                        }
+                    }
+                </tbody>
+            </MudSimpleTable>
+            @if (_rows is { } shown)
+            {
+                var from = _offset + 1;
+                var to = _offset + shown.Rows.Count;
+                var pages = shown.EstimatedMatching is { } n && n > 0 ? (long)Math.Ceiling(n / (double)_limit) : (long?)null;
+                <div class="pg-data-footer">
+                    <span>@(shown.Rows.Count == 0 ? "No rows" : $"Rows {PgFormat.Count(from)}–{PgFormat.Count(to)}{(shown.EstimatedMatching is { } total ? $" of {PgFormat.Count(total)} matching ≈" : "")}")</span>
+                    <span class="pg-spacer"></span>
+                    <span class="pg-muted">Rows per page</span>
+                    <MudSelect T="int" Class="pg-page-size" Value="_limit" ValueChanged="OnLimitAsync" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 80px">
+                        @foreach (var size in PageSizes)
+                        {
+                            <MudSelectItem T="int" Value="size">@size</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" Class="pg-data-prev" Disabled="@(_offset == 0 || _rowsLoading)"
+                                   OnClick="() => PageAsync(-1)" aria-label="Previous page" />
+                    <span class="pg-mono">@PgFormat.Count(_offset / _limit + 1) / @(pages is { } p ? PgFormat.Count(p) : "?")</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Class="pg-data-next" Disabled="@(shown.Rows.Count < _limit || _rowsLoading)"
+                                   OnClick="() => PageAsync(1)" aria-label="Next page" />
+                </div>
+            }
+        }
+    };
+
+    // The popover must be gone before a dialog opens, or it stays visible behind the dialog's overlay.
+    private static async Task CloseThenAsync(MudMenu? menu, Func<Task> action)
+    {
+        if (menu is not null)
+        {
+            await menu.CloseMenuAsync();
+        }
+
+        await action();
+    }
+
+    private async Task ReindexAsync(PgIndex index)
+    {
+        if (_connection is not { } connection || _detail is not { } detail || _indexBusy || _disposed)
+        {
+            return;
+        }
+
+        var ct = _cts.Token;
+        var database = _database;
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync("Reindex", index.Name, false, null, ct),
+            () => ReindexIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, database, index.Oid), ct),
+            $"Reindexed {index.Name}.");
+    }
+
+    private async Task DropAsync(PgIndex index)
+    {
+        if (_connection is not { } connection || _detail is not { } detail || _indexBusy || _disposed)
+        {
+            return;
+        }
+
+        var request = new ConfirmationRequest("Drop index", index.Name, connection.IsProd,
+            "DROP INDEX CONCURRENTLY — queries that used it fall back to other plans.",
+            [
+                new ConfirmationDetail("definition", index.Definition),
+                new ConfirmationDetail("size", PgFormat.Bytes(index.Bytes)),
+                new ConfirmationDetail("scans", PgFormat.Count(index.Scans)),
+            ], "pg.index.drop", Destructive: true);
+        var ct = _cts.Token;
+        var database = _database;
+        await RunIndexActionAsync(detail, () => Confirmation.ConfirmAsync(request, ct),
+            () => DropIndex.HandleAsync(new IndexCommand(connection.Id, connection.Name, database, index.Oid), ct),
+            $"Dropped {index.Name}.");
+    }
+
+    // REINDEX CONCURRENTLY replaces the index (new oid) and DROP removes it, so the detail is always reloaded afterwards.
+    private async Task RunIndexActionAsync(PgObjectDetail detail, Func<Task<bool>> confirm, Func<Task<PluginResult>> run, string success)
+    {
+        _indexBusy = true;
+        try
+        {
+            if (!await confirm())
+            {
+                return;
+            }
+
+            if (_disposed)
+            {
+                return;
+            }
+
+            var result = await run();
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                Snackbar.Add(success, Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(result.Error ?? "The action failed.", Severity.Error);
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _indexBusy = false;
+        }
+
+        // The action can outlive the selection: only reload if the user is still on the table it ran against.
+        if (_detail?.Oid == detail.Oid)
+        {
+            await SelectObjectAsync(detail.Oid, updateUrl: false);
+        }
+    }
+
+    private static string OperatorLabel(PgFilterOp op) => Operators.First(o => o.Op == op).Label;
+
+    private RenderFragment IndexesTab(PgObjectDetail d) => __builder =>
+    {
+        var unused = d.Indexes.Where(IsUnused).ToList();
+        var days = DaysSinceReset(d);
+        <div class="pg-index-summary">
+            <span>From <span class="pg-mono">pg_stat_user_indexes</span>@(days is { } n ? $" · stats reset {n} {(n == 1 ? "day" : "days")} ago" : "") · @unused.Count unused · @PgFormat.Bytes(unused.Sum(i => i.Bytes))</span>
+        </div>
+        <MudTable T="PgIndex" Class="pg-indexes" RowClass="pg-index-row" Items="d.Indexes" Dense="true" Hover="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>Index</MudTh><MudTh>Columns</MudTh><MudTh>Type</MudTh><MudTh Class="pg-num">Size</MudTh>
+                <MudTh Class="pg-num">Scans</MudTh><MudTh Class="pg-num">Tuples read</MudTh><MudTh>Flags</MudTh><MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                    @{ MudMenu? menu = null; }
+                    <MudTd Class="pg-mono">@context.Name</MudTd>
+                    <MudTd Class="pg-mono">@context.ColumnsText</MudTd>
+                    <MudTd Class="pg-mono">@context.Method</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Bytes(context.Bytes)</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Count(context.Scans)</MudTd>
+                    <MudTd Class="pg-mono pg-num">@PgFormat.Compact(context.TuplesRead)</MudTd>
+                    <MudTd>
+                        <div class="pg-flags">
+                            @if (context.IsPrimary) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-index-flag">primary</MudChip> }
+                            @if (context.IsUnique) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-index-flag">unique</MudChip> }
+                            @if (context.IsPartial) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-index-flag">partial</MudChip> }
+                            @if (!context.IsValid) { <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="pg-index-flag">invalid</MudChip> }
+                            @if (IsUnused(context)) { <MudChip T="string" Size="Size.Small" Color="Color.Info" Class="pg-index-flag">unused@(days is { } u ? $" {u}d" : "")</MudChip> }
+                        </div>
+                    </MudTd>
+                    <MudTd>
+                        <MudMenu @ref="menu" Class="pg-index-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
+                            <MudMenuItem Class="pg-index-copy" OnClick="() => CopyAsync(context.Definition)">Copy definition</MudMenuItem>
+                            <MudMenuItem Class="pg-index-reindex" Disabled="!ReadWrite || _indexBusy" OnClick="() => CloseThenAsync(menu, () => ReindexAsync(context))">REINDEX CONCURRENTLY</MudMenuItem>
+                            <MudDivider />
+                            <MudMenuItem Class="pg-index-drop pg-menu-danger" Disabled="@(!ReadWrite || _indexBusy || context.BacksConstraint)" title="@DropTitle(context)"
+                                         OnClick="() => CloseThenAsync(menu, () => DropAsync(context))">Drop index…</MudMenuItem>
+                        </MudMenu>
+                    </MudTd>
+            </RowTemplate>
+        </MudTable>
+        <div class="pg-footnote">Unused is "0 scans since stats reset" for a non-unique, non-primary index — check how old the window is before dropping anything.</div>
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The circuit is already gone; nothing to release.
+            }
+        }
+    }
+}

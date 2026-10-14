@@ -1,0 +1,14 @@
+@using SbConsole.Plugins.Postgres.Client
+@* A json/jsonb cell collapses to the cell's own "{…} N keys" / "[…] N items" label (mockup 1b); the page renders the expanded <pre> row beneath. *@
+<button type="button" class="pg-json-toggle pg-mono" aria-expanded="@Expanded.ToString().ToLowerInvariant()" @onclick="OnToggle">
+    <MudIcon Icon="@(Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+    @Cell.Display
+</button>
+
+@code {
+    [Parameter, EditorRequired] public PgCell Cell { get; set; } = default!;
+
+    [Parameter] public bool Expanded { get; set; }
+
+    [Parameter] public EventCallback OnToggle { get; set; }
+}

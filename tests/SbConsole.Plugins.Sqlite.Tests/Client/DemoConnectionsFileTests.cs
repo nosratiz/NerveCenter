@@ -28,7 +28,9 @@ public class DemoConnectionsFileTests
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(DemoFile()));
 
-        var entries = doc.RootElement.EnumerateArray().ToList();
+        // The one file holds every plugin's demo connections; this test owns only the sqlite ones.
+        var entries = doc.RootElement.EnumerateArray()
+            .Where(e => e.GetProperty("kind").GetString() == "sqlite").ToList();
         entries.Select(e => e.GetProperty("name").GetString())
             .Should().Equal("sqlite-reports", "sqlite-shop", "sqlite-corrupt", "sqlite-reference", "sqlite-new");
         foreach (var entry in entries)
