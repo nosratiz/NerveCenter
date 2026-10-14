@@ -3,6 +3,7 @@ using FluentAssertions;
 using MudBlazor;
 using MudBlazor.Services;
 using NSubstitute;
+using SbConsole.Sdk;
 using SbConsole.Web.Components.Shared;
 
 namespace SbConsole.Web.Tests;
@@ -66,5 +67,70 @@ public class ConfirmDialogTests : BunitContext
         cut.Find("input").Input("payments-d");
 
         cut.Find("button.confirm-action").HasAttribute("disabled").Should().BeTrue();
+    }
+
+    private IRenderedComponent<ConfirmDialog> RenderDetailed(bool requireTyped, bool destructive = true, bool withDetails = true)
+    {
+        var mudDialogInstance = (IMudDialogInstance)Substitute.For(
+            [typeof(IMudDialogInstance), MudDialogInstanceInternalType], []);
+        return Render<ConfirmDialog>(parameters => parameters
+            .AddCascadingValue(mudDialogInstance)
+            .Add(p => p.Verb, "Terminate")
+            .Add(p => p.Target, "pid 48213")
+            .Add(p => p.IsProd, true)
+            .Add(p => p.Consequence, "The client connection will be dropped.")
+            .Add(p => p.Details, withDetails
+                ? new List<ConfirmationDetail> { new("pid", "48213"), new("user", "app_rw") }
+                : null)
+            .Add(p => p.AuditAction, "pg.backend.terminate")
+            .Add(p => p.Destructive, destructive)
+            .Add(p => p.RequireTypedConfirmation, requireTyped));
+    }
+
+    [Fact]
+    public void Plain_dialog_has_no_detail_markup_and_keeps_default_sentence_and_verb_button()
+    {
+        var cut = RenderDialog(requireTyped: false);
+
+        cut.FindAll("dl.confirm-details").Should().BeEmpty();
+        cut.Markup.Should().Contain("This cannot be undone.");
+        cut.Markup.Should().NotContain("Audited as");
+        cut.Find("button.confirm-action").TextContent.Trim().Should().Be("Purge");
+    }
+
+    [Fact]
+    public void Detailed_dialog_renders_consequence_rows_audit_caption_and_button_text()
+    {
+        var cut = RenderDetailed(requireTyped: false);
+
+        cut.Markup.Should().Contain("The client connection will be dropped.");
+        cut.Markup.Should().NotContain("This cannot be undone.");
+        cut.Find("dl.confirm-details").TextContent.Should().Contain("pid").And.Contain("48213").And.Contain("app_rw");
+        cut.FindAll("dl.confirm-details dt").Should().HaveCount(2);
+        cut.Markup.Should().Contain("Audited as pg.backend.terminate with your name.");
+        cut.Markup.Should().Contain("PROD");
+        cut.Find("button.confirm-action").TextContent.Trim().Should().Be("Terminate pid 48213");
+    }
+
+    [Fact]
+    public void Detailed_typed_confirmation_requires_exact_match()
+    {
+        var cut = RenderDetailed(requireTyped: true);
+
+        cut.Markup.Should().Contain("Type").And.Contain("to confirm");
+        cut.Find("button.confirm-action").HasAttribute("disabled").Should().BeTrue();
+
+        cut.Find("input").Input("pid 4821");
+        cut.Find("button.confirm-action").HasAttribute("disabled").Should().BeTrue();
+
+        cut.Find("input").Input("pid 48213");
+        cut.Find("button.confirm-action").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Destructive_uses_error_button_and_non_destructive_uses_primary()
+    {
+        RenderDetailed(false, destructive: true).Find("button.confirm-action").ClassList.Should().Contain("mud-button-filled-error");
+        RenderDetailed(false, destructive: false).Find("button.confirm-action").ClassList.Should().Contain("mud-button-filled-primary");
     }
 }
