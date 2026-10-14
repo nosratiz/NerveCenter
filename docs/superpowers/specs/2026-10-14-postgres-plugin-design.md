@@ -364,9 +364,10 @@ aliases. User-defined functions, types and enum labels stay out of scope.
   non-system columns, `format_type` for the type, primary-key flag from `pg_index`), plus
   `current_schemas(false)` for the search path. Excludes `pg_catalog`, `information_schema`,
   `pg_toast*` and `pg_temp*`. Capped at 2,000 objects × 200 columns (truncation is silent — the
-  cap only limits suggestions). Wrapped by `GetCompletionSchemaQueryHandler` (query, not
+  cap only limits suggestions; when objects are cut, search-path schemas are kept first, in path order). Wrapped by `GetCompletionSchemaQueryHandler` (query, not
   audited, `FriendlyError` on failure). The Query page loads it when the connection or database
-  changes, caches it on the page keyed by (connection, database), and reloads after a committed
+  changes (not during static prerender), holds a single schema on the page for the current
+  (connection, database), replaced on a switch, and reloads after a committed
   write whose statements include DDL (`CREATE`/`ALTER`/`DROP`/`COMMENT`/`TRUNCATE` first keyword).
 - **Engine** — `PgCompletionEngine.Complete(text, caret, schema)` (pure, static, no I/O) →
   `PgCompletionResult(ReplaceFrom, ReplaceTo, Items)`, item = `Label`, `InsertText`, `Kind`
@@ -389,9 +390,10 @@ aliases. User-defined functions, types and enum labels stay out of scope.
   - Unqualified table references resolve via the search path (first schema in path order that
     has the name).
   - Filtering on the identifier prefix before the caret: case-insensitive prefix matches first,
-    then substring matches, kind order kept within each group; max 50 items. An item whose
-    insert text equals the word already typed (ignoring case) is left out, so Enter after a
-    fully typed `select` is a newline, not a no-op accept.
+    then substring matches, kind order kept within each group; max 50 items. When the caret is
+    at the end of a word that equals some candidate's insert text (ignoring case), nothing is
+    offered, so Enter after a finished `select`, `orders` or `OR` is a newline, not an accept of
+    the next prefix match (`orders_archive`, `ORDER`); typing on (`orders_`) offers them again.
   - Insertion: keywords upper-case; identifiers bare when they are lower-case `[a-z_][a-z0-9_$]*`
     and not a reserved keyword, otherwise `PgIdent.Quote`d; a table/view whose schema is not on
     the search path is inserted `schema.name` (each part quoted as needed) unless the user already

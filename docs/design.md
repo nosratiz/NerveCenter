@@ -1861,7 +1861,10 @@ answers the page's `[JSInvokable] GetCompletions`, and `postgres-completion.js` 
 popup — no editor library. The engine and popup are a **port, not shared code**: plugins reference
 only the Sdk, and the dialects differ (dollar quoting, `E''`, schemas, search path, `::`). Hoist a
 shared engine/popup into the Sdk or host only when a third plugin needs completion. The schema is
-one read-only catalog query per (connection, database) (`GetCompletionSchemaQueryHandler`, not
-audited, capped at 2,000 objects × 200 columns), reloaded after a committed write that ran DDL.
+one read-only catalog query (`GetCompletionSchemaQueryHandler`, not audited, capped at 2,000 objects ×
+200 columns, search-path schemas kept first when truncated). The page holds a single schema for the
+current (connection, database), reloads it on a switch (not a keyed cache) and after a committed write
+that ran DDL, and skips the load during static prerender. A finished word that equals a candidate
+(`orders`, `OR`) offers nothing, so Enter stays a newline rather than accepting the next prefix match.
 Suggestions: keywords, built-in functions, schemas, tables/views/matviews, columns, aliases;
 user-defined functions, types and enum labels are out of scope.
