@@ -57,7 +57,9 @@ internal static class PgRowsSql
                 throw new PgSqlRefusedException($"There is no column named \"{Clip(sort)}\" to sort by.");
             }
 
-            sql.Append(" ORDER BY ").Append(PgIdent.Quote(sort)).Append(request.SortDescending ? " DESC" : " ASC").Append(" NULLS LAST");
+            // Qualified with the table so it binds to the input column, not the "col"::text output alias of the select list
+            // (an unqualified name would resolve to the alias and sort numeric / interval / timestamp values as text).
+            sql.Append(" ORDER BY ").Append(qualifiedName).Append('.').Append(PgIdent.Quote(sort)).Append(request.SortDescending ? " DESC" : " ASC").Append(" NULLS LAST");
         }
 
         if (page)
@@ -94,7 +96,7 @@ internal static class PgRowsSql
         return string.Join(", ", columns.Select(c =>
         {
             var q = PgIdent.Quote(c.Name);
-            return SafeTypes.Contains(c.CastType.Replace("[]", "", StringComparison.Ordinal)) ? q : $"{q}::text AS {q}";
+            return SafeTypes.Contains((c.BaseType ?? c.Type).Replace("[]", "", StringComparison.Ordinal)) ? q : $"{q}::text AS {q}";
         }));
     }
 
@@ -142,5 +144,9 @@ internal static class PgRowsSql
 /// <summary>A browsable column: <see cref="Type"/> is the display text (with typmod), <see cref="BaseType"/> the typmod-free type used for casts.</summary>
 internal sealed record PgRowColumn(string Name, string Type, string? BaseType = null)
 {
-    public string CastType => BaseType ?? Type;
+    /// <summary>
+    /// The type used in <c>::</c> casts. character (bpchar) and bit without a typmod mean length 1 in a cast (unlike varchar, which is
+    /// unbounded), so 'ab'::character would truncate to 'a' and never match a stored character(5); they keep the full typmod type.
+    /// </summary>
+    public string CastType => BaseType is null or "character" or "bit" ? Type : BaseType;
 }

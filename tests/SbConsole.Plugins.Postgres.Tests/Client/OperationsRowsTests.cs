@@ -250,4 +250,45 @@ public sealed class OperationsRowsTests(PostgresFixture fx)
         var cell = page.Rows[0][Col(page, "j")];
         cell.Full.Should().Contain("José").And.Contain("<b>").And.Contain("it's");
     }
+
+    private async Task<string?[]> SortedIdsAsync(string col, bool desc = false)
+    {
+        var page = await fx.Operations.PreviewRowsAsync(fx.Secret(), null,
+            new PgRowsRequest(await OidAsync("sortable"), [], col, desc, 0, 50));
+        return page.Rows.Select(r => r[Col(page, "id")].Display).ToArray();
+    }
+
+    [DockerFact]
+    public async Task Sort_on_numeric_is_numeric_not_textual() =>
+        (await SortedIdsAsync("num")).Should().Equal("2", "1", "3");
+
+    [DockerFact]
+    public async Task Sort_on_interval_timestamp_and_date_is_chronological()
+    {
+        (await SortedIdsAsync("span")).Should().Equal("2", "1", "3");
+        (await SortedIdsAsync("ts")).Should().Equal("2", "3", "1");
+        (await SortedIdsAsync("d", desc: true)).Should().Equal("1", "3", "2");
+    }
+
+    [DockerFact]
+    public async Task Export_sorts_by_the_typed_column()
+    {
+        var csv = await fx.Operations.ExportTableCsvAsync(fx.Secret(), null,
+            new PgRowsRequest(await OidAsync("sortable"), [], "num", false, 0, 50));
+        var text = Encoding.UTF8.GetString(csv.Content);
+        text.IndexOf("\n2,", StringComparison.Ordinal).Should().BeLessThan(text.IndexOf("\n1,", StringComparison.Ordinal));
+        text.IndexOf("\n1,", StringComparison.Ordinal).Should().BeLessThan(text.IndexOf("\n3,", StringComparison.Ordinal));
+    }
+
+    [DockerFact]
+    public async Task Char_n_and_bit_n_equality_filters_match()
+    {
+        var oid = await OidAsync("sortable");
+        var ch = await fx.Operations.PreviewRowsAsync(fx.Secret(), null,
+            new PgRowsRequest(oid, [new PgFilter("ch", PgFilterOp.Eq, "ab")], "id", false, 0, 50));
+        ch.Rows.Should().HaveCount(1);
+        var bit = await fx.Operations.PreviewRowsAsync(fx.Secret(), null,
+            new PgRowsRequest(oid, [new PgFilter("b", PgFilterOp.Eq, "101")], "id", false, 0, 50));
+        bit.Rows.Should().HaveCount(1);
+    }
 }

@@ -97,6 +97,11 @@ public sealed class PostgresFixture : IAsyncLifetime
         INSERT INTO oddities (id, span, num, big, bc, code, j) VALUES
             (1, interval '1 mon 2 days', 'NaN'::numeric, 1e40::numeric, '0044-03-15 BC', 'ABCDE', '{"name":"José","note":"it''s <b>"}'),
             (2, NULL, 'Infinity'::numeric, NULL, NULL, NULL, NULL);
+        CREATE TABLE sortable (id int PRIMARY KEY, num numeric, span interval, ts timestamp, d date, ch char(5), b bit(3));
+        INSERT INTO sortable VALUES
+            (1, 10, interval '10 days', '2024-10-01 00:00', '2024-10-01', 'ab', B'101'),
+            (2, 9, interval '9 days', '2024-09-01 00:00', '2024-09-01', 'cd', B'010'),
+            (3, 100, interval '100 days', '2024-09-15 00:00', '2024-09-15', 'ef', B'111');
         COMMENT ON COLUMN samples.label IS 'it''s a label';
         INSERT INTO samples VALUES
             (1, 'one', '{a,b}', '{"k":1,"j":[1,2]}', '[1,2,3]', decode('000102030405060708090a0b0c0d0e0f1011', 'hex'),

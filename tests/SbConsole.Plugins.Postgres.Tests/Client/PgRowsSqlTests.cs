@@ -109,7 +109,7 @@ public class PgRowsSqlTests
     public void Sort_orders_with_nulls_last(bool desc, string dir)
     {
         var (sql, _) = PgRowsSql.Build(Q, Columns, Req() with { SortColumn = "id", SortDescending = desc });
-        sql.Should().Be($"{Sel} {Q} ORDER BY \"id\" {dir} NULLS LAST LIMIT 50 OFFSET 0");
+        sql.Should().Be($"{Sel} {Q} ORDER BY {Q}.\"id\" {dir} NULLS LAST LIMIT 50 OFFSET 0");
     }
 
     [Theory]
@@ -140,7 +140,7 @@ public class PgRowsSqlTests
     public void Export_keeps_order_but_drops_limit_and_offset()
     {
         var (sql, _) = PgRowsSql.BuildExport(Q, Columns, Req() with { SortColumn = "id", SortDescending = true }, 10);
-        sql.Should().Be($"{Sel} {Q} ORDER BY \"id\" DESC NULLS LAST LIMIT 11");
+        sql.Should().Be($"{Sel} {Q} ORDER BY {Q}.\"id\" DESC NULLS LAST LIMIT 11");
     }
 
     [Fact]
