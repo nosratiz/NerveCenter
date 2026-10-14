@@ -63,9 +63,15 @@ builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Kafka.KafkaPlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Aws.AwsPlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.RabbitMq.RabbitMqPlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Redis.RedisPlugin>();
+builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Sqlite.SqlitePlugin>();
+builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Postgres.PostgresPlugin>();
 builder.Services.AddHostedService<MetricsCollectorService>();
 
 var app = builder.Build();
+
+// Plugins are constructed with new() (AddSbConsolePlugin), so any that need a host service in their
+// instance hooks resolve it here -- see IPlugin.Initialize.
+app.Services.GetRequiredService<PluginRegistry>().InitializeAll(app.Services);
 
 using (var scope = app.Services.CreateScope())
 {
@@ -73,6 +79,11 @@ using (var scope = app.Services.CreateScope())
     await using var db = await dbFactory.CreateDbContextAsync();
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+
+    // Opt-in demo connections (SBC_DEMO_CONNECTIONS, docs/design.md §16): a one-shot, create-only
+    // pass once the schema exists and plugins are initialized, before the app serves requests. It
+    // never throws -- a broken demo file is logged, not fatal.
+    await scope.ServiceProvider.GetRequiredService<SeedDemoConnectionsCommandHandler>().HandleAsync();
 }
 
 var pluginAssemblies = app.Services.GetRequiredService<PluginRegistry>().Plugins

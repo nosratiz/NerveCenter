@@ -1,0 +1,127 @@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Client/SqliteConnectionFields.razor -- mockup 1f's connection
+   form: no host, port or credentials, just a file path, a mode (design spec §4.1) and an optional
+   backup directory (§11.7). *@
+@using MudBlazor
+
+<MudTextField T="string" Class="sqlite-conn-path" Label="File path" Value="_path" ValueChanged="OnPathChanged" Immediate="true"
+              Error="@(PathError is not null)" ErrorText="@PathError"
+              HelperText="Path is resolved inside the SbConsole container — mount the volume there." />
+
+<MudTextField T="string" Class="mt-3 sqlite-conn-backupdir" Label="Enable backups to" Value="_backupDir" ValueChanged="OnBackupDirChanged" Immediate="true"
+              Error="@(BackupDirError is not null)" ErrorText="@BackupDirError"
+              HelperText="Directory inside the SbConsole container, under SBC_SQLITE_ROOTS; leave empty to disable backups" />
+
+<MudRadioGroup T="SqliteAccessMode" Value="_mode" ValueChanged="OnModeChanged" Class="mt-3">
+    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadOnly" Class="sqlite-conn-mode-readonly">Read-only</MudRadio>
+    <MudRadio T="SqliteAccessMode" Value="SqliteAccessMode.ReadWrite" Class="sqlite-conn-mode-readwrite">Read-write</MudRadio>
+</MudRadioGroup>
+
+@* No Min/Max on the numeric fields: MudBlazor would silently clamp 0 up to Min and hide the validation
+   message; Parse has no upper bound either, so a stored larger value must stay editable. *@
+<MudNumericField T="int" Class="mt-3 sqlite-conn-busy" Label="Busy timeout (ms)" Value="_busyTimeoutMs" ValueChanged="OnBusyTimeoutChanged" Immediate="true"
+                 Error="@(BusyError is not null)" ErrorText="@BusyError" />
+<MudNumericField T="int" Class="mt-3 sqlite-conn-statement" Label="Statement timeout (s)" Value="_statementTimeoutS" ValueChanged="OnStatementTimeoutChanged" Immediate="true"
+                 Error="@(StatementError is not null)" ErrorText="@StatementError" />
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    // IsProd is part of the host contract for connection forms; unused here because this form has no credential fields.
+    [Parameter] public bool IsProd { get; set; }
+
+    private string _path = "";
+    private string _backupDir = "";
+    private SqliteAccessMode _mode = SqliteAccessMode.ReadOnly;
+    private int _busyTimeoutMs = SqliteConnectionSettings.DefaultBusyTimeoutMs;
+    private int _statementTimeoutS = SqliteConnectionSettings.DefaultStatementTimeoutS;
+    private bool _pathTouched;
+    private bool _busyTouched;
+    private bool _statementTouched;
+
+    // Errors show only once the user has edited that field, so a fresh empty form isn't invalid on open.
+    private string? PathError => !_pathTouched ? null
+        : string.IsNullOrWhiteSpace(_path) ? "A file path is required."
+        : _path.Contains(';') ? "The path can't contain ';'."
+        : null;
+    // Optional: empty is valid (backups disabled), so only the separator is an error.
+    private string? BackupDirError => _backupDir.Contains(';') ? "The directory can't contain ';'." : null;
+    private string? BusyError => _busyTouched && _busyTimeoutMs <= 0 ? "Must be at least 1 ms." : null;
+    private string? StatementError => _statementTouched && _statementTimeoutS <= 0 ? "Must be at least 1 s." : null;
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips
+    // whatever this component last emitted back into InitialSecret on every parent render, and
+    // re-parsing in OnParametersSet would fight in-progress typing.
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(InitialSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = SqliteConnectionSettings.Parse(InitialSecret);
+            _path = settings.Path;
+            _mode = settings.Mode;
+            _busyTimeoutMs = settings.BusyTimeoutMs;
+            _statementTimeoutS = settings.StatementTimeoutS;
+            _backupDir = settings.BackupDir ?? "";
+        }
+        catch (FormatException)
+        {
+            // Unparsable initial secret: keep the defaults so the form still renders.
+        }
+    }
+
+    private Task OnPathChanged(string? value)
+    {
+        _pathTouched = true;
+        _path = value ?? "";
+        return RaiseChangedAsync();
+    }
+
+    private Task OnBackupDirChanged(string? value)
+    {
+        _backupDir = value ?? "";
+        return RaiseChangedAsync();
+    }
+
+    private Task OnModeChanged(SqliteAccessMode value)
+    {
+        _mode = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task OnBusyTimeoutChanged(int value)
+    {
+        _busyTouched = true;
+        _busyTimeoutMs = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task OnStatementTimeoutChanged(int value)
+    {
+        _statementTouched = true;
+        _statementTimeoutS = value;
+        return RaiseChangedAsync();
+    }
+
+    private Task RaiseChangedAsync()
+    {
+        // Mid-typing states (empty path, a ';', a 0 timeout) can't be formatted: skip this keystroke's
+        // SecretChanged so the last good secret stays in effect (the field-level errors tell the user) -- throwing out of a Blazor event
+        // handler would kill the circuit (same rule as RedisConnectionFields).
+        string secret;
+        try
+        {
+            secret = new SqliteConnectionSettings(_path.Trim(), _mode, _busyTimeoutMs, _statementTimeoutS,
+                string.IsNullOrWhiteSpace(_backupDir) ? null : _backupDir.Trim()).ToSecretString();
+        }
+        catch (ArgumentException)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SecretChanged.InvokeAsync(secret);
+    }
+}

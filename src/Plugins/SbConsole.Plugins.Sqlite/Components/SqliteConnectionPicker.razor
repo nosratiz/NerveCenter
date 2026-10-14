@@ -1,0 +1,127 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Sqlite.Databases
+@inject IConnectionProvider Connections
+@inject NavigationManager Navigation
+
+@* Header chips: the connection menu, then the file + mode (mockup 1a: "the connection is the file,
+   so the page picker shows the file and its mode"). The choice lives in ?connectionId= so links
+   stay shareable, matching RedisConnectionDatabasePicker minus the database axis. *@
+@if (!_loaded)
+{
+    <MudProgressCircular Class="sqlite-picker-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connections.Count == 0)
+{
+    <span class="sql-muted sqlite-no-connections">No SQLite connections yet — add one under Connections, or</span>
+    <button type="button" class="sql-btn sql-btn-primary sqlite-new-database" @onclick="OpenNewDatabase">+ New database…</button>
+}
+else
+{
+    <MudMenu Class="sqlite-connection-menu" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+        <ActivatorContent>
+            @* MudBlazor 9's activator div only handles keydown; the click has to come from here. *@
+            <span class="sql-chip" @onclick="@(e => context.ToggleAsync(e))">
+                <span class="sqlite-selected-connection">@_connection?.Name</span>
+                @if (_connection?.IsProd == true)
+                {
+                    <span class="sql-prod sqlite-prod-chip">prod</span>
+                }
+                <span class="sql-chip-caret">▾</span>
+            </span>
+        </ActivatorContent>
+        <ChildContent>
+            @foreach (var connection in _connections)
+            {
+                <MudMenuItem Class="sqlite-connection-option" OnClick="@(() => SelectAsync(connection))">@connection.Name</MudMenuItem>
+            }
+            <MudDivider />
+            <MudMenuItem Class="sqlite-new-database-option" OnClick="OpenNewDatabase">+ New database…</MudMenuItem>
+        </ChildContent>
+    </MudMenu>
+
+    @if (_connection is { } selected && selected.Summary.TryGetValue("File", out var file))
+    {
+        <span class="sql-chip sql-chip-static sqlite-file-chip">
+            <span class="sql-mono">@file</span>
+            <span class="sql-chip-label">@selected.Summary.GetValueOrDefault("Mode")</span>
+        </span>
+    }
+
+    @if (Loading)
+    {
+        <MudProgressCircular Class="sqlite-page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+}
+
+@if (_newDatabaseOpen)
+{
+    <NewDatabaseDialog ExistingNames="@_connections.Select(c => c.Name).ToList()" Created="OnDatabaseCreatedAsync" Cancelled="CloseNewDatabase" />
+}
+
+@code {
+    public const string Kind = "sqlite";
+
+    /// <summary>Raised once after the initial selection resolves, then on every change. Never raised when there are no connections.</summary>
+    [Parameter] public EventCallback<ConnectionInfo> SelectionChanged { get; set; }
+
+    [Parameter] public bool Loading { get; set; }
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private ConnectionInfo? _connection;
+    private bool _loaded;
+    private bool _newDatabaseOpen;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync(Kind);
+        _loaded = true;
+        if (_connections.Count == 0)
+        {
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        ConnectionInfo? fromQuery = null;
+        if (query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id))
+        {
+            fromQuery = _connections.FirstOrDefault(c => c.Id == id);
+        }
+
+        await SelectAsync(fromQuery ?? _connections[0]);
+    }
+
+    private async Task SelectAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        var uri = Navigation.GetUriWithQueryParameter("connectionId", connection.Id.ToString());
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await SelectionChanged.InvokeAsync(connection);
+    }
+
+    private void OpenNewDatabase() => _newDatabaseOpen = true;
+
+    private void CloseNewDatabase() => _newDatabaseOpen = false;
+
+    /// <summary>
+    /// Spec §13 step 5: show the new file's Overview. The list is reloaded so the new connection is
+    /// listed; on the Overview page itself (same component instance, so no re-initialisation) it is
+    /// selected in place, anywhere else the Overview page opens with it in ?connectionId=.
+    /// </summary>
+    private async Task OnDatabaseCreatedAsync(DatabaseCreated created)
+    {
+        _newDatabaseOpen = false;
+        _connections = await Connections.ListAsync(Kind);
+        var onOverview = new Uri(Navigation.Uri).AbsolutePath.EndsWith(SqlitePlugin.OverviewHref, StringComparison.OrdinalIgnoreCase);
+        if (onOverview && _connections.FirstOrDefault(c => c.Id == created.ConnectionId) is { } connection)
+        {
+            await SelectAsync(connection);
+            return;
+        }
+
+        Navigation.NavigateTo($"{SqlitePlugin.OverviewHref}?connectionId={created.ConnectionId}");
+    }
+}

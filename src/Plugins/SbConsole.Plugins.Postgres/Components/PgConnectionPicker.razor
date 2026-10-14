@@ -1,0 +1,148 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Postgres.Overview
+@inject IConnectionProvider Connections
+@inject NavigationManager Navigation
+
+@* Header chips (mockup 1a/1g): the connection menu (red dot = last load failed), PROD chip, server + mode.
+   The choice lives in ?connectionId= so links stay shareable. *@
+@if (!_loaded)
+{
+    <MudProgressCircular Class="pg-picker-loading" Size="Size.Small" Indeterminate="true" />
+}
+else if (_connections.Count == 0)
+{
+    <span class="pg-muted pg-no-connections">No PostgreSQL connections yet — add one under <a href="/connections">Connections</a>.</span>
+}
+else
+{
+    <MudMenu Class="pg-connection-menu" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+        <ActivatorContent>
+            @* MudBlazor 9's activator div only handles keydown; the click has to come from here. *@
+            <MudChip T="string" Variant="Variant.Outlined" Class="@(SelectedUnreachable ? "pg-unreachable" : null)"
+                     OnClick="@(e => context.ToggleAsync(e))">
+                @if (SelectedUnreachable)
+                {
+                    <span class="pg-unreachable-dot pg-selected-dot"></span>
+                }
+                <span class="pg-selected-connection">@_connection?.Name</span> ▾
+            </MudChip>
+        </ActivatorContent>
+        <ChildContent>
+            @foreach (var connection in _connections)
+            {
+                <MudMenuItem Class="pg-connection-option" OnClick="@(() => SelectAsync(connection))">
+                    @if (_unreachable.Contains(connection.Id))
+                    {
+                        <span class="pg-unreachable-dot"></span>
+                    }
+                    @connection.Name
+                    @if (connection.IsProd)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="pg-prod-chip-option">PROD</MudChip>
+                    }
+                </MudMenuItem>
+            }
+        </ChildContent>
+    </MudMenu>
+
+    @if (_connection?.IsProd == true)
+    {
+        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Class="pg-prod-chip">PROD</MudChip>
+    }
+
+    @if (_connection is { } selected && selected.Summary.TryGetValue("Server", out var server))
+    {
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="pg-server-chip">
+            <span class="pg-mono">@server</span> · @selected.Summary.GetValueOrDefault("Mode")
+        </MudChip>
+    }
+
+    @if (Loading)
+    {
+        <MudProgressCircular Class="pg-page-busy" Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+    }
+}
+
+@code {
+    public const string Kind = PostgresPlugin.Kind;
+
+    [Inject(Key = PostgresPlugin.PluginId)]
+    private IPluginStore Store { get; set; } = default!;
+
+    /// <summary>Raised once after the initial selection resolves, then on every change. Never raised when there are no connections.</summary>
+    [Parameter] public EventCallback<ConnectionInfo> SelectionChanged { get; set; }
+
+    [Parameter] public bool Loading { get; set; }
+
+    /// <summary>True (default): the picker keeps ?connectionId= in sync itself. False: the host page owns the URL.</summary>
+    [Parameter] public bool ManageUrl { get; set; } = true;
+
+    private IReadOnlyList<ConnectionInfo> _connections = [];
+    private ConnectionInfo? _connection;
+    private HashSet<Guid> _unreachable = [];
+    private bool _loaded;
+
+    private bool SelectedUnreachable => _connection is { } c && _unreachable.Contains(c.Id);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Connections.ListAsync(Kind);
+        await RefreshReachabilityAsync();
+        _loaded = true;
+        if (_connections.Count == 0)
+        {
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        ConnectionInfo? fromQuery = null;
+        if (query.TryGetValue("connectionId", out var idValue) && Guid.TryParse(idValue.ToString(), out var id))
+        {
+            fromQuery = _connections.FirstOrDefault(c => c.Id == id);
+        }
+
+        await SelectAsync(fromQuery ?? _connections[0]);
+    }
+
+    /// <summary>
+    /// Re-reads each connection's stored overview state. Dot rule: a failure newer than the last good load
+    /// (or any failure with no good load). Pages call this after their own load so the dot follows it.
+    /// </summary>
+    public async Task RefreshReachabilityAsync()
+    {
+        var unreachable = new HashSet<Guid>();
+        foreach (var connection in _connections)
+        {
+            try
+            {
+                var state = await OverviewSnapshotStore.ReadAsync(Store, connection.Id, CancellationToken.None);
+                if (state.LastFailureAt is { } failedAt && (state.LastGood is null || failedAt > state.LastGood.LoadedAt))
+                {
+                    unreachable.Add(connection.Id);
+                }
+            }
+            catch (Exception)
+            {
+                // The dot is a hint; an unreadable store must not break the picker.
+            }
+        }
+
+        _unreachable = unreachable;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SelectAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        if (ManageUrl)
+        {
+            var uri = Navigation.GetUriWithQueryParameter("connectionId", connection.Id.ToString());
+            if (uri != Navigation.Uri)
+            {
+                Navigation.NavigateTo(uri, replace: true);
+            }
+        }
+
+        await SelectionChanged.InvokeAsync(connection);
+    }
+}

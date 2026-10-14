@@ -1471,3 +1471,368 @@ non-integer metric, and `PluginDashboardMetric.Count` is an `int`. There's also 
 plugin, and unchecked rows have no "Logs →" link because there's no logs page. The 1c
 note about when the last problem cleared needs problem history that the host doesn't
 keep.
+
+## 15. SQLite plugin (`SbConsole.Plugins.Sqlite`) (2026-10-13)
+
+Spec: `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-10-13-sqlite-plugin.md`. Phase 1 is a read-only Overview + Tables
+browser; write mode / Query (phase 2) and backups (phase 3) follow.
+
+- **First plugin that opens host files.** A SQLite connection is a server-side path, so the SDK
+  gained `IHostPathPolicy`, implemented in Core (`HostPathPolicy`) from `SBC_SQLITE_ROOTS`
+  (read by `BootstrapOptions`, still the only env reader). It is **fail-closed** (no roots → nothing
+  opens), resolves `..` and every symlink before a separator-aware root match, always refuses
+  SbConsole's own DB and its sidecars, and hands back the resolved path, which is the only path the
+  plugin opens. Core owns this rather than the plugin because only Core knows where its own DB is,
+  and a plugin shouldn't learn host env var names. **Known limitation:** a hard link to SbConsole's
+  own database placed under a root is not detected, because the policy compares resolved paths, not
+  file identity; creating one needs write access to both locations.
+- **`IPlugin.Initialize(IServiceProvider)`.** Plugins are constructed with `new()`, so instance hooks
+  (`TestConnectionAsync`, dashboard hooks) had no DI. The new optional hook runs once after
+  `app.Build()` (`PluginRegistry.InitializeAll`); the SQLite plugin resolves its operations there and
+  fails closed until then. Existing plugins are unaffected (default no-op).
+- **Statement timeout needs two mechanisms.** Verified against Microsoft.Data.Sqlite 10.0.12: a
+  cancellation token (or `SqliteCommand.Cancel()`) does not stop a running statement; the raw
+  `sqlite3_interrupt` does, but an interrupt that fires while no statement is running is lost. So
+  `Run` also installs `sqlite3_progress_handler` (every 1000 VM instructions; it aborts when the
+  linked token is cancelled) and checks the token before running the work. Both abort with
+  SQLITE_INTERRUPT (code 9).
+- **`foreign_keys` is ON by default** on Microsoft.Data.Sqlite / bundled `e_sqlite3` connections,
+  unlike the SQLite CLI, so the UI copy says "per-connection · on for this console's connections".
+  The demo seed script uses Python's `sqlite3`, where it is off by default, which is why it turns it
+  on before the cascading delete.
+- **`dbstat` is absent** from the bundled `e_sqlite3`, so size-by-table falls back to
+  `sqlite_stat1` row estimates; sizes appear automatically if a future build includes it.
+- **`trusted_schema = OFF`.** Every connection runs `PRAGMA trusted_schema = OFF` right after
+  `busy_timeout`, as defence in depth against hostile schemas (views/triggers/defaults calling
+  SQL functions) in untrusted files; the full suite passes with it.
+- **Secret lookup failures** (e.g. a rotated `SBC_DATA_KEY`) in the two command handlers go through
+  `HandlerRunner.TryResolveSecretAsync`: logged, returned as a friendly `PluginResult.Fail`, and
+  *not* audited, because nothing ran (same as "Connection not found").
+- **Path policy limits.** The check is check-then-open; opening the resolved path removes symlinks
+  that existed at check time but not a new symlink raced in by someone with write access under a
+  root. Roots must never contain SbConsole's own data directory.
+- **Testing exception.** `SqliteOperations` is tested against temp-file databases (no Docker, no
+  network) — the only honest way to test PRAGMA parsing, read-only mode and interrupts. Handlers and
+  pages still use a substituted `ISqliteOperations`, as every other plugin does.
+- **CSV export** is built server-side and handed to the browser through a `DotNetStreamReference`
+  and the plugin's `sqlite.js` module — the host has no plugin download endpoint, and this didn't
+  justify adding one. It is capped at 100,000 rows **or** 50 MB (`CsvExport.MaxBytes`), whichever
+  comes first, and written straight into a `MemoryStream`. The audit detail says which cap applied.
+- **Dashboard problems** are three: Error "Integrity check failed", Warning for high free-page
+  share, and Warning "Foreign key violations" when the stored integrity check found any.
+- **Connection form** shows field-level validation errors (empty path, `;` in the path, timeouts
+  below 1) instead of silently keeping the last good secret.
+- **Local dev stack.** `docker/sqlite/seed.py` builds a ~35 MB `reports.db`; the compose `sqlite`
+  profile runs it into the `sqlite-demo` volume, which the app container mounts at `/sqlite` with
+  `SBC_SQLITE_ROOTS=/sqlite` (not `/data`, which holds SbConsole's own database and keys).
+
+### 15.1 SQLite phases 2 and 3 — Query, write mode, DDL, repair, backups (2026-10-13)
+
+Spec §11 of `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md`. The plugin now has four
+pages (Overview, Tables, Query, Backups) and 16 audited actions.
+
+- **ATTACH is impossible from user SQL.** Every connection that runs user-supplied SQL (Query,
+  write mode, Create table) sets `SQLITE_LIMIT_ATTACHED = 0` right after open. Without it,
+  `ATTACH '/any/file'` or `VACUUM INTO '/any/path'` would walk straight past `IHostPathPolicy`
+  (`VACUUM INTO` even works on a read-only connection — verified against the bundled
+  `e_sqlite3`). The script splitter also refuses `ATTACH`/`DETACH`/`VACUUM` and transaction control
+  up front, so the message is friendly rather than "too many attached databases". Plugin-owned
+  connections that need `VACUUM INTO` (backups, restore's pre-restore copy) skip the limit and never
+  run user SQL.
+- **Write-mode model.** Read-only is the default everywhere, including the Query page on a
+  read-write connection. Writing needs `Mode=ReadWrite` in the saved secret (re-read by the
+  operations; the page's switch is only a convenience), opens with `SqliteOpenMode.ReadWrite`
+  (never `ReadWriteCreate` — a missing file is never created), and on a prod-tagged connection
+  asks for the typed name twice: to enter write mode and before running.
+- **Dry run as the rollback.** "Run in transaction" is disabled until a dry run of the *same text*:
+  `BEGIN IMMEDIATE`, every statement, per-statement `changes()` and the `total_changes()` delta,
+  then always `ROLLBACK`. It is the real statement, so it works for any DML/DDL and resolves
+  trigger and FK-cascade rows (`total − direct`) that a `COUNT(*)` rewrite would miss; the cost
+  (the work is done twice) is stated in the UI. The dry run is a query: nothing durable changes,
+  so it writes no audit row. The run itself is one `BEGIN IMMEDIATE … COMMIT`; any error rolls back.
+- **Backup / restore model.** A backup is `VACUUM INTO <BackupDir>/<base>-<yyyyMMdd-HHmmss>.db` on
+  a read-only connection (writers keep going; the copy is compacted), then verified
+  (`integrity_check`, SHA-256, tables, rows ≈, schema fingerprint). `BackupDir` is per connection
+  ("Enable backups to"), passes the same path policy as the file — inside a root, never a root
+  itself, may be the live file's own directory — and is never created by the plugin. History lives
+  in `IPluginStore` (`backups:<connectionId>`, newest first, capped at 200) and keeps failed rows
+  too, because a failure nobody sees is the expensive kind. Restore needs a read-write connection
+  and a typed confirm on prod: verify the backup → `VACUUM INTO` a `<file>.pre-restore-<stamp>` copy
+  next to the live file → online backup API into the live file (writers blocked for the copy, WAL
+  handled by SQLite) → integrity check of the result. Retention is grandfather-father-son over
+  successful backups (newest per UTC day / ISO week / month; the newest success is always kept;
+  a manual backup younger than KeepDaily days is exempt — never pruned and never taking a slot
+  from a scheduled one, because the scheduler's prune minutes after a "before migration" copy
+  once deleted it; older manual backups go through the normal rules), and only files named in the history, re-checked inside `BackupDir`, are ever deleted.
+- **Scheduler and the background actor.** `SqliteBackupScheduler` is a hand-registered
+  `BackgroundService` (the one thing in the plugin the markers can't register) ticking every
+  minute off `TimeProvider`, with a public `TickAsync(now)` for tests. Per connection with a
+  backup dir and an enabled policy, once today's `DailyAtUtc` slot has passed and no scheduled
+  record exists at/after it: back up, verify, prune — the policy is the consent, so the scheduler
+  prunes without confirmation. The policy carries `EnabledSince` (stamped by the save handler when
+  it is switched on, cleared when switched off) so "missed N" never counts slots from before the
+  schedule existed; policies stored before the field read it as null and count all 7 days. There is
+  no signed-in user in a background scope, so `EfAuditScope`
+  now records actor `system` there instead of throwing; the history record says `system` too.
+- **Growth sampling.** `growth:<connectionId>` holds file-size samples (≤ 1 per hour, 30-day
+  retention) taken by the scheduler tick and by every Overview load — the only write a query
+  handler makes, to the plugin's own store, so it isn't audited. The Overview's "Growth — 30 days"
+  card shows first → last, delta, per-day rate, an inline SVG sparkline (stroke from the palette
+  via CSS) and "~N days at this rate" from `DriveInfo` of the file's volume. The Last backup tile
+  and the growth card load beside table sizes, after the tiles, so the tiles never wait.
+- **Query on a backup.** Backups "Open read-only" links to `/p/sqlite/query?backup=<file name>`;
+  Run / Explain / Export open that file inside the connection's `BackupDir` (bare names only,
+  policy-checked) and write mode is unavailable. No temporary host connection is created — the SDK
+  has no seam for one.
+- **Known limitations.**
+  - *No Backups nav badge.* §11.7 wanted "hours since the last successful backup"; the SDK's
+    `GetNavBadgeAsync` hook receives only `(href, secret)` — no connection id, no `IPluginStore` —
+    so the history can't be read there. The dashboard's "Backup overdue" / "Last backup failed"
+    problems carry the signal instead.
+  - *Salvage is best-effort, not `.recover`.* `sqlite3_recover` is a CLI extension that the bundled
+    build doesn't ship, so "Recover into new file" copies DDL and then rows one at a time, skipping
+    what errors, into a new file in `BackupDir`; it never touches the live file.
+  - *Download streams through the circuit.* The file goes to the browser via
+    `DotNetStreamReference` over the SignalR connection (no plugin download endpoint) — fine at demo
+    sizes; the UI says so over 1 GB.
+  - *Schema "N objects differ"* needs the backup's per-object fingerprints, which only a fresh
+    verify returns (history stores just the overall fingerprint), so the detail panel says
+    "identical" / "differs" from history and counts objects after **Verify again**.
+- **Demo seed.** `docker/sqlite/seed.py` timestamps events from ~13 months ago up to the moment it
+  runs (so the mockup's 90-day retention `DELETE` always has old rows of the churned tenant to dry
+  run, plus recent rows it keeps), adds `reports` / `report_runs` (`ON DELETE CASCADE`), a 0-byte
+  `new.db` for the empty state, and a world-writable `backups/` for `BackupDir`. Each piece is
+  created only when missing; `--force` rebuilds the two files.
+
+## 16. Opt-in demo connections (`SBC_DEMO_CONNECTIONS`) (2026-10-13)
+
+Demo and dev stacks needed every sample connection typed into the Connections form by hand after
+each volume reset (the API has no create endpoint — only `/api/v1/health`). `SBC_DEMO_CONNECTIONS`
+names a JSON file of connections the host creates at startup:
+
+```json
+[{ "name": "sqlite-shop", "kind": "sqlite", "secret": "Path=/sqlite/shop.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30;BackupDir=/sqlite/backups", "tags": ["staging"] }]
+```
+
+- **Opt-in, read once, through `BootstrapOptions`.** It stays the only env reader
+  (`DemoConnectionsFile`; blank or unset = off). Generic across plugins: `kind` is any plugin's
+  `ConnectionKind`, `secret` is that plugin's secret string exactly as its form would produce it.
+- **Create-only, idempotent.** `SeedDemoConnectionsCommandHandler` (Core, `IScopedService`) never
+  updates or deletes: an entry whose name already exists is left alone even if its kind, secret or
+  tags differ, so a user's edits to a demo connection survive restarts and a deleted one comes back
+  on the next start (delete the entry from the file, or unset the variable, to stop that). Name
+  uniqueness is the existing unique index plus the create handler's `Conflict` result, so there is
+  no separate "does it exist" read to race.
+- **Same path as the Connections page.** Each entry goes through `CreateConnectionCommandHandler`,
+  so the secret is encrypted with the data key, the plugin's `GetConnectionSummary` is stored and a
+  `connection.create` audit row is written — actor `system`, as for other non-circuit work (§15's
+  scheduler). The handler checks the kind against the registered plugins first and skips (warning)
+  an unknown one, unlike a manual create which tolerates it; a demo file naming a plugin that isn't
+  compiled in is almost certainly a mistake.
+- **Never fatal.** A missing, unreadable or non-array file logs an error and creates nothing;
+  a malformed entry (missing name/kind/secret) or a failed create is logged and skipped; startup
+  continues either way. Demo data must not be able to take the app down.
+- **Where it hooks in.** A one-shot call in `Program.cs`, inside the existing startup scope right
+  after `MigrateAsync` (and after `PluginRegistry.InitializeAll`), before the app serves requests.
+  Not a hosted service: there is nothing to run later, ordering after migration is explicit in one
+  place, and the first page load already sees the connections.
+- **Not for production secrets.** The file is plain JSON on disk; the encrypted store only protects
+  the copy in SbConsole's database. Use it for local/demo brokers and files (the compose stack mounts
+  `docker/sqlite/demo-connections.json`, which holds file paths, not credentials) — real
+  credentials go through the Connections page.
+
+### 16.1 SQLite demo databases and the compose wiring (2026-10-13)
+
+`docker/sqlite/seed.py` adds three files beside `reports.db` / `new.db` (unchanged), each created
+only when missing and all rebuilt by `--force` (`backups/` is never emptied):
+
+- `shop.db` (~6 MB, journal mode DELETE as a contrast to `reports.db`'s WAL) — the realistic
+  relational one: `order_items` → `orders` `ON DELETE CASCADE` and → `products` `ON DELETE RESTRICT`
+  so the Drop dialog's consequences show both kinds, plus `CHECK`s, JSON columns, a partial index,
+  a view, a trigger, a WITHOUT ROWID table and `ANALYZE` stats. Random data is seeded (`Random(7)`);
+  timestamps are relative to the seed run so revenue-by-month reaches "now".
+- `corrupt.db` — the only way to demo the failed-integrity paths without a real disk fault. The
+  seed writes rows with the index present, then rewrites `item-` → `ITEM-` in a few key payloads on
+  the index's root (leaf) page, leaving page headers and cell pointers intact: the b-tree stays
+  walkable, so `integrity_check` reports out-of-order/missing index entries and `REINDEX` can clear
+  and rebuild it. Three orphan `item_notes` rows (inserted with foreign keys off) feed
+  `foreign_key_check`. The seed asserts both "integrity fails" and "REINDEX on a copy → ok" and
+  exits non-zero otherwise, so a SQLite change that alters the outcome is caught at seed time.
+- `reference.db` — small lookup tables, meant for a Read-only connection.
+
+`docker/sqlite/demo-connections.json` lists the five compose connections (secrets in exactly
+`SqliteConnectionSettings.ToSecretString`'s format, pinned by `DemoConnectionsFileTests`); the app
+service mounts it read-only at `/demo/connections.json` with `SBC_DEMO_CONNECTIONS` pointing there.
+No `{root}` placeholder for `dotnet run`: the README says to copy the file and edit the paths —
+one less feature to maintain for a dev convenience. `reports` and `shop` share `/sqlite/backups`;
+that is safe because backup files are prefixed with the database's base name and history/pruning
+are per connection id.
+
+## 17. SQLite: New database from the UI (2026-10-13)
+
+Spec: `docs/superpowers/specs/2026-10-13-sqlite-plugin-design.md` §13. **Reverses** the SQLite
+spec's §10/§11.10 non-goal "creating database files from the UI", on request — behind the same
+fail-closed `SBC_SQLITE_ROOTS` policy, so a deployment with no roots still cannot create (or open)
+anything.
+
+- **Two SDK seams, both additive.** `IHostPathPolicy.AllowedRoots` (default `[]`, Core returns
+  `BootstrapOptions.SqliteRoots` verbatim) so the dialog can offer the roots as its folder list
+  without the plugin learning env var names. `IConnectionCreator.CreateAsync(name, kind, secret,
+  tags)` → `ConnectionCreateResult` (`Created(Id)` / `Conflict` / `Invalid(Error)`) so a plugin can
+  save the connection for a thing it just made. Core's `ConnectionCreator` (marker `IScopedService`)
+  delegates to `CreateConnectionCommandHandler` — the Connections page's own path: encrypted secret,
+  plugin summary, `connection.create` audit row — with the actor resolved like `EfAuditScope`
+  (signed-in user; "system" outside a circuit; shared `AuditActor`). It refuses a kind no
+  registered plugin handles (Core can't see Web's `PluginRegistry`, so it checks the same
+  `IEnumerable<IPlugin>` the registry is built from). Plugins still never touch the DbContext.
+- **Why a plugin-side command, not a Connections-page feature.** Only the plugin knows how to make
+  a valid SQLite file and template it; only Core may persist connections. The handler
+  (`CreateDatabaseCommandHandler`, Mutating, audited `sqlite.database.create`, detail
+  `path · template · journal`) is the only place the two meet.
+- **Safety rules.** Everything is validated before the disk is touched: the folder must string-match
+  a configured root; an optional sub-folder must be relative, free of `.`/`..`, lexically inside
+  it, and already exist; the file name has no separators, `..`, leading dot, `;` or control
+  characters (`.db` appended unless `.db`/`.sqlite`/`.sqlite3`); the full path passes
+  `IHostPathPolicy.Check` (symlinks followed, SbConsole's own DB refused); neither the file nor a
+  `-wal`/`-shm`/`-journal` sibling — nor a directory or dangling symlink of that name — exists; the
+  connection name isn't taken; a script is parsed by `SqliteScript.Parse` (same refusals as the
+  Query page). Then the file is created with `FileMode.CreateNew` (O_CREAT|O_EXCL) on the resolved
+  path — stricter than the spec's "ReadWriteCreate open": a file that appears between check and
+  create makes it fail instead of being adopted — and opened writable and attach-limited for the
+  journal mode and the template in one transaction. Any failure deletes the file and its siblings;
+  so does a Conflict/Invalid/exception from `IConnectionCreator`. No directory is ever created and
+  no file overwritten. Once the file exists the remaining steps ignore cancellation, so a cancelled
+  request can't leave a file without a connection.
+- **Audit convention.** As elsewhere in the plugin, a row only for work that ran: input refused
+  before anything touched the disk (blank/taken name, refused folder/file/existing file, refused
+  script) returns an error with no `sqlite.database.create` row; once a file was created every
+  outcome is audited (success, failed template, connection not saved). A success also writes Core's
+  own `connection.create` row.
+- **UI.** "+ New database…" in the connection picker's menu (every SQLite page) and on its
+  no-connections empty state opens `NewDatabaseDialog` — the Tables page's `sql-dialog` panel,
+  floated in an overlay because the picker sits in the header bar. With no roots it shows the
+  explanation instead of the form. The `<folder>/backups` offer comes from
+  `FindBackupsDirQueryHandler` (policy-checked, must exist). On success the picker reloads its list
+  and either selects the new connection in place (already on Overview) or navigates to
+  `/p/sqlite/overview?connectionId=…`. Starter schema: users / projects / tasks (RESTRICT, CASCADE,
+  SET NULL), an index, a view, 12 rows, `ANALYZE`; no functions in defaults because files are
+  opened with `trusted_schema = OFF`. Nothing extra is confirmed for prod-tagged new connections:
+  nothing existing is touched.
+
+## 18. PostgreSQL plugin (`SbConsole.Plugins.Postgres`) (2026-10-14)
+
+Spec: `docs/superpowers/specs/2026-10-14-postgres-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-10-14-postgres-plugin.md`. Five pages — Overview, Browse, Query,
+Activity, Maintenance — and the audited actions behind them. Driver: Npgsql, referenced by the
+plugin only. This section records the decisions and the places review changed the spec.
+
+- **A connection is a server, not a database.** The saved secret is an Npgsql string plus two house
+  keys (`Mode`, `StatementTimeoutS`); the database is a per-page picker (`pg_database`, `?db=`)
+  that re-opens against the chosen database. Every connection the plugin opens sets
+  `application_name=sbconsole`, which is how Activity recognises its own backends: "this console"
+  chip, excluded from blocker/idle problems, and Cancel/Terminate refuse them (matched on the
+  application name server-side, not on a pid the client sent). Consequence: any other client that
+  connects with `application_name = 'sbconsole'` can't be cancelled or terminated from the console.
+- **The Activity nav badge is cached for 15 s** per connection (keyed by a hash of the secret, never
+  the raw secret), including failed probes, so shell polling doesn't hit the server each time.
+- **The read-only guard is a seatbelt, not a privilege boundary.** Read mode runs in
+  `BEGIN READ ONLY` with `SET LOCAL statement_timeout`; `PgSqlLexer` splits statements and refuses
+  transaction/session control up front for a friendly message. The enforcement is on the server:
+  read mode sends the text as a **single `NpgsqlBatchCommand`**, so the server's extended protocol
+  itself rejects a second statement (`COMMIT; DELETE …`) even if the lexer were fooled. The lexer
+  still has to agree with the server about where statements end, and review found mismatches that
+  are now fixed and tested: a `\r` ends a `--` comment; non-ASCII identifier characters directly
+  before `$$` or `E'…'` don't start a dollar quote or escape string. **Limit:** functions with side
+  effects (`pg_terminate_backend`, `dblink`, `pg_reload_conf`) still run inside a read-only
+  transaction; a read-only role is the real fix, and the connection form says so.
+- **Write mode** needs `Mode=ReadWrite` in the saved secret (re-read per run; the page switch is a
+  convenience). A script runs as one transaction made of **one single-command batch per statement**
+  (so the position of a server error maps to the failing statement via `PgQueryException(inner,
+  start)`); any error rolls back. The guard refuses transaction control (`BEGIN`, `START`, `COMMIT`,
+  `END`, `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`), `PREPARE`, `CHECKPOINT`, `VACUUM`, and the
+  statements the server won't run in a transaction block (`CREATE INDEX CONCURRENTLY`,
+  `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `ALTER SYSTEM`). `COPY` is refused because
+  there is no stdin/stdout channel to feed it.
+- **`CLUSTER`, `REINDEX`, `ANALYZE` and `LOAD` are refused in read mode**, because PostgreSQL
+  permits them inside a `READ ONLY` transaction (verified on PG16) and `CLUSTER`/`REINDEX` take
+  `ACCESS EXCLUSIVE` locks. Write mode allows them; Maintenance and Browse are the audited routes.
+- **The EXPLAIN tab refuses `ANALYZE`** (`EXPLAIN ANALYZE …` and `EXPLAIN (… ANALYZE …)`), since
+  it executes the statement and the tab is not audited; Run accepts it and audits it as a read.
+- **Every user-SQL run is audited**, reads included (`pg.query.read` / `pg.query.write`), because
+  free-form SQL against a shared server is what an audit log is for; this makes Query's Run a
+  command handler. Catalog/metric reads are queries and are not. A cancelled run is audited
+  "· cancelled", added to history and rethrown. A refused export is not audited (nothing ran).
+- **Capped reads cancel.** Reading stops at the row cap and cancels the command rather than
+  draining the cursor, so a `SELECT *` on a 50M-row table costs one page. Write mode does drain
+  capped selects (the statement must finish inside its transaction); the UI says so.
+- **Browse queries are built from the catalog, never from client text.** The select list casts odd
+  types `::text` and omits type modifiers (`char(3)`/`bit(n)` casts keep none, so a typmod mismatch
+  can't fail the query), `ORDER BY` is qualified, and the target is looked up by **OID** and quoted
+  from the catalog result. The same OID-not-name rule covers VACUUM/ANALYZE/VACUUM FULL and
+  REINDEX/Drop index. **REINDEX CONCURRENTLY changes the index OID**, so Browse reloads the detail
+  afterwards and keeps the selection by name. Limit: `?oid=` is not restricted to the schemas the
+  tree shows (it is read-only metadata the role could already select).
+- **Browse owns its URL.** `PgConnectionPicker`/`PgDatabasePicker` are built with `ManageUrl=false`
+  on Browse and Query; the page writes `?connectionId=&db=&oid=` itself so a picker clearing its
+  selection (connection change, failed load) raises `SelectedChanged` and the parent drops the stale
+  `db`/`oid`. `?oid=` without `?db=` is dropped.
+- **Overview keeps a stale snapshot.** The last good `PgOverview` (and the previous
+  `xact_commit` sample for commits/s) lives in `IPluginStore` under `overview:<connectionId>`.
+  When the server is unreachable the page renders the cached tiles dimmed with "stale · HH:mm",
+  an alert with the friendly sentence, and retries every 30 s. Writing the snapshot is the plugin's
+  own store, so it isn't audited. Limit: the commits/s baseline is shared across circuits
+  (two viewers shorten each other's interval).
+- **Limited visibility without `pg_monitor`.** A role that isn't superuser or `pg_monitor` sees
+  other sessions' `pg_stat_activity` rows with the query and some columns nulled, and
+  `pg_stat_replication`/`pg_stat_progress_vacuum` partly empty. Tiles and the Activity tree show
+  what the role can see and say so; nothing is guessed. `pgstattuple` is optional: bloat is "—"
+  with a hint when the extension isn't installed in the current database; the plugin never installs
+  extensions.
+- **Blocking chain.** `pg_blocking_pids` places a waiter under its first blocker; cycles fall back
+  to flat rows. The "relation" the banner names uses the tuple-lock aware rule from the operations
+  layer (a row lock waits on the *transaction*, not the relation), restricted to the current
+  database. `ActivityTree.Build(activity, activeOnly, showIdle)` is pure and unit-tested;
+  `WorstBlocker` ignores the filters, so the banner can name an idle-in-transaction blocker the
+  table currently hides. Auto-refresh pauses while a confirm or action is in flight; a pid can still
+  be reused in the window between confirm and click, so Cancel/Terminate re-read the row and verify
+  it is a client backend (`GetBackend`) right before acting.
+- **`ConfirmationRequest` overload (the one additive SDK change).** `IConfirmationService` gained
+  `ConfirmAsync(ConfirmationRequest)` (verb, target, `IsProd`, consequence, label/value details,
+  audit action, `Destructive`); the default implementation falls back to the old call, so existing
+  callers and plugins are untouched. `ConfirmDialog` takes a **`Detailed` flag** set by the request
+  overload, so the richer layout (consequence paragraph, details table, "Audited as …", error
+  outline for `Destructive`) never appears on the old path. The typed text is the whole target
+  (`pid 48213`), so pasting a bare number doesn't match. Terminate/VACUUM FULL/Drop index use it.
+- **Maintenance timeouts.** VACUUM and ANALYZE run outside a transaction with the statement
+  timeout raised to `max(setting, 600 s)`; VACUUM FULL to 3600 s, and the session `statement_timeout`
+  is `RESET` afterwards so a pooled connection doesn't carry it. A cancelled maintenance run is
+  audited. Actions are dispose-safe (the page may be left while one runs). Not built: the
+  header overflow button, a dead-% meter bar, showing more than one running vacuum.
+- **Audit page has no hash search.** The Query page's "audit row" link therefore goes to `/audit`
+  (target `{connection}/{database}`), not to a row; a deep link needs a host change (search by
+  detail hash) and is left as a follow-up.
+- **Testing exception.** `PostgresOperations` is tested against a real `postgres:16` Testcontainer
+  (`Testcontainers.PostgreSql`; the repo's first Testcontainers use), because catalog SQL, read-only
+  transactions, timeouts, cancel/terminate and lock detection can't be honestly faked. The tests
+  skip themselves when Docker is unavailable (`[DockerFact]`) and share one container
+  (`"postgres"` collection; `MaxRowsOverride` is static, so tests touching it must stay in that
+  collection). Handlers and pages use a substituted `IPostgresOperations`, like every other plugin.
+- **Known limitations.** Partitioned tables show parent-only sizes and DDL; PG18 virtual generated
+  columns aren't distinguished; very large `bytea`/`text` cells are loaded whole; `timestamp` cells
+  show the server's text form (`+00`); the JSON tab shows 200 rows until "Show all"; Browse's
+  filter chips and low-cardinality flag from the mockup, and a "Show lock tree" menu item, were not
+  built; a pid-reuse window exists between confirm and action (mitigated above).
+- **Local dev stack.** Compose profile `postgres`: `postgres:16` on host port 5433 (preloaded
+  `pg_stat_statements`, `track_io_timing=on`) seeded by `docker/postgres/init/*.sql` on first
+  start of the `postgres-data` volume (databases `app` ~1.1M rows, `analytics`, `billing`;
+  `sessions` and `order_items` have autovacuum off and 40 % deleted for Maintenance; an unused
+  `idx_orders_legacy_ref` for Overview), plus `postgres-blocker`, a `psql` loop that keeps one
+  idle-in-transaction row lock and two waiters (`checkout-api`, `fulfilment-worker`) alive for
+  Activity, restarting every 15 minutes. The healthcheck connects over TCP: the entrypoint's
+  temporary init server listens on the socket only, so a socket check would report healthy
+  mid-seed. `pg-local` (read-write, `prod`) and `pg-local-ro` (read-only, `demo`) were added to
+  the single `docker/sqlite/demo-connections.json` (§16.1; Host `postgres`, the compose network),
+  pinned by the Postgres `DemoConnectionsFileTests`; the SQLite test now only checks `kind ==
+  "sqlite"` entries. For `dotnet run` the README says to copy the file and change Host/Port to
+  `localhost`/`5433`.

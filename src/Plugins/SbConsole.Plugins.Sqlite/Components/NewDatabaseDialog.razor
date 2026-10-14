@@ -1,0 +1,321 @@
+@using SbConsole.Plugins.Sqlite.Client
+@using SbConsole.Plugins.Sqlite.Databases
+@inject IHostPathPolicy PathPolicy
+@inject CreateDatabaseCommandHandler CreateDatabase
+@inject FindBackupsDirQueryHandler FindBackupsDir
+
+@* "New database…" (design spec §13), opened from SqliteConnectionPicker on every SQLite page. The
+   same inline sql-dialog panel as the Tables page DDL dialogs, floated over the page because the
+   picker lives in the header bar. Field checks here are hints only: the handler and the operation
+   re-validate everything server-side before the disk is touched. *@
+<div class="sql-overlay sqlite-newdb-overlay">
+    <div class="sql-dialog sqlite-newdb-dialog" role="dialog" aria-modal="true" aria-label="New database">
+        <div class="sql-dialog-title">New database</div>
+
+        @if (_roots.Count == 0)
+        {
+            <div class="sql-footnote sqlite-newdb-no-roots">
+                @NewDatabaseRules.NoRoots New files can only be created inside those folders (the same allow-list
+                every SQLite connection is checked against).
+            </div>
+            <div class="sql-actions">
+                <button type="button" class="sql-btn sqlite-newdb-cancel" @onclick="CancelAsync">Close</button>
+            </div>
+        }
+        else
+        {
+            <div class="sql-footnote">
+                Creates a new SQLite file and saves a connection for it. Existing files are never overwritten and no
+                folder is ever created; the action is audited (<span class="sql-mono">@CreateDatabaseCommandHandler.Action</span>).
+            </div>
+
+            <div class="sql-form">
+                <label class="sql-field-label" for="sqlite-newdb-folder">Folder</label>
+                <div class="sql-field-control">
+                    <select id="sqlite-newdb-folder" class="sql-input sqlite-newdb-folder" value="@_folder" disabled="@_busy" @onchange="OnFolderChangedAsync">
+                        @foreach (var root in _roots)
+                        {
+                            <option value="@root">@root</option>
+                        }
+                    </select>
+                </div>
+
+                <label class="sql-field-label" for="sqlite-newdb-subfolder">Sub-folder</label>
+                <div class="sql-field-control">
+                    <input id="sqlite-newdb-subfolder" class="sql-input sqlite-newdb-subfolder" placeholder="optional — must already exist" spellcheck="false"
+                           value="@_subFolder" disabled="@_busy" @oninput="e => _subFolder = e.Value?.ToString() ?? string.Empty" @onchange="OnSubFolderChangedAsync" />
+                    @if (SubFolderError is { } subError)
+                    {
+                        <span class="sql-field-error sqlite-newdb-subfolder-error">@subError</span>
+                    }
+                </div>
+
+                <label class="sql-field-label" for="sqlite-newdb-file">File name</label>
+                <div class="sql-field-control">
+                    <input id="sqlite-newdb-file" class="sql-input sqlite-newdb-file" placeholder="e.g. reports" spellcheck="false"
+                           maxlength="@NewDatabaseRules.MaxFileNameLength" value="@_fileName" disabled="@_busy" @oninput="OnFileNameInput" />
+                    @if (FileNameError is { } fileError)
+                    {
+                        <span class="sql-field-error sqlite-newdb-file-error">@fileError</span>
+                    }
+                    else if (_fileName.Trim().Length > 0)
+                    {
+                        <span class="sql-footnote sql-field-hint">Creates <span class="sql-mono sqlite-newdb-target">@TargetPath</span></span>
+                    }
+                </div>
+
+                <span class="sql-field-label">Journal mode</span>
+                <div class="sql-field-control">
+                    <span class="sql-seg" role="group" aria-label="Journal mode">
+                        <button type="button" class="sql-seg-opt sqlite-newdb-journal-wal @Active(_journal == NewDatabaseJournal.Wal)" disabled="@_busy"
+                                @onclick="() => _journal = NewDatabaseJournal.Wal">WAL</button>
+                        <button type="button" class="sql-seg-opt sqlite-newdb-journal-delete @Active(_journal == NewDatabaseJournal.Delete)" disabled="@_busy"
+                                @onclick="() => _journal = NewDatabaseJournal.Delete">DELETE</button>
+                    </span>
+                </div>
+
+                <span class="sql-field-label">Template</span>
+                <div class="sql-field-control">
+                    <span class="sql-seg" role="group" aria-label="Template">
+                        <button type="button" class="sql-seg-opt sqlite-newdb-template-empty @Active(_template == NewDatabaseTemplate.Empty)" disabled="@_busy"
+                                @onclick="() => _template = NewDatabaseTemplate.Empty">Empty</button>
+                        <button type="button" class="sql-seg-opt sqlite-newdb-template-starter @Active(_template == NewDatabaseTemplate.Starter)" disabled="@_busy"
+                                @onclick="() => _template = NewDatabaseTemplate.Starter">Starter schema</button>
+                        <button type="button" class="sql-seg-opt sqlite-newdb-template-script @Active(_template == NewDatabaseTemplate.Script)" disabled="@_busy"
+                                @onclick="() => _template = NewDatabaseTemplate.Script">My SQL script</button>
+                    </span>
+                    <span class="sql-footnote sql-field-hint">@TemplateHint</span>
+                </div>
+            </div>
+
+            @if (_template == NewDatabaseTemplate.Script)
+            {
+                <textarea class="sql-editor sqlite-newdb-script" aria-label="SQL script" spellcheck="false" disabled="@_busy"
+                          placeholder="CREATE TABLE …;" value="@_script" @oninput="e => _script = e.Value?.ToString() ?? string.Empty"></textarea>
+                @if (ScriptError is { } scriptError)
+                {
+                    <span class="sql-field-error sqlite-newdb-script-error">@scriptError</span>
+                }
+            }
+
+            <div class="sql-form">
+                <label class="sql-field-label" for="sqlite-newdb-name">Connection name</label>
+                <div class="sql-field-control">
+                    <input id="sqlite-newdb-name" class="sql-input sqlite-newdb-name" spellcheck="false" value="@_name" disabled="@_busy" @oninput="OnNameInput" />
+                    @if (NameError is { } nameError)
+                    {
+                        <span class="sql-field-error sqlite-newdb-name-error">@nameError</span>
+                    }
+                </div>
+
+                <span class="sql-field-label">Default mode</span>
+                <div class="sql-field-control">
+                    <span class="sql-seg" role="group" aria-label="Default mode">
+                        <button type="button" class="sql-seg-opt sqlite-newdb-mode-readwrite @Active(_mode == SqliteAccessMode.ReadWrite)" disabled="@_busy"
+                                @onclick="() => _mode = SqliteAccessMode.ReadWrite">Read-write</button>
+                        <button type="button" class="sql-seg-opt sqlite-newdb-mode-readonly @Active(_mode == SqliteAccessMode.ReadOnly)" disabled="@_busy"
+                                @onclick="() => _mode = SqliteAccessMode.ReadOnly">Read-only</button>
+                    </span>
+                </div>
+
+                <label class="sql-field-label" for="sqlite-newdb-tags">Tags</label>
+                <div class="sql-field-control">
+                    <input id="sqlite-newdb-tags" class="sql-input sqlite-newdb-tags" placeholder="comma-separated, e.g. prod" spellcheck="false"
+                           value="@_tags" disabled="@_busy" @oninput="e => _tags = e.Value?.ToString() ?? string.Empty" />
+                    @if (Tags.Contains("prod", StringComparer.OrdinalIgnoreCase))
+                    {
+                        <span class="sql-footnote sql-field-hint"><span class="sql-prod">prod</span> — destructive actions on this file will ask for the typed name.</span>
+                    }
+                </div>
+
+                <span class="sql-field-label">Backups</span>
+                <div class="sql-field-control">
+                    @if (_backupsOffer is { } offer)
+                    {
+                        <label class="sql-check sqlite-newdb-backups">
+                            <input type="checkbox" checked="@_enableBackups" disabled="@_busy" @onchange="e => _enableBackups = e.Value is true" />
+                            <span>Enable backups to <span class="sql-mono sqlite-newdb-backups-dir">@offer</span></span>
+                        </label>
+                    }
+                    else
+                    {
+                        <span class="sql-footnote sql-field-hint sqlite-newdb-no-backups">
+                            No <span class="sql-mono">backups</span> folder next to it — backups can be enabled later in Connections.
+                        </span>
+                    }
+                </div>
+            </div>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-newdb-error">@_error</MudAlert>
+            }
+
+            <div class="sql-actions">
+                <button type="button" class="sql-btn sqlite-newdb-cancel" disabled="@_busy" @onclick="CancelAsync">Cancel</button>
+                <button type="button" class="sql-btn sql-btn-primary sqlite-newdb-submit" disabled="@_busy" @onclick="SubmitAsync">
+                    @(_busy ? "Creating…" : "Create database")
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Names of the existing SQLite connections, for an immediate "already exists" hint (the handler re-checks).</summary>
+    [Parameter] public IReadOnlyCollection<string> ExistingNames { get; set; } = [];
+
+    [Parameter] public EventCallback<DatabaseCreated> Created { get; set; }
+
+    [Parameter] public EventCallback Cancelled { get; set; }
+
+    private IReadOnlyList<string> _roots = [];
+    private string _folder = "";
+    private string _subFolder = "";
+    private string _fileName = "";
+    private string _name = "";
+    private bool _nameEdited;
+    private NewDatabaseJournal _journal = NewDatabaseJournal.Wal;
+    private NewDatabaseTemplate _template = NewDatabaseTemplate.Empty;
+    private string _script = "";
+    private SqliteAccessMode _mode = SqliteAccessMode.ReadWrite;
+    private string _tags = "";
+    private string? _backupsOffer;
+    private bool _enableBackups;
+    private bool _attempted;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _roots = PathPolicy.AllowedRoots;
+        if (_roots.Count > 0)
+        {
+            _folder = _roots[0];
+            await RefreshBackupsOfferAsync();
+        }
+    }
+
+    private static string? Active(bool on) => on ? "sql-is-active" : null;
+
+    private string TargetPath
+    {
+        get
+        {
+            var sub = _subFolder.Trim().Trim('/');
+            var name = NewDatabaseRules.WithExtension(_fileName);
+            return sub.Length == 0 ? $"{_folder.TrimEnd('/')}/{name}" : $"{_folder.TrimEnd('/')}/{sub}/{name}";
+        }
+    }
+
+    private string TemplateHint => _template switch
+    {
+        NewDatabaseTemplate.Starter => "users, projects and tasks with foreign keys, an index, a view and a dozen rows.",
+        NewDatabaseTemplate.Script => "Runs in one transaction; ATTACH, VACUUM and transaction control are refused, as on the Query page.",
+        _ => "No tables — start from scratch.",
+    };
+
+    private string? FileNameError =>
+        _attempted || _fileName.Trim().Length > 0 ? NewDatabaseRules.FileNameError(_fileName) : null;
+
+    private string? SubFolderError => NewDatabaseRules.SubFolderError(_subFolder);
+
+    private string? NameError
+    {
+        get
+        {
+            var name = _name.Trim();
+            if (name.Length == 0)
+            {
+                return _attempted ? "Type a connection name." : null;
+            }
+
+            return ExistingNames.Contains(name, StringComparer.Ordinal) ? $"A connection named '{name}' already exists." : null;
+        }
+    }
+
+    private string? ScriptError =>
+        _attempted && _template == NewDatabaseTemplate.Script && _script.Trim().Length == 0 ? "Type the SQL script to run in the new file." : null;
+
+    private List<string> Tags =>
+        _tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    private void OnFileNameInput(ChangeEventArgs e)
+    {
+        _fileName = e.Value?.ToString() ?? string.Empty;
+        if (!_nameEdited)
+        {
+            _name = NewDatabaseRules.DefaultConnectionName(_fileName);
+        }
+    }
+
+    private void OnNameInput(ChangeEventArgs e)
+    {
+        _name = e.Value?.ToString() ?? string.Empty;
+        // Clearing the name hands it back to the file name.
+        _nameEdited = _name.Length > 0;
+    }
+
+    private async Task OnFolderChangedAsync(ChangeEventArgs e)
+    {
+        _folder = e.Value?.ToString() ?? _folder;
+        await RefreshBackupsOfferAsync();
+    }
+
+    private async Task OnSubFolderChangedAsync(ChangeEventArgs e)
+    {
+        _subFolder = e.Value?.ToString() ?? string.Empty;
+        await RefreshBackupsOfferAsync();
+    }
+
+    private async Task RefreshBackupsOfferAsync()
+    {
+        var sub = _subFolder.Trim();
+        var offer = SubFolderError is null ? await FindBackupsDir.HandleAsync(_folder, sub.Length == 0 ? null : sub) : null;
+        if (offer != _backupsOffer)
+        {
+            _backupsOffer = offer;
+            _enableBackups = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _attempted = true;
+        _error = null;
+        if (FileNameError is not null || SubFolderError is not null || NameError is not null || ScriptError is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var sub = _subFolder.Trim();
+            var result = await CreateDatabase.HandleAsync(new CreateDatabaseCommand(
+                _folder,
+                sub.Length == 0 ? null : sub,
+                _fileName.Trim(),
+                _journal,
+                _template,
+                _template == NewDatabaseTemplate.Script ? _script : null,
+                _name.Trim(),
+                _mode,
+                Tags,
+                _enableBackups ? _backupsOffer : null));
+            if (result.IsSuccess)
+            {
+                await Created.InvokeAsync(result.Value!);
+                return;
+            }
+
+            _error = result.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task CancelAsync() => Cancelled.InvokeAsync();
+}

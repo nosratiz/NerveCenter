@@ -8,6 +8,7 @@ obj/
 *.db
 *.db-wal
 *.db-shm
+.sqlite-demo/
 
 # OS
 .DS_Store

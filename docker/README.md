@@ -395,14 +395,196 @@ the host publishes the right ports, the container does not.
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
 `SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`,
-`REDIS_PORT`, `REDIS_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
+`REDIS_PORT`, `REDIS_PASSWORD`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
 broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile postgres --profile sqlite --profile app down -v
 ```
 
-`-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's
+`-v` drops the named volumes (Kafka log segments, SQL Server data, PostgreSQL data, the containerised app's
 SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
+
+## SQLite
+
+SQLite is a file, not a server, so there's no broker container — just a one-shot seed
+(`docker/sqlite/seed.py`) that writes, into one directory:
+
+| File | Journal | What it demos |
+|---|---|---|
+| `reports.db` | WAL | ~35 MB file shaped like the plugin mockups: tenants / users / sessions / events with JSON props and unix-ms timestamps from ~13 months ago up to the moment the seed ran, a WITHOUT ROWID `event_props` table, `reports` / `report_runs` (`ON DELETE CASCADE`), two views, a trigger, `ANALYZE` stats and some free pages (Overview, WAL checkpoint). Tenant `umbrella` is churned (last activity ~60 days before seeding), so the retention script below has rows to dry-run and cascades to show. |
+| `shop.db` | DELETE | ~6 MB shop: 6 000 customers, 22 000 orders, ~57 000 order items, 12 000 reviews, 400 products. `price_cents` integers, JSON `attributes` / review `meta`, `CHECK`s on order status / quantity / rating, `order_items` → `orders` **ON DELETE CASCADE** and → `products` **ON DELETE RESTRICT** (the Drop dialog shows both), a partial index (`idx_orders_pending … WHERE status = 'pending'`), the view `v_revenue_by_month`, an `updated_at` trigger, a WITHOUT ROWID `product_tags`, `ANALYZE` stats. |
+| `corrupt.db` | DELETE | Tiny and deliberately broken: the `idx_items_name` index b-tree is damaged (integrity check fails with "row N missing from index…"; **REINDEX** fixes it) and `item_notes` has 3 orphan rows (foreign-key check violations). Demos the Overview's failed-integrity strip, REINDEX, **Recover into new file** and the dashboard's problem counts. |
+| `reference.db` | DELETE | Small lookup data — countries (ISO alpha-2/3, numeric), currencies, a `country_currencies` join with FKs — connected **Read-only** to show the read-only UI state. |
+| `new.db` | — | A 0-byte file — SQLite opens it as an empty database (the Tables page's empty state, mockup 1g). |
+| `backups/` | | World-writable directory for the connections' **Enable backups to** (Backups page). |
+
+The seed is idempotent: each file is created only when missing. `--force` deletes and rebuilds
+every database file (never `backups/`) — the seed verifies that `corrupt.db` really fails its
+integrity check and that `REINDEX` on a copy repairs it.
+
+**Demo connections are created automatically.** With `SBC_DEMO_CONNECTIONS` pointing at a JSON
+file, the app creates each listed connection at startup **if no connection with that name exists**
+— it never updates or deletes one, so your edits survive restarts and a connection you delete comes
+back on the next start (remove it from the file to stop that). They go through the same path as the
+Connections form: secret encrypted, `connection.create` audit row with actor `system`. Unset = off;
+an unreadable file is logged and skipped. Demo/dev only — never put production secrets in a plain
+JSON file. The compose app mounts `docker/sqlite/demo-connections.json` (read-only) at
+`/demo/connections.json`:
+
+| Name | File path | Mode | Enable backups to | Tags |
+|---|---|---|---|---|
+| `sqlite-reports` | `/sqlite/reports.db` | Read-write | `/sqlite/backups` | `prod` |
+| `sqlite-shop` | `/sqlite/shop.db` | Read-write | `/sqlite/backups` | `staging` |
+| `sqlite-corrupt` | `/sqlite/corrupt.db` | Read-write | `/sqlite/backups` | `demo` |
+| `sqlite-reference` | `/sqlite/reference.db` | Read-only | — | `demo` |
+| `sqlite-new` | `/sqlite/new.db` | Read-write | — | `demo` |
+
+`reports` and `shop` share `backups/`; backup files are prefixed with the database's base name and
+each connection's history only lists its own records, so they don't mix.
+
+- **Containerised app:** `docker compose --profile sqlite --profile app up -d --build`. Everything
+  lands in the `sqlite-demo` volume, mounted at `/sqlite`; the app gets `SBC_SQLITE_ROOTS=/sqlite`
+  and `SBC_DEMO_CONNECTIONS=/demo/connections.json`.
+  Reset the files with `docker compose --profile sqlite run --rm sqlite-init python -I /seed.py --force /sqlite`
+  (then restart the app if it has a file open). Resetting files doesn't touch the saved
+  connections; to recreate those too, drop the app's volume (`docker compose --profile app down -v`
+  removes `sbconsole-data` along with the others) and start again.
+- **`dotnet run`:** `python3 -I docker/sqlite/seed.py ./.sqlite-demo` (add `--force` to rebuild).
+  In `launchSettings.json` set `SBC_SQLITE_ROOTS` to the absolute path of `.sqlite-demo`. For the
+  demo connections, copy `docker/sqlite/demo-connections.json` somewhere outside the repo (e.g.
+  `.sqlite-demo/demo-connections.json`), replace every `/sqlite` in it with that absolute path, and
+  set `SBC_DEMO_CONNECTIONS` to the copy. Without it, add connections by hand with the paths above
+  (`<that path>/…` instead of `/sqlite/…`).
+
+`sqlite-reports` with the `prod` tag exercises the typed confirmations (write mode, Run in
+transaction, Drop table, Prune, Restore). A retention dry run to paste into the Query page in
+write mode (it cascades into `event_props`):
+
+```sql
+DELETE FROM events
+WHERE ts < (strftime('%s','now','-90 days')*1000)
+  AND tenant_id IN (SELECT id FROM tenants WHERE status='churned');
+```
+
+**New database.** Every SQLite page's connection menu (and the "No SQLite connections yet" state)
+has **+ New database…**: pick a folder — the `SBC_SQLITE_ROOTS` roots, so `/sqlite` in compose —
+an optional sub-folder that already exists, a file name (`.db` is appended), WAL or DELETE, and a
+template (Empty, a small Starter schema of users/projects/tasks, or your own SQL script, which gets
+the Query page's refusals: no ATTACH, VACUUM or transaction control). It also saves the connection
+(default name `sqlite-<file>`, Read-write by default, tags, and `<folder>/backups` as the backup
+directory when that folder exists — in compose `/sqlite/backups` does) and opens its Overview. It
+never overwrites a file (also refused if a `-wal`/`-shm`/`-journal` leftover is there), never
+creates a directory, and a failed template or connection save deletes the new file again. Audited
+as `sqlite.database.create`.
+
+**Backups.** `BackupDir` ("Enable backups to") must pass the same path policy as the file: it has
+to be *inside* an `SBC_SQLITE_ROOTS` root (a root itself is refused) and may be the live file's own
+directory; it must already exist and be writable by the app's user — the seed's `backups/` is.
+Copies are `VACUUM INTO` files named `<base>-<yyyyMMdd-HHmmss>.db`; a restore keeps the replaced
+file next to the live one as `<file>.pre-restore-<yyyyMMdd-HHmmss>` (in `/sqlite`, also writable).
+The daily schedule runs inside the app (a background service), so nothing is backed up while it is
+down; growth samples for the Overview's "Growth — 30 days" card accumulate the same way (at most
+one an hour), so a fresh install shows "collecting" for its first hour. Download streams the file
+through the browser session — fine at demo sizes; fetch multi-GB copies from the volume directly.
+
+`SBC_SQLITE_ROOTS` is fail-closed: unset means no SQLite connection can open anything. Paths are
+resolved (`..` collapsed, every symlink followed) before the check, and SbConsole's own database and
+its `-wal`/`-shm`/`-journal` files are always refused. Known limitations: the bundled SQLite has no
+`dbstat`, so the Overview ranks the largest tables by `sqlite_stat1` row estimates instead of bytes;
+a *symlink race*: the path check is check-then-open, and while opening the resolved path defeats
+symlinks that already existed at check time, someone with write access under a root can still race
+a new one in; and a *hard link* to SbConsole's own database placed under a root is not detected, because the policy
+compares resolved paths, not file identity (creating one needs write access to both locations).
+Roots must never contain SbConsole's own data directory (the folder of `SBC_DB_PATH`, which also
+holds the data-protection keys).
+
+## PostgreSQL (opt-in)
+
+```bash
+docker compose --profile postgres up -d
+```
+
+| Service            | Host address     | What it is                                                              |
+|--------------------|------------------|-------------------------------------------------------------------------|
+| `postgres`         | `localhost:5433` | PostgreSQL 16, user `sbconsole` / password `sbconsole`, seeded on first start |
+| `postgres-blocker` | (long-running)   | Keeps a lock-contention scenario alive for the Activity page            |
+
+The host port is 5433 so it doesn't clash with a Postgres already on 5432 (`POSTGRES_PORT`; the
+password is `POSTGRES_PASSWORD`). The server runs with `pg_stat_statements` preloaded and
+`track_io_timing=on`. The seed runs once, when the `postgres-data` volume is first created
+(`docker/postgres/init/*.sql`, about 35 s on a laptop; the healthcheck only turns healthy when it
+is done):
+
+| Database    | Contents |
+|-------------|----------|
+| `app`       | `customers` (20k), `products` (2k), `orders` (200k, jsonb `metadata`, a few `pending`), `order_items` (400k), `payments` (150k), `sessions` (50k), `events` (300k); schemas `audit` and `reporting` (view `v_order_totals`, materialized view `mv_daily`); function `order_total(bigint)`; extensions `pgstattuple` and `pg_stat_statements` |
+| `analytics` | one small table, `daily_orders` |
+| `billing`   | one small table, `invoices` |
+
+What it is built to show:
+
+- **Maintenance:** autovacuum is switched off on `sessions` and `order_items`, then 40 % of their
+  rows are deleted, so 40 % of each table is dead tuples.
+- **Browse / Overview:** `idx_orders_legacy_ref` is never read (the "unused index" problem);
+  `idx_orders_status_pending` is a partial index; `idx_orders_metadata_gin` a GIN index.
+- **Activity:** `postgres-blocker` holds a transaction open with a row lock on `orders.id = 1`
+  (`checkout-api`, idle in transaction) and starts two waiters on the same row (`checkout-api`,
+  `fulfilment-worker`), so the page shows a blocking chain. The cycle restarts every 15 minutes
+  and the holder's transaction is rolled back, which resolves the chain for a moment. Terminating
+  the holder in the UI works; the next cycle makes a new one.
+
+Demo connections: `docker/sqlite/demo-connections.json` is the one file for every plugin, so it
+also holds `pg-local` (read-write, tag `prod`, which exercises the typed confirmations) and
+`pg-local-ro` (read-only, tag `demo`), both `Host=postgres`, port 5432, database `app`, which is
+how the containerised app (`--profile app`, same compose network) reaches the server. They are
+created at startup if missing, like the SQLite ones.
+
+For `dotnet run` on the host, copy `docker/sqlite/demo-connections.json` somewhere outside the
+repo, change `Host=postgres` to `Host=localhost` and `Port=5432` to `Port=5433` in the two
+`postgres` entries (and the `/sqlite` paths as described above, or delete the sqlite entries),
+and point `SBC_DEMO_CONNECTIONS` at the copy. Or create the connection by hand on the Connections
+page with Host `localhost`, Port `5433`, Database `app`, user/password `sbconsole`.
+
+### Sample data for checking each feature
+
+`docker/postgres/init/04-showcase.sql` adds a `showcase` schema, a `wide` schema and a plain role
+to `app`. It runs on first init like the others and is safe to re-run on an existing server
+(it drops and recreates both schemas):
+
+```bash
+docker compose --profile postgres exec -T postgres psql -U sbconsole -d app -f /docker-entrypoint-initdb.d/04-showcase.sql
+```
+
+Two more demo connections come with it: `pg-local-limited` (role `app_ro`: read-only grants, no
+`pg_monitor`, no CONNECT on `billing`) and `pg-offline` (host `pg-offline.invalid`, never
+resolves). `postgres-blocker` also keeps a long-running `reporting` query and two `idle-pool`
+connections open. Restart it after changing `blocker.sh`.
+
+What to try:
+
+| Page | Connection | Where | What you should see |
+|------|------------|-------|---------------------|
+| Overview | `pg-local` | — | KPI tiles; Needs attention lists blocked sessions, 3 tables over 30 % dead (`order_items`, `sessions`, `showcase.churn`) and unused indexes; after 5 min the idle-in-transaction item |
+| Overview | `pg-offline` | — | "Can't reach pg-offline" with the friendly reason, skeleton rows, retry countdown, red dot in the picker |
+| Overview | `pg-local-limited` | — | "This role can't see other sessions' details" alert; `billing` size "—" (no CONNECT) |
+| Browse → Data | `pg-local` | `showcase.type_zoo` | NULL chips; jsonb/json objects "{…} N keys" and arrays "[…] N items" that expand; bytea `\x…`; interval with months, `NaN`, `1e40`, BC dates and `infinity` as server text instead of an error; HTML and `<script>` shown as text; long cells ellipsised with the full value on hover |
+| Browse → Data | `pg-local` | `showcase.filter_me` | filters: `city is null` (half the rows), `attrs @> {"vip": true}`, `tags @> {red}`, `city ilike berlin` (matches `Berlin` and `berlin`), sort by `score` (numeric order) |
+| Browse → Columns / Constraints / DDL | `pg-local` | `showcase.bookings` | identity and generated (`nights`) columns, check, unique, exclusion (`&&` on `tstzrange`) and FK `ON DELETE CASCADE` constraints, comments, all in the DDL |
+| Browse → Indexes | `pg-local` | `showcase.bookings`, `showcase.filter_me` | Drop index disabled for `bookings_guest_room_unique` and the PK (they back constraints); `bookings_created_unused` can be dropped; expression and partial indexes on `filter_me` |
+| Browse tree | `pg-local` | schemas `showcase`, `wide` | the partitioned `showcase.metrics` appears once (partitions hidden); views, materialized view, function and procedure groups; `wide` (75 tables) stops at 50 with "25 more…"; the filter box narrows it |
+| Browse / Query | `pg-local` | `showcase."Mixed Case Table"` | quoted identifiers in the tree, DDL and Open in Query |
+| Query | `pg-local` (prod) | — | Write asks for the typed connection name, then shows the PROD banner; `SELECT 1; SELECT 2` in read mode is refused; `CLUSTER`/`REINDEX`/`ANALYZE` are refused in read mode; `SELECT showcase.slow_echo('x', 40)` with timeout 30 s fails with the timeout message; a typo like `o.custmer_id` marks the failing line |
+| Query | `pg-local-ro` | — | the Write toggle is disabled ("Connection is read-only") |
+| Activity | `pg-local` | — | lock chain (`checkout-api` idle in transaction → two waiters, "blocks 2"), Cancel the `reporting` query (it restarts after 5 s), Terminate the blocker with typed `pid N` (a new chain starts within 15 min), 2+ idle backends behind "show all" |
+| Maintenance | `pg-local` | `showcase.churn` | flagged for dead tuples and bloat; VACUUM / ANALYZE are a plain confirm, VACUUM FULL is typed on PROD and empties the dead-tuple count; `showcase.never_analyzed` shows no last analyze |
+
+Reset only this data: `docker compose --profile postgres down` then
+`docker volume rm nervecenter_postgres-data` (the next `up` re-seeds). `docker compose
+--profile postgres exec postgres psql -U sbconsole -d app` opens a shell on the server.
+
+The `sbconsole` user is a superuser, so every page works in the demo. The plugin also works as a
+plain role, with less visibility: without `pg_monitor`, other users' queries and `pg_stat_activity`
+rows are hidden and Activity says so.

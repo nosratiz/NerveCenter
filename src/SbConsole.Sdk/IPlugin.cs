@@ -58,6 +58,17 @@ public interface IPlugin
     void ConfigureServices(IServiceCollection services);
 
     /// <summary>
+    /// Optional: called once, after the host's service provider is built and before any request is
+    /// served (Program.cs, via PluginRegistry.InitializeAll). The host constructs plugins with new()
+    /// (AddSbConsolePlugin), so instance hooks like TestConnectionAsync and GetDashboardProblemsAsync
+    /// have no DI access of their own; a plugin that needs a host service there (e.g. the SQLite
+    /// plugin's IHostPathPolicy-guarded operations) resolves it here. Only singletons should be
+    /// resolved -- this is the root provider. The default does nothing, so a plugin written before
+    /// this member existed needs no change at all.
+    /// </summary>
+    void Initialize(IServiceProvider services) { }
+
+    /// <summary>
     /// Verifies a saved connection of this plugin's ConnectionKind actually works, using
     /// whatever protocol that connection kind speaks. Called with the connection's decrypted
     /// secret — never the connection ID, so this has no dependency on the host's DbContext.

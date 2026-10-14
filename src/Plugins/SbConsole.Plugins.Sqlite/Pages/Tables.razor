@@ -1,0 +1,1118 @@
+@* src/Plugins/SbConsole.Plugins.Sqlite/Pages/Tables.razor -- mockups 1b / 1f / 1g, design spec §6 and
+   §11.5. Browsing is read-only; Create / Rename / Drop are enabled only for a read-write connection
+   (Summary Mode, which the operations re-check from the secret) and go through inline dialogs. Prod
+   connections confirm Rename and Drop with the typed-name dialog; IsProd comes from the picker's
+   server-side ConnectionInfo. *@
+@page "/p/sqlite/tables"
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Sqlite.Client
+@using SbConsole.Plugins.Sqlite.Tables
+@inject ListSchemaQueryHandler ListSchema
+@inject GetTableDetailQueryHandler GetDetail
+@inject GetColumnSamplesQueryHandler GetSamples
+@inject PreviewRowsQueryHandler PreviewRows
+@inject CountRowsQueryHandler CountRows
+@inject ExportTableCsvCommandHandler ExportCsv
+@inject CreateTableCommandHandler CreateTable
+@inject RenameTableCommandHandler RenameTable
+@inject GetDropImpactQueryHandler GetDropImpact
+@inject DropTableCommandHandler DropTable
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>SQLite tables</PageTitle>
+
+<div class="sql-page">
+    <SqlitePageHeader Title="Tables">
+        <Chips>
+            <SqliteConnectionPicker Loading="_loading" SelectionChanged="OnSelectionChangedAsync" />
+        </Chips>
+        <Actions>
+            @if (_listing is not null)
+            {
+                <span class="sql-btn-wrap sqlite-tables-create-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                    <button type="button" class="sql-btn sql-btn-primary sqlite-tables-create" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenCreate">+ Create table…</button>
+                </span>
+            }
+        </Actions>
+    </SqlitePageHeader>
+
+    @if (_notice is not null)
+    {
+        <div class="sql-body sql-body-tight">
+            <div class="sql-notice sqlite-tables-notice" role="status">@_notice</div>
+        </div>
+    }
+
+    @if (_dialog != DdlDialog.None && _connection is { } dialogConnection)
+    {
+        <div class="sql-body sql-body-tight">
+            @switch (_dialog)
+            {
+                case DdlDialog.Create:
+                    <div class="sql-dialog sqlite-create-dialog" role="dialog" aria-label="Create table">
+                        <div class="sql-dialog-title">Create table</div>
+                        <div class="sql-footnote">
+                            Exactly one <span class="sql-mono">CREATE TABLE</span> statement. It runs inside a transaction and is audited
+                            (<span class="sql-mono">@CreateTableCommandHandler.Action</span>); anything else belongs on the Query page.
+                        </div>
+                        <textarea class="sql-editor sqlite-create-ddl" aria-label="CREATE TABLE statement" spellcheck="false"
+                                  value="@_createDdl" @oninput="e => _createDdl = e.Value?.ToString() ?? string.Empty"></textarea>
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-primary sqlite-create-submit" disabled="@(_ddlBusy || string.IsNullOrWhiteSpace(_createDdl))"
+                                    @onclick="CreateAsync">@(_ddlBusy ? "Creating…" : "Create table")</button>
+                        </div>
+                    </div>
+                    break;
+
+                case DdlDialog.Rename when _dialogTable is { } renaming:
+                    <div class="sql-dialog sqlite-rename-dialog" role="dialog" aria-label="Rename table">
+                        <div class="sql-dialog-title">Rename <span class="sql-mono">@renaming</span></div>
+                        <input class="sql-input sqlite-rename-name" aria-label="New name" maxlength="@SqliteOperations.MaxTableNameLength" spellcheck="false"
+                               value="@_renameTo" @oninput="e => _renameTo = e.Value?.ToString() ?? string.Empty" />
+                        <div class="sql-footnote">
+                            <span class="sql-mono">ALTER TABLE … RENAME TO …</span> — SQLite also updates the foreign keys, views and triggers that name it.
+                            @if (dialogConnection.IsProd)
+                            {
+                                <text> This is a <span class="sql-prod">prod</span> file: you'll be asked to type the table's name.</text>
+                            }
+                        </div>
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-primary sqlite-rename-submit" disabled="@(_ddlBusy || string.IsNullOrWhiteSpace(_renameTo))"
+                                    @onclick="RenameAsync">@(_ddlBusy ? "Renaming…" : "Rename")</button>
+                        </div>
+                    </div>
+                    break;
+
+                case DdlDialog.Drop when _dialogTable is { } dropping:
+                    <div class="sql-dialog sql-dialog-danger sqlite-drop-dialog" role="dialog" aria-label="Drop table">
+                        <div class="sql-dialog-title">Drop table</div>
+                        @if (_impact is { } impact)
+                        {
+                            <div class="sqlite-drop-summary">
+                                <span class="sql-mono">DROP TABLE @dropping</span> removes
+                                <strong class="sql-mono">@(impact.RowsApprox is { } rows ? $"{SqliteFormat.Approx(rows)} rows ≈" : "an unknown number of rows")</strong>
+                                and @IndexText(impact.IndexCount)@(dialogConnection.IsProd ? " on a prod-tagged file" : "").
+                            </div>
+                            @if (impact.References.Count > 0)
+                            {
+                                <div class="sql-footnote">Tables that reference it — this console's connections run with <span class="sql-mono">foreign_keys = ON</span>:</div>
+                                <ul class="sql-ref-list sqlite-drop-references">
+                                    @foreach (var reference in impact.References)
+                                    {
+                                        <li class="sqlite-drop-reference" data-table="@reference.Table">
+                                            <span class="sql-mono">@reference.Table (@string.Join(", ", reference.FromColumns))</span>
+                                            <span class="sql-muted">ON DELETE @reference.OnDelete</span> — @reference.Consequence
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                            else
+                            {
+                                <div class="sql-footnote sqlite-drop-no-references">No other table references it.</div>
+                            }
+                        }
+                        else if (_dialogError is null)
+                        {
+                            <div class="sql-footnote">Reading what the drop affects…</div>
+                        }
+                        <div class="sql-report-row"><span class="sql-report-label">Target</span><span class="sql-mono sqlite-drop-target">@dialogConnection.Name / @dropping</span></div>
+                        @if (_hasBackupDir)
+                        {
+                            <label class="sql-check sqlite-drop-backup">
+                                <input type="checkbox" class="sqlite-drop-backup-input" checked="@_backupFirst" @onchange="e => _backupFirst = e.Value is true" />
+                                <span>Take a backup first (<span class="sql-mono">VACUUM INTO</span> the backup directory; the drop is cancelled if it fails)</span>
+                            </label>
+                        }
+                        else
+                        {
+                            <div class="sql-footnote sqlite-drop-no-backups">Backups aren't enabled for this connection — set "Enable backups to" in Connections to take one first.</div>
+                        }
+                        @if (_dialogError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="sqlite-dialog-error">@_dialogError</MudAlert>
+                        }
+                        <div class="sql-actions">
+                            <button type="button" class="sql-btn sqlite-dialog-cancel" disabled="@_ddlBusy" @onclick="CloseDialog">Cancel</button>
+                            <button type="button" class="sql-btn sql-btn-danger sqlite-drop-submit" disabled="@(_ddlBusy || _impact is null)"
+                                    @onclick="DropAsync">@(_ddlBusy ? (_backupFirst && _hasBackupDir ? "Backing up…" : "Dropping…") : $"Drop {dropping}…")</button>
+                        </div>
+                    </div>
+                    break;
+            }
+        </div>
+    }
+
+    @if (_error is not null)
+    {
+        <div class="sql-body">
+            <div class="sql-banner sql-banner-danger sqlite-tables-error">
+                <span class="sqlite-tables-error-text" role="alert">@_error</span>
+                <span class="sql-spacer"></span>
+                <a class="sql-link" href="/connections">Connection settings</a>
+                <button type="button" class="sql-btn" @onclick="LoadListingAsync">Retry</button>
+            </div>
+        </div>
+    }
+    else if (_listing is { } listing)
+    {
+        if (listing.Count(SchemaObjectType.Table) == 0 && listing.Count(SchemaObjectType.View) == 0)
+        {
+            <div class="sql-empty sqlite-tables-empty">
+                <div class="sql-empty-title">No tables in <span class="sql-mono">@FileName</span></div>
+                <div class="sql-muted sqlite-tables-empty-size">
+                    @(listing.FileBytes is { } bytes ? $"The file is {SqliteFormat.Bytes(bytes)}" : "The file has no schema yet") — SQLite creates pages on first write.
+                </div>
+                @if (CanWrite)
+                {
+                    <div class="sql-actions">
+                        <button type="button" class="sql-btn sqlite-tables-empty-create" disabled="@_ddlBusy" @onclick="OpenCreate">Create table…</button>
+                        <a class="sql-btn sqlite-tables-empty-script" href="@QueryHref(null)">Run script</a>
+                    </div>
+                }
+                else
+                {
+                    <div class="sql-footnote sqlite-tables-empty-readonly">Creating tables needs Default mode Read-write on the connection (Connections).</div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="sql-split">
+                <aside class="sql-list sqlite-tables-list">
+                    <input class="sql-filter sqlite-tables-filter" aria-label="Filter tables" placeholder="Filter tables…" value="@_filter" @oninput="OnFilter" />
+
+                    <div class="sql-list-group">Tables</div>
+                    @foreach (var item in Filtered(listing.Tables))
+                    {
+                        <button type="button" class="sql-list-row sqlite-tables-row @(item.Name == _selected ? "sql-is-selected" : null)"
+                                data-name="@item.Name" aria-current="@(item.Name == _selected ? "true" : null)" @onclick="() => SelectAsync(item.Name)">
+                            <span class="sql-mono sql-list-name">@item.Name</span>
+                            @if (listing.SizesAvailable)
+                            {
+                                <span class="sql-num sql-muted">@(item.Bytes is { } bytes ? SqliteFormat.Bytes(bytes) : "")</span>
+                            }
+                            <span class="sql-num sql-muted">@RowsLabel(item)</span>
+                        </button>
+                    }
+
+                    @if (listing.Count(SchemaObjectType.View) > 0)
+                    {
+                        <div class="sql-list-group">Views</div>
+                        foreach (var item in Filtered(listing.Views))
+                        {
+                            <button type="button" class="sql-list-row sqlite-tables-row @(item.Name == _selected ? "sql-is-selected" : null)"
+                                    data-name="@item.Name" aria-current="@(item.Name == _selected ? "true" : null)" @onclick="() => SelectAsync(item.Name)">
+                                <span class="sql-mono sql-list-name">@item.Name</span>
+                                <span class="sql-num sql-muted">view</span>
+                            </button>
+                        }
+                    }
+
+                    <div class="sql-footnote sqlite-tables-summary">@Summary(listing)</div>
+                    <div class="sql-footnote">
+                        ≈ rows come from <span class="sql-mono">sqlite_stat1</span> — an exact <span class="sql-mono">COUNT(*)</span>
+                        on a large table takes seconds, so it's a click, not a default.
+                    </div>
+                </aside>
+
+                <section class="sql-detail sqlite-table-detail">
+                    @if (_detailError is not null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="sqlite-table-detail-error">@_detailError</MudAlert>
+                    }
+                    else if (_detail is { } d)
+                    {
+                        <div class="sql-detail-head">
+                            <span class="sql-overline">@(d.Type == SchemaObjectType.View ? "view" : "table")</span>
+                            <span class="sql-detail-title sql-mono sqlite-table-name">@d.Name</span>
+                            <span class="sql-spacer"></span>
+                            <a class="sql-btn sqlite-table-query" href="@QueryHref(TableQuerySql(d.Name))">Query</a>
+                            <button type="button" class="sql-btn sqlite-table-export" disabled="@_exporting" @onclick="ExportAsync">
+                                @(_exporting ? "Exporting…" : "Export CSV")
+                            </button>
+                            @if (d.Type == SchemaObjectType.Table)
+                            {
+                                <span class="sql-btn-wrap sqlite-table-rename-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                                    <button type="button" class="sql-btn sqlite-table-rename" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenRename">Rename</button>
+                                </span>
+                                <span class="sql-btn-wrap sqlite-table-drop-wrap" title="@(CanWrite ? null : ReadOnlyReason)">
+                                    <button type="button" class="sql-btn sql-btn-danger sqlite-table-drop" disabled="@(!CanWrite || _ddlBusy)" @onclick="OpenDropAsync">Drop</button>
+                                </span>
+                            }
+                        </div>
+                        <div class="sql-detail-meta">
+                            @d.Columns.Count columns · @d.Indexes.Count indexes
+                            @if (d.Type == SchemaObjectType.Table)
+                            {
+                                <text> · WITHOUT ROWID @(d.WithoutRowId ? "yes" : "no")</text>
+                            }
+                            · <span class="sqlite-table-rows">@RowsText(d)</span>
+                            @if (_counting)
+                            {
+                                <button type="button" class="sql-link sqlite-table-count-cancel" @onclick="CancelCount">cancel</button>
+                            }
+                            else if (_exactRows is null)
+                            {
+                                <button type="button" class="sql-link sqlite-table-count" @onclick="CountAsync">count exactly</button>
+                            }
+                        </div>
+                        if (_countError is not null)
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-table-count-error">@_countError</MudAlert>
+                        }
+                        if (_exportMessage is not null)
+                        {
+                            <div class="sql-footnote sqlite-table-export-message" aria-live="polite">@_exportMessage</div>
+                        }
+
+                        <div class="sql-tabs" role="tablist">
+                            @foreach (var tab in Enum.GetValues<DetailTab>())
+                            {
+                                <button type="button" role="tab" aria-selected="@(tab == _tab ? "true" : "false")" class="sql-tab sqlite-tab-@(tab.ToString().ToLowerInvariant()) @(tab == _tab ? "sql-is-active" : null)"
+                                        @onclick="() => SelectTabAsync(tab)">@TabLabel(tab, d)</button>
+                            }
+                        </div>
+
+                        switch (_tab)
+                        {
+                            case DetailTab.Columns:
+                                <div class="sql-grid-wrap"><table class="sql-table sqlite-columns">
+                                    <thead><tr><th></th><th>Column</th><th>Type</th><th>Null</th><th>Default</th><th>Notes</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var column in d.Columns)
+                                        {
+                                            <tr class="sqlite-column-row" data-column="@column.Name">
+                                                <td>
+                                                    @if (column.PrimaryKeyOrdinal > 0)
+                                                    {
+                                                        <span class="sql-badge sql-badge-pk">PK</span>
+                                                    }
+                                                    @if (d.ForeignKeys.Any(fk => fk.FromColumn == column.Name))
+                                                    {
+                                                        <span class="sql-badge sql-badge-fk">FK</span>
+                                                    }
+                                                </td>
+                                                <td class="sql-mono">@column.Name</td>
+                                                <td class="sql-mono sql-muted">@(string.IsNullOrEmpty(column.DeclaredType) ? "—" : column.DeclaredType)</td>
+                                                <td>@(column.NotNull ? "no" : "yes")</td>
+                                                <td class="sql-mono">@(column.DefaultValue ?? "—")</td>
+                                                <td class="sql-muted sql-notes sqlite-column-notes">@NotesText(column.Name)</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table></div>
+                                if (_samplesLoading)
+                                {
+                                    <div class="sql-footnote sqlite-notes-loading">Sampling the first @SqliteFormat.Count(ColumnSample.DefaultSampleRows) rows for notes…</div>
+                                }
+                                if (_samplesError is not null)
+                                {
+                                    <div class="sql-footnote sqlite-notes-error">Sampled notes unavailable: @_samplesError</div>
+                                }
+                                break;
+
+                            case DetailTab.Indexes:
+                                <div class="sql-grid-wrap"><table class="sql-table sqlite-indexes">
+                                    <thead><tr><th>Index</th><th>Columns</th><th>Unique</th><th>Origin</th><th>Partial</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var index in d.Indexes)
+                                        {
+                                            <tr>
+                                                <td class="sql-mono">@index.Name</td>
+                                                <td class="sql-mono">@string.Join(", ", index.Columns)</td>
+                                                <td>@(index.Unique ? "yes" : "no")</td>
+                                                <td>@OriginLabel(index.Origin)</td>
+                                                <td>@(index.Partial ? "yes" : "no")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table></div>
+                                break;
+
+                            case DetailTab.ForeignKeys:
+                                <div class="sql-grid-wrap"><table class="sql-table sqlite-foreign-keys">
+                                    <thead><tr><th>Column</th><th>References</th><th>On update</th><th>On delete</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var fk in d.ForeignKeys)
+                                        {
+                                            <tr>
+                                                <td class="sql-mono">@fk.FromColumn</td>
+                                                <td class="sql-mono">@fk.ToTable.@(fk.ToColumn ?? "rowid")</td>
+                                                <td>@fk.OnUpdate</td>
+                                                <td>@fk.OnDelete</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table></div>
+                                <div class="sql-footnote">
+                                    <span class="sql-mono">foreign_keys</span> is a per-connection setting in SQLite — this console's connections
+                                    enforce it, but other writers to this file may not.
+                                </div>
+                                break;
+
+                            case DetailTab.Ddl:
+                                <pre class="sql-ddl sqlite-ddl">@(d.Ddl ?? "—")</pre>
+                                break;
+
+                            case DetailTab.Data:
+                                if (_previewError is not null)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true" Class="sqlite-preview-error">@_previewError</MudAlert>
+                                }
+                                else if (_preview is not { } preview)
+                                {
+                                    <div class="sql-footnote">Loading rows…</div>
+                                }
+                                else
+                                {
+                                    <div class="sql-caption">
+                                        Data preview · <span class="sql-mono sqlite-preview-sql">@preview.Sql</span>
+                                        <a class="sql-link sqlite-preview-open-query" href="@QueryHref(preview.Sql)">Open in Query →</a>
+                                    </div>
+                                    <div class="sql-grid-wrap">
+                                        <table class="sql-table sql-grid sqlite-preview">
+                                            <thead>
+                                                <tr>
+                                                    @foreach (var name in preview.Columns)
+                                                    {
+                                                        <th class="sql-mono">@name</th>
+                                                    }
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @foreach (var row in preview.Rows)
+                                                {
+                                                    <tr>
+                                                        @for (var i = 0; i < row.Count; i++)
+                                                        {
+                                                            var cell = row[i];
+                                                            var hint = DateHint(preview.Columns[i], cell);
+                                                            <td class="sql-mono sql-cell-@(cell.Kind.ToString().ToLowerInvariant())"
+                                                                title="@(cell.Truncated ? "truncated to 200 characters" : null)">
+                                                                @cell.Display
+                                                                @if (hint is not null)
+                                                                {
+                                                                    <small class="sql-muted sql-hint">@hint</small>
+                                                                }
+                                                            </td>
+                                                        }
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    if (preview.Rows.Count == 0)
+                                    {
+                                        <div class="sql-footnote">No rows.</div>
+                                    }
+                                    <div class="sql-footnote">Integer columns that look like unix milliseconds get a date hint — the value is never changed.</div>
+                                }
+                                break;
+                        }
+                    }
+                    else if (_selected is not null)
+                    {
+                        <div class="sql-footnote">Loading…</div>
+                    }
+                    else
+                    {
+                        <div class="sql-footnote sqlite-table-none">Pick a table on the left.</div>
+                    }
+                </section>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private enum DetailTab
+    {
+        Columns,
+        Indexes,
+        ForeignKeys,
+        Ddl,
+        Data,
+    }
+
+    private enum DdlDialog
+    {
+        None,
+        Create,
+        Rename,
+        Drop,
+    }
+
+    private const string ReadOnlyReason = "This connection is read-only — set Default mode to Read-write in Connections.";
+
+    internal const string CreateTemplate = """
+        CREATE TABLE new_table (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """;
+
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private readonly CancellationTokenSource _pageCts = new();
+    private CancellationTokenSource _tableCts = new();
+    private CancellationTokenSource? _countCts;
+    private IJSObjectReference? _module;
+
+    private ConnectionInfo? _connection;
+    private SchemaListing? _listing;
+    private string? _error;
+    private bool _loading;
+    private int _loadGeneration;
+    private string _filter = "";
+
+    private string? _selected;
+    private TableDetail? _detail;
+    private string? _detailError;
+    private IReadOnlyDictionary<string, IReadOnlyList<string>>? _notes;
+    private bool _samplesLoading;
+    private string? _samplesError;
+    private RowPage? _preview;
+    private string? _previewError;
+    private bool _previewLoading;
+    private long? _exactRows;
+    private bool _counting;
+    private string? _countError;
+    private bool _exporting;
+    private string? _exportMessage;
+    private DetailTab _tab = DetailTab.Columns;
+
+    private bool _hasBackupDir;
+    private DdlDialog _dialog;
+    private string? _dialogTable;
+    private string? _dialogError;
+    private string _createDdl = CreateTemplate;
+    private string _renameTo = "";
+    private DropImpact? _impact;
+    private bool _backupFirst = true;
+    private bool _ddlBusy;
+    private string? _notice;
+
+    private string FileName => _connection?.Summary.GetValueOrDefault("File") ?? "this file";
+
+    private bool CanWrite => _connection?.Summary.GetValueOrDefault("Mode") == "read-write";
+
+    private async Task OnSelectionChangedAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        _dialog = DdlDialog.None;
+        _notice = null;
+        _hasBackupDir = await HasBackupDirAsync(connection);
+        if (ReferenceEquals(_connection, connection))
+        {
+            await LoadListingAsync();
+        }
+    }
+
+    /// <summary>"Take a backup first" needs the secret's BackupDir; the backup itself re-checks everything.</summary>
+    private async Task<bool> HasBackupDirAsync(ConnectionInfo connection)
+    {
+        try
+        {
+            var secret = await Connections.GetSecretAsync(connection.Id, _pageCts.Token);
+            return secret is not null && SqliteConnectionSettings.Parse(secret).BackupDir is not null;
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false; // every handler reports an unparsable secret properly
+        }
+    }
+
+    private Task LoadListingAsync() => LoadListingAsync(QueryTable(), autoSelect: true);
+
+    /// <summary>Loads the schema and selects <paramref name="select"/> if it exists, else (with autoSelect) the first table or view.</summary>
+    private async Task LoadListingAsync(string? select, bool autoSelect)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        // The previous connection's schema must never show under this connection's name.
+        var generation = ++_loadGeneration;
+        ResetTable();
+        _selected = null;
+        _listing = null;
+        _error = null;
+        _filter = "";
+        _loading = true;
+        PluginResult<SchemaListing> result;
+        try
+        {
+            result = await ListSchema.HandleAsync(connection.Id, _pageCts.Token);
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            // A superseded load must not clear the busy flag of the load that replaced it.
+            if (generation == _loadGeneration)
+            {
+                _loading = false;
+            }
+        }
+
+        if (generation != _loadGeneration)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        _listing = result.Value!;
+        var first = _listing.Objects.FirstOrDefault(o => o.Name == select && o.Type is SchemaObjectType.Table or SchemaObjectType.View)
+            ?? (autoSelect ? _listing.Tables.FirstOrDefault() ?? _listing.Views.FirstOrDefault() : null);
+        if (first is not null)
+        {
+            await SelectAsync(first.Name);
+        }
+        else if (!autoSelect && QueryTable() is not null)
+        {
+            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("table", (string?)null), replace: true);
+        }
+    }
+
+    private string? QueryTable()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        return query.TryGetValue("table", out var value) ? value.ToString() : null;
+    }
+
+    /// <summary>Cancels everything in flight for the previous table and clears its state.</summary>
+    private void ResetTable()
+    {
+        // Cancel but never dispose (see DisposeAsync): the previous source may still be read by a
+        // resumed continuation, and a source without timers or linked registrations needs no disposal.
+        _tableCts.Cancel();
+        _tableCts = new CancellationTokenSource();
+        _detail = null;
+        _detailError = null;
+        _notes = null;
+        _samplesLoading = false;
+        _samplesError = null;
+        _preview = null;
+        _previewError = null;
+        _previewLoading = false;
+        _exactRows = null;
+        _counting = false;
+        _countError = null;
+        _countCts?.Cancel();
+        _exporting = false;
+        _exportMessage = null;
+        _tab = DetailTab.Columns;
+    }
+
+    private async Task SelectAsync(string name)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        ResetTable();
+        _selected = name;
+        var uri = Navigation.GetUriWithQueryParameter("table", name);
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        var token = _tableCts.Token;
+        try
+        {
+            var detail = await GetDetail.HandleAsync(connection.Id, name, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (!detail.IsSuccess)
+            {
+                _detailError = detail.Error;
+                return;
+            }
+
+            _detail = detail.Value!;
+            _notes = ColumnNoteBuilder.Build(_detail, null); // schema notes now, sampled notes when they arrive
+            _samplesLoading = true;
+            StateHasChanged();
+
+            var samples = await GetSamples.HandleAsync(connection.Id, name, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _samplesLoading = false;
+            if (samples.IsSuccess)
+            {
+                _notes = ColumnNoteBuilder.Build(_detail, samples.Value);
+            }
+            else
+            {
+                _samplesError = samples.Error;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Another table was selected, or the page went away.
+        }
+    }
+
+    private async Task SelectTabAsync(DetailTab tab)
+    {
+        _tab = tab;
+        if (tab != DetailTab.Data || _preview is not null || _previewLoading || _connection is not { } connection || _detail is not { } detail)
+        {
+            return;
+        }
+
+        _previewLoading = true;
+        _previewError = null;
+        var token = _tableCts.Token;
+        try
+        {
+            var page = await PreviewRows.HandleAsync(connection.Id, detail.Name, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (page.IsSuccess)
+            {
+                _preview = page.Value;
+            }
+            else
+            {
+                _previewError = page.Error;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _previewLoading = false;
+            }
+        }
+    }
+
+    private async Task CountAsync()
+    {
+        if (_connection is not { } connection || _detail is not { } detail)
+        {
+            return;
+        }
+
+        var tableToken = _tableCts.Token;
+        var countCts = CancellationTokenSource.CreateLinkedTokenSource(tableToken);
+        _countCts = countCts;
+        var token = countCts.Token;
+        _counting = true;
+        _countError = null;
+        try
+        {
+            var result = await CountRows.HandleAsync(connection.Id, detail.Name, token);
+            if (tableToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _exactRows = result.Value;
+            }
+            else
+            {
+                _countError = result.Error;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Cancelled from the "cancel" link, or the table changed.
+        }
+        finally
+        {
+            if (!tableToken.IsCancellationRequested)
+            {
+                _counting = false;
+            }
+
+            // Only the owning count may dispose the shared field; a newer table's count may have replaced it.
+            if (ReferenceEquals(_countCts, countCts))
+            {
+                _countCts = null;
+            }
+
+            countCts.Dispose();
+        }
+    }
+
+    private void CancelCount() => _countCts?.Cancel();
+
+    private async Task ExportAsync()
+    {
+        if (_connection is not { } connection || _detail is not { } detail)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportMessage = null;
+        var token = _tableCts.Token;
+        try
+        {
+            var result = await ExportCsv.HandleAsync(new ExportTableCsvCommand(connection.Id, connection.Name, detail.Name), token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (!result.IsSuccess)
+            {
+                _exportMessage = result.Error;
+                return;
+            }
+
+            var export = result.Value!;
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SbConsole.Plugins.Sqlite/sqlite.js");
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            using var stream = new MemoryStream(export.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await _module.InvokeVoidAsync("downloadFromStream", export.FileName, streamRef);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _exportMessage = export.Truncated
+                ? $"Exported the first {SqliteFormat.Count(export.RowCount)} rows to {export.FileName} — the table has more (exports are capped at {SqliteFormat.Count(CsvExport.MaxRows)} rows or {SqliteFormat.Bytes(CsvExport.MaxBytes)})."
+                : $"Exported {SqliteFormat.Count(export.RowCount)} rows to {export.FileName}.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (JSException) when (!token.IsCancellationRequested)
+        {
+            _exportMessage = "The browser couldn't save the file.";
+        }
+        catch (JSException)
+        {
+            // Stale export for a table that is no longer shown.
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _exporting = false;
+            }
+        }
+    }
+
+    // ---- DDL (spec §11.5) ----
+
+    private void OpenCreate()
+    {
+        if (!CanWrite)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Create, null);
+        _createDdl = CreateTemplate;
+    }
+
+    private void OpenRename()
+    {
+        if (!CanWrite || _detail is not { Type: SchemaObjectType.Table } detail)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Rename, detail.Name);
+        _renameTo = detail.Name;
+    }
+
+    private async Task OpenDropAsync()
+    {
+        if (!CanWrite || _connection is not { } connection || _detail is not { Type: SchemaObjectType.Table } detail)
+        {
+            return;
+        }
+
+        OpenDialog(DdlDialog.Drop, detail.Name);
+        _backupFirst = _hasBackupDir;
+        var table = detail.Name;
+        try
+        {
+            var impact = await GetDropImpact.HandleAsync(connection.Id, table, _pageCts.Token);
+            if (_dialog != DdlDialog.Drop || _dialogTable != table || !ReferenceEquals(_connection, connection))
+            {
+                return;
+            }
+
+            if (impact.IsSuccess)
+            {
+                _impact = impact.Value;
+            }
+            else
+            {
+                _dialogError = impact.Error;
+            }
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void OpenDialog(DdlDialog dialog, string? table)
+    {
+        _dialog = dialog;
+        _dialogTable = table;
+        _dialogError = null;
+        _impact = null;
+        _notice = null;
+    }
+
+    private void CloseDialog()
+    {
+        if (_ddlBusy)
+        {
+            return;
+        }
+
+        _dialog = DdlDialog.None;
+        _dialogTable = null;
+        _dialogError = null;
+        _impact = null;
+    }
+
+    private async Task CreateAsync()
+    {
+        if (_dialog != DdlDialog.Create || _connection is not { } connection || string.IsNullOrWhiteSpace(_createDdl))
+        {
+            return;
+        }
+
+        var ddl = _createDdl;
+        var created = await RunDdlAsync(connection, () => CreateTable.HandleAsync(new CreateTableCommand(connection.Id, connection.Name, ddl), _pageCts.Token));
+        if (created is { IsSuccess: true, Value: { } name })
+        {
+            await FinishDdlAsync($"Created {name}.", name, autoSelect: true);
+        }
+    }
+
+    private async Task RenameAsync()
+    {
+        if (_dialog != DdlDialog.Rename || _connection is not { } connection || _dialogTable is not { } oldName || string.IsNullOrWhiteSpace(_renameTo))
+        {
+            return;
+        }
+
+        var newName = _renameTo.Trim();
+        // IsProd comes from the picker's server-side ConnectionInfo, never from the client.
+        if (connection.IsProd && !await Confirmation.ConfirmAsync("Rename table", oldName, true, ct: _pageCts.Token))
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_connection, connection) || _dialog != DdlDialog.Rename || _dialogTable != oldName)
+        {
+            return;
+        }
+
+        var renamed = await RunDdlAsync(connection, async () =>
+        {
+            var result = await RenameTable.HandleAsync(new RenameTableCommand(connection.Id, connection.Name, oldName, newName), _pageCts.Token);
+            return result.IsSuccess ? PluginResult<string>.Ok(newName) : PluginResult<string>.Fail(result.Error!);
+        });
+        if (renamed is { IsSuccess: true })
+        {
+            await FinishDdlAsync($"Renamed {oldName} to {newName}.", newName, autoSelect: true);
+        }
+    }
+
+    private async Task DropAsync()
+    {
+        if (_dialog != DdlDialog.Drop || _impact is null || _connection is not { } connection || _dialogTable is not { } table)
+        {
+            return;
+        }
+
+        var backupFirst = _backupFirst && _hasBackupDir;
+        if (!await Confirmation.ConfirmAsync("Drop table", table, connection.IsProd, ct: _pageCts.Token))
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_connection, connection) || _dialog != DdlDialog.Drop || _dialogTable != table)
+        {
+            return;
+        }
+
+        var actor = AuthState is null ? "admin" : (await AuthState).User.Identity?.Name ?? "admin";
+        var dropped = await RunDdlAsync(connection, async () =>
+        {
+            var result = await DropTable.HandleAsync(new DropTableCommand(connection.Id, connection.Name, table, backupFirst, actor), _pageCts.Token);
+            return result.IsSuccess ? PluginResult<string>.Ok(table) : PluginResult<string>.Fail(result.Error!);
+        });
+        if (dropped is { IsSuccess: true })
+        {
+            await FinishDdlAsync(backupFirst ? $"Backed up, then dropped {table}." : $"Dropped {table}.", null, autoSelect: false);
+        }
+    }
+
+    /// <summary>Runs one DDL command with the dialog busy; a failure stays in the dialog. Null when cancelled or superseded.</summary>
+    private async Task<PluginResult<string>?> RunDdlAsync(ConnectionInfo connection, Func<Task<PluginResult<string>>> run)
+    {
+        _ddlBusy = true;
+        _dialogError = null;
+        try
+        {
+            var result = await run();
+            if (!ReferenceEquals(_connection, connection))
+            {
+                return null;
+            }
+
+            if (!result.IsSuccess)
+            {
+                _dialogError = result.Error;
+            }
+
+            return result;
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally
+        {
+            _ddlBusy = false;
+        }
+    }
+
+    private async Task FinishDdlAsync(string notice, string? select, bool autoSelect)
+    {
+        _dialog = DdlDialog.None;
+        _dialogTable = null;
+        _impact = null;
+        await LoadListingAsync(select, autoSelect);
+        _notice = notice;
+    }
+
+    private string QueryHref(string? sql)
+    {
+        var href = $"{SqlitePlugin.QueryHref}?connectionId={_connection?.Id}";
+        return sql is null ? href : $"{href}&sql={Uri.EscapeDataString(sql)}";
+    }
+
+    private static string TableQuerySql(string table) => $"SELECT * FROM {SqliteSql.QuoteIdentifier(table)} LIMIT 100";
+
+    private static string IndexText(int count) => count == 1 ? "1 index" : $"{count} indexes";
+
+    private void OnFilter(ChangeEventArgs e) => _filter = e.Value?.ToString() ?? "";
+
+    private IEnumerable<SchemaObject> Filtered(IEnumerable<SchemaObject> items) =>
+        string.IsNullOrWhiteSpace(_filter)
+            ? items
+            : items.Where(i => i.Name.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static string RowsLabel(SchemaObject item) =>
+        item.EstimatedRows is { } rows ? $"{SqliteFormat.Approx(rows)} ≈" : "—";
+
+    private static string Summary(SchemaListing listing) =>
+        $"{listing.Count(SchemaObjectType.Table)} tables · {listing.Count(SchemaObjectType.Index)} indexes · " +
+        $"{listing.Count(SchemaObjectType.View)} views · {listing.Count(SchemaObjectType.Trigger)} triggers · from sqlite_schema";
+
+    private string RowsText(TableDetail detail) => _counting
+        ? "counting…"
+        : _exactRows is { } exact
+            ? $"{SqliteFormat.Count(exact)} rows (exact)"
+            : detail.EstimatedRows is { } estimate ? $"{SqliteFormat.Approx(estimate)} rows ≈" : "rows —";
+
+    private static string TabLabel(DetailTab tab, TableDetail detail) => tab switch
+    {
+        DetailTab.Indexes => $"Indexes {detail.Indexes.Count}",
+        DetailTab.ForeignKeys => $"Foreign keys {detail.ForeignKeys.Count}",
+        DetailTab.Ddl => "DDL",
+        _ => tab.ToString(),
+    };
+
+    private static string OriginLabel(string origin) => origin switch
+    {
+        "c" => "CREATE INDEX",
+        "u" => "UNIQUE constraint",
+        "pk" => "PRIMARY KEY",
+        _ => origin,
+    };
+
+    private string NotesText(string column) =>
+        _notes is not null && _notes.TryGetValue(column, out var notes) ? string.Join(" · ", notes) : "";
+
+    private string? DateHint(string column, CellValue cell) =>
+        cell is { Kind: CellKind.Integer, Integer: { } value }
+        && value is >= ColumnSample.EpochMsMin and <= ColumnSample.EpochMsMax
+        && _notes is not null && _notes.TryGetValue(column, out var notes) && notes.Contains(ColumnNoteBuilder.UnixMsNote)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(value).ToString("yyyy-MM-dd", Inv)
+            : null;
+
+    public async ValueTask DisposeAsync()
+    {
+        _pageCts.Cancel();
+        _tableCts.Cancel();
+        _countCts?.Cancel(); // the count disposes its own linked source in its finally
+        // Cancel but never dispose _pageCts/_tableCts: a continuation resuming after dispose may still
+        // read .Token, which throws ObjectDisposedException on a disposed source.
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already gone.
+            }
+        }
+    }
+}

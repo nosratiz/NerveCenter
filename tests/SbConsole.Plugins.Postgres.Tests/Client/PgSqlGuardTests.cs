@@ -1,0 +1,116 @@
+using FluentAssertions;
+using SbConsole.Plugins.Postgres.Client;
+
+namespace SbConsole.Plugins.Postgres.Tests.Client;
+
+public class PgSqlGuardTests
+{
+    [Fact]
+    public void Allows_single_select_in_read_mode() =>
+        PgSqlGuard.Check("select 1;", write: false).Should().HaveCount(1);
+
+    [Fact]
+    public void Allows_multi_statement_write() =>
+        PgSqlGuard.Check("update t set a=1; delete from t", write: true).Should().HaveCount(2);
+
+    [Fact]
+    public void Refuses_multiple_statements_in_read_mode() =>
+        FluentActions.Invoking(() => PgSqlGuard.Check("select 1; select 2", false))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("Read-only mode runs one statement at a time — this has 2. Switch to Write to run a script.");
+
+    [Theory]
+    [InlineData("commit", false)]
+    [InlineData("begin", true)]
+    [InlineData("set x = 1", false)]
+    public void Refuses_transaction_control_with_keyword(string sql, bool write)
+    {
+        var kw = sql.Split(' ')[0].ToUpperInvariant();
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, write))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage($"`{kw}` can't run here — the console manages the transaction.");
+    }
+
+    [Fact]
+    public void Allows_set_in_write_mode() =>
+        PgSqlGuard.Check("set local x = 1", write: true).Should().HaveCount(1);
+
+    [Fact]
+    public void Refuses_vacuum_in_write_mode() =>
+        FluentActions.Invoking(() => PgSqlGuard.Check("VACUUM t", true))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("VACUUM can't run in a transaction — use Maintenance.");
+
+    [Fact]
+    public void Refuses_vacuum_in_read_mode() =>
+        FluentActions.Invoking(() => PgSqlGuard.Check("VACUUM t", false))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("VACUUM can't run in a transaction — use Maintenance.");
+
+    [Fact]
+    public void Refuses_empty_input() =>
+        FluentActions.Invoking(() => PgSqlGuard.Check("  -- nothing\n ;", false))
+            .Should().Throw<PgSqlRefusedException>().WithMessage("Nothing to run.");
+
+    [Theory]
+    [InlineData("create index concurrently i on t(a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("REINDEX INDEX CONCURRENTLY i", "REINDEX … CONCURRENTLY")]
+    [InlineData("create unique index  concurrently i on t(a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("create database x", "CREATE/DROP DATABASE")]
+    [InlineData("drop database x", "CREATE/DROP DATABASE")]
+    [InlineData("alter system set work_mem = '1MB'", "ALTER SYSTEM")]
+    [InlineData("-- note\nCREATE INDEX CONCURRENTLY i ON t (a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("/* x */ ALTER SYSTEM SET work_mem = '1MB'", "ALTER SYSTEM")]
+    public void Refuses_statements_that_cannot_run_in_a_transaction_in_write_mode(string sql, string label) =>
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, true))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage($"`{label}` can't run in a transaction — run it from a SQL client.");
+
+    [Fact]
+    public void Refuses_create_index_concurrently_in_write_mode() =>
+        FluentActions.Invoking(() => PgSqlGuard.Check("CREATE INDEX CONCURRENTLY i ON t(a)", true))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("`CREATE INDEX CONCURRENTLY` can't run in a transaction — run it from a SQL client.");
+
+    [Theory]
+    [InlineData("SELECT 1 -- x\r; COMMIT; DELETE FROM t")]
+    [InlineData("SELECT 1 AS é$$; COMMIT; DELETE FROM t; SELECT $$x")]
+    [InlineData("SELECT éE'\\'; COMMIT; DELETE FROM t; --'")]
+    public void Read_mode_refuses_lexer_bypass_inputs(string sql) =>
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, false))
+            .Should().Throw<PgSqlRefusedException>();
+
+    [Theory]
+    [InlineData("CLUSTER orders USING orders_pkey", "CLUSTER")]
+    [InlineData("reindex table orders", "REINDEX")]
+    [InlineData("ANALYZE orders", "ANALYZE")]
+    [InlineData("LOAD 'auto_explain'", "LOAD")]
+    public void Refuses_lock_taking_maintenance_commands_in_read_mode(string sql, string kw) =>
+        FluentActions.Invoking(() => PgSqlGuard.Check(sql, write: false))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage($"`{kw}` can't run here — use Maintenance or Browse.");
+
+    [Theory]
+    [InlineData("CLUSTER orders USING orders_pkey")]
+    [InlineData("REINDEX TABLE orders")]
+    [InlineData("ANALYZE orders")]
+    public void Allows_maintenance_commands_in_write_mode(string sql) =>
+        PgSqlGuard.Check(sql, write: true).Should().HaveCount(1);
+
+    [Theory]
+    [InlineData("EXPLAIN ANALYZE SELECT 1")]
+    [InlineData("explain analyse select 1")]
+    [InlineData("/* c */ EXPLAIN (COSTS OFF, analyze) SELECT 1")]
+    [InlineData("EXPLAIN (ANALYZE true, FORMAT JSON) SELECT 1")]
+    public void Explain_tab_refuses_analyze(string sql) =>
+        FluentActions.Invoking(() => PgSqlGuard.CheckExplain(sql))
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage("EXPLAIN ANALYZE runs the statement — use Run, which is audited.");
+
+    [Theory]
+    [InlineData("EXPLAIN SELECT 1")]
+    [InlineData("EXPLAIN (COSTS OFF, FORMAT JSON) SELECT analyze FROM t")]
+    [InlineData("SELECT 1")]
+    public void Explain_tab_allows_plain_explain(string sql) =>
+        PgSqlGuard.CheckExplain(sql).Should().HaveCount(1);
+}

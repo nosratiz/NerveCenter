@@ -80,4 +80,49 @@ public class BootstrapOptionsTests
         text.Should().NotContain("api-key");
         text.Should().Contain("[REDACTED]");
     }
+
+    [Fact]
+    public void Sqlite_roots_default_to_empty_so_no_sqlite_file_can_be_opened()
+    {
+        var env = ValidEnv();
+
+        BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k)).SqliteRoots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Sqlite_roots_are_split_on_semicolons_trimmed_and_blanks_dropped()
+    {
+        var env = ValidEnv();
+        env["SBC_SQLITE_ROOTS"] = " /sqlite ; ;/backups/reports ";
+
+        BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k)).SqliteRoots
+            .Should().Equal("/sqlite", "/backups/reports");
+    }
+
+    [Fact]
+    public void Demo_connections_file_defaults_to_null_so_the_feature_is_off()
+    {
+        var env = ValidEnv();
+
+        BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k)).DemoConnectionsFile.Should().BeNull();
+    }
+
+    [Fact]
+    public void Demo_connections_file_is_read_and_trimmed()
+    {
+        var env = ValidEnv();
+        env["SBC_DEMO_CONNECTIONS"] = " /demo/connections.json ";
+
+        BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k)).DemoConnectionsFile
+            .Should().Be("/demo/connections.json");
+    }
+
+    [Fact]
+    public void Blank_demo_connections_file_counts_as_unset()
+    {
+        var env = ValidEnv();
+        env["SBC_DEMO_CONNECTIONS"] = "   ";
+
+        BootstrapOptions.FromEnvironment(k => env.GetValueOrDefault(k)).DemoConnectionsFile.Should().BeNull();
+    }
 }

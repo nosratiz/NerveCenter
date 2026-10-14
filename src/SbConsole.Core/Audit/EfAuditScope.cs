@@ -15,10 +15,11 @@ public sealed class EfAuditScope(
     TimeProvider clock,
     AuthenticationStateProvider authStateProvider) : IAuditScope, IScopedService
 {
+    public const string SystemActor = AuditActor.System;
+
     public async Task RecordAsync(string action, string target, ActionRisk risk, bool succeeded, string? detail = null, CancellationToken ct = default)
     {
-        var state = await authStateProvider.GetAuthenticationStateAsync();
-        var actor = state.User.Identity?.Name ?? "admin";
+        var actor = await AuditActor.ResolveAsync(authStateProvider);
 
         await writer.WriteAsync(new AuditEntry
         {

@@ -1,0 +1,39 @@
+@using SbConsole.Plugins.Postgres.Client
+@* Error alert (mockup 1g): title, the friendly message first, then the hint; SQLSTATE and condition sit
+   behind a Details toggle. Callers add their actions (Retry now, Edit connection) as ChildContent. *@
+<MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="@(("pg-error-alert " + Class).Trim())">
+    @if (Title is not null)
+    {
+        <div class="pg-error-title"><strong>@Title</strong></div>
+    }
+    <div class="pg-error-message">@Info.Message</div>
+    @if (!string.IsNullOrWhiteSpace(Info.Hint))
+    {
+        <div class="pg-error-hint pg-muted">@Info.Hint</div>
+    }
+    @if (HasDetails)
+    {
+        <MudButton Size="Size.Small" Variant="Variant.Text" Class="pg-error-details-toggle" OnClick="@(() => _open = !_open)">Details</MudButton>
+        <MudCollapse Expanded="_open">
+            <div class="pg-error-details">SQLSTATE @Info.SqlState@(Info.ConditionName is null ? "" : " · " + Info.ConditionName)</div>
+        </MudCollapse>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="pg-error-actions">@ChildContent</div>
+    }
+</MudAlert>
+
+@code {
+    [Parameter, EditorRequired] public PgErrorInfo Info { get; set; } = default!;
+
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _open;
+
+    private bool HasDetails => !string.IsNullOrEmpty(Info.SqlState);
+}

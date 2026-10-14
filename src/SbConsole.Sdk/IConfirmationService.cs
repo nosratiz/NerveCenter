@@ -9,4 +9,12 @@ namespace SbConsole.Sdk;
 public interface IConfirmationService
 {
     Task<bool> ConfirmAsync(string verb, string target, bool isProd, int? count = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Detailed variant (design: docs/superpowers/specs/2026-10-14-postgres-plugin-design.md §10).
+    /// The default implementation falls back to the plain method, passing only Verb, Target and IsProd;
+    /// it drops Consequence, Details, AuditAction and Destructive, so other implementations keep compiling.
+    /// </summary>
+    Task<bool> ConfirmAsync(ConfirmationRequest request, CancellationToken ct = default) =>
+        ConfirmAsync(request.Verb, request.Target, request.IsProd, null, ct);
 }
