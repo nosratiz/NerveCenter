@@ -1,5 +1,7 @@
 using Bunit;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -8,6 +10,7 @@ using NSubstitute;
 using SbConsole.Plugins.Postgres.Browse;
 using SbConsole.Plugins.Postgres.Client;
 using SbConsole.Plugins.Postgres.Overview;
+using SbConsole.Plugins.Postgres.Query;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Postgres.Tests.Pages;
@@ -63,6 +66,17 @@ public abstract class PgPageTestBase : BunitContext, IAsyncLifetime
         Services.AddSingleton(new GetDdlQueryHandler(Operations, Connections, NullLogger<GetDdlQueryHandler>.Instance));
         Services.AddSingleton(new PreviewRowsQueryHandler(Operations, Connections, NullLogger<PreviewRowsQueryHandler>.Instance));
         Services.AddSingleton(new ExportTableCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportTableCsvCommandHandler>.Instance));
+        Services.AddSingleton(new RunQueryCommandHandler(Operations, Connections, Audit, Store, Time, NullLogger<RunQueryCommandHandler>.Instance));
+        Services.AddSingleton(new ExplainQueryQueryHandler(Operations, Connections, NullLogger<ExplainQueryQueryHandler>.Instance));
+        Services.AddSingleton(new ExportQueryCsvCommandHandler(Operations, Connections, Audit, NullLogger<ExportQueryCsvCommandHandler>.Instance));
+        Services.AddSingleton(new ListQueryHistoryQueryHandler(Store, Time));
+        Services.AddSingleton<AuthenticationStateProvider>(new FakeAuthStateProvider());
+    }
+
+    private sealed class FakeAuthStateProvider : AuthenticationStateProvider
+    {
+        public override Task<AuthenticationState> GetAuthenticationStateAsync() =>
+            Task.FromResult(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "admin")], "test"))));
     }
 
     /// <summary>MudMenu/MudSelect items render into a MudPopoverProvider (hosted by the real layout), so such tests render one alongside.</summary>
