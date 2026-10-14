@@ -65,6 +65,7 @@ builder.Services.AddSbConsolePlugin<SbConsole.Plugins.RabbitMq.RabbitMqPlugin>()
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Redis.RedisPlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Sqlite.SqlitePlugin>();
 builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Postgres.PostgresPlugin>();
+builder.Services.AddSbConsolePlugin<SbConsole.Plugins.Kubernetes.KubernetesPlugin>();
 builder.Services.AddHostedService<MetricsCollectorService>();
 
 var app = builder.Build();

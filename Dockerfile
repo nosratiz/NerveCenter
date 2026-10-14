@@ -16,6 +16,7 @@ COPY src/Plugins/Messaging/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq
 COPY src/Plugins/Databases/SbConsole.Plugins.Redis/SbConsole.Plugins.Redis.csproj           src/Plugins/Databases/SbConsole.Plugins.Redis/
 COPY src/Plugins/Databases/SbConsole.Plugins.Sqlite/SbConsole.Plugins.Sqlite.csproj         src/Plugins/Databases/SbConsole.Plugins.Sqlite/
 COPY src/Plugins/Databases/SbConsole.Plugins.Postgres/SbConsole.Plugins.Postgres.csproj     src/Plugins/Databases/SbConsole.Plugins.Postgres/
+COPY src/Plugins/Infrastructure/SbConsole.Plugins.Kubernetes/SbConsole.Plugins.Kubernetes.csproj src/Plugins/Infrastructure/SbConsole.Plugins.Kubernetes/
 COPY src/SbConsole.Web/SbConsole.Web.csproj                             src/SbConsole.Web/
 RUN dotnet restore src/SbConsole.Web/SbConsole.Web.csproj
 
