@@ -548,6 +548,39 @@ repo, change `Host=postgres` to `Host=localhost` and `Port=5432` to `Port=5433` 
 and point `SBC_DEMO_CONNECTIONS` at the copy. Or create the connection by hand on the Connections
 page with Host `localhost`, Port `5433`, Database `app`, user/password `sbconsole`.
 
+### Sample data for checking each feature
+
+`docker/postgres/init/04-showcase.sql` adds a `showcase` schema, a `wide` schema and a plain role
+to `app`. It runs on first init like the others and is safe to re-run on an existing server
+(it drops and recreates both schemas):
+
+```bash
+docker compose --profile postgres exec -T postgres psql -U sbconsole -d app -f /docker-entrypoint-initdb.d/04-showcase.sql
+```
+
+Two more demo connections come with it: `pg-local-limited` (role `app_ro`: read-only grants, no
+`pg_monitor`, no CONNECT on `billing`) and `pg-offline` (host `pg-offline.invalid`, never
+resolves). `postgres-blocker` also keeps a long-running `reporting` query and two `idle-pool`
+connections open. Restart it after changing `blocker.sh`.
+
+What to try:
+
+| Page | Connection | Where | What you should see |
+|------|------------|-------|---------------------|
+| Overview | `pg-local` | — | KPI tiles; Needs attention lists blocked sessions, 3 tables over 30 % dead (`order_items`, `sessions`, `showcase.churn`) and unused indexes; after 5 min the idle-in-transaction item |
+| Overview | `pg-offline` | — | "Can't reach pg-offline" with the friendly reason, skeleton rows, retry countdown, red dot in the picker |
+| Overview | `pg-local-limited` | — | "This role can't see other sessions' details" alert; `billing` size "—" (no CONNECT) |
+| Browse → Data | `pg-local` | `showcase.type_zoo` | NULL chips; jsonb/json objects "{…} N keys" and arrays "[…] N items" that expand; bytea `\x…`; interval with months, `NaN`, `1e40`, BC dates and `infinity` as server text instead of an error; HTML and `<script>` shown as text; long cells ellipsised with the full value on hover |
+| Browse → Data | `pg-local` | `showcase.filter_me` | filters: `city is null` (half the rows), `attrs @> {"vip": true}`, `tags @> {red}`, `city ilike berlin` (matches `Berlin` and `berlin`), sort by `score` (numeric order) |
+| Browse → Columns / Constraints / DDL | `pg-local` | `showcase.bookings` | identity and generated (`nights`) columns, check, unique, exclusion (`&&` on `tstzrange`) and FK `ON DELETE CASCADE` constraints, comments, all in the DDL |
+| Browse → Indexes | `pg-local` | `showcase.bookings`, `showcase.filter_me` | Drop index disabled for `bookings_guest_room_unique` and the PK (they back constraints); `bookings_created_unused` can be dropped; expression and partial indexes on `filter_me` |
+| Browse tree | `pg-local` | schemas `showcase`, `wide` | the partitioned `showcase.metrics` appears once (partitions hidden); views, materialized view, function and procedure groups; `wide` (75 tables) stops at 50 with "25 more…"; the filter box narrows it |
+| Browse / Query | `pg-local` | `showcase."Mixed Case Table"` | quoted identifiers in the tree, DDL and Open in Query |
+| Query | `pg-local` (prod) | — | Write asks for the typed connection name, then shows the PROD banner; `SELECT 1; SELECT 2` in read mode is refused; `CLUSTER`/`REINDEX`/`ANALYZE` are refused in read mode; `SELECT showcase.slow_echo('x', 40)` with timeout 30 s fails with the timeout message; a typo like `o.custmer_id` marks the failing line |
+| Query | `pg-local-ro` | — | the Write toggle is disabled ("Connection is read-only") |
+| Activity | `pg-local` | — | lock chain (`checkout-api` idle in transaction → two waiters, "blocks 2"), Cancel the `reporting` query (it restarts after 5 s), Terminate the blocker with typed `pid N` (a new chain starts within 15 min), 2+ idle backends behind "show all" |
+| Maintenance | `pg-local` | `showcase.churn` | flagged for dead tuples and bloat; VACUUM / ANALYZE are a plain confirm, VACUUM FULL is typed on PROD and empties the dead-tuple count; `showcase.never_analyzed` shows no last analyze |
+
 Reset only this data: `docker compose --profile postgres down` then
 `docker volume rm nervecenter_postgres-data` (the next `up` re-seeds). `docker compose
 --profile postgres exec postgres psql -U sbconsole -d app` opens a shell on the server.
