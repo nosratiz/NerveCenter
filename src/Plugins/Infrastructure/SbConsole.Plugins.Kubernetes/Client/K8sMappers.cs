@@ -407,6 +407,12 @@ internal static class K8sMappers
             labels);
     }
 
+    /// <summary>The Nodes page order: not-Ready nodes first (they need attention), then by name.</summary>
+    public static IReadOnlyList<K8sNodeInfo> InNodeDisplayOrder(IEnumerable<K8sNodeInfo> nodes) =>
+        nodes.OrderBy(n => n.ReadyStatus == "True" ? 1 : 0)
+            .ThenBy(n => n.Name, StringComparer.Ordinal)
+            .ToList();
+
     public static string Provider(IReadOnlyList<K8sNodeInfo> nodes)
     {
         foreach (var node in nodes)

@@ -198,3 +198,14 @@ pre.k8s-log mark.k8s-log-mark-current { background: var(--mud-palette-warning); 
 .k8s-env-head .k8s-env-container { flex: 0 0 220px; }
 .k8s-env-masked { letter-spacing: 0.1em; }
 .k8s-env-value { overflow-wrap: anywhere; }
+
+/* Nodes (mockup 3e) */
+.k8s-header .k8s-pool-filter { width: 160px; flex: none; }
+.k8s-header .k8s-pool-filter .mud-input-control { margin-top: 0; }
+.k8s-node-caption { font-size: 0.72rem; }
+.k8s-node-conditions { display: flex; flex-wrap: wrap; gap: 4px; }
+.k8s-node-usage { display: flex; flex-direction: column; gap: 3px; min-width: 96px; }
+.k8s-node-usage-text { font-size: 0.78rem; }
+.k8s-node-notready { background: var(--mud-palette-error-hover); }
+.k8s-node-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.k8s-nodes-audited { margin-left: 8px; }

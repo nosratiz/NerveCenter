@@ -11,6 +11,7 @@ using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Deployments;
 using SbConsole.Plugins.Kubernetes.Namespaces;
+using SbConsole.Plugins.Kubernetes.Nodes;
 using SbConsole.Plugins.Kubernetes.Overview;
 using SbConsole.Plugins.Kubernetes.Pods;
 using SbConsole.Plugins.Kubernetes.Workloads;
@@ -108,6 +109,12 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<FollowPodLogsQueryHandler>.Instance));
         Services.AddSingleton(new DownloadPodLogsQueryHandler(
             Operations, Connections, NullLogger<DownloadPodLogsQueryHandler>.Instance));
+        Services.AddSingleton(new ListNodesQueryHandler(
+            Operations, Connections, NullLogger<ListNodesQueryHandler>.Instance));
+        Services.AddSingleton(new ListNodePodsQueryHandler(
+            Operations, Connections, NullLogger<ListNodePodsQueryHandler>.Instance));
+        Services.AddSingleton(new SetNodeSchedulableCommandHandler(
+            Operations, Connections, Audit, NullLogger<SetNodeSchedulableCommandHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

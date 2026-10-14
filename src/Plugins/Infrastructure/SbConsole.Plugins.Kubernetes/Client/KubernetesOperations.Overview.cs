@@ -45,8 +45,7 @@ public sealed partial class KubernetesOperations
         // A cluster-wide pod list has every pod (node requests stay accurate); counts use only the selected namespaces.
         var allPods = podsTask.Result;
         var summaries = allPods.Select(K8sMappers.Pod).ToList();
-        var podsByNode = summaries.Where(p => p.NodeName is not null).ToLookup(p => p.NodeName!, StringComparer.Ordinal);
-        var nodes = nodesTask.Result.Select(n => K8sMappers.Node(n, podsByNode[n.Metadata.Name])).ToList();
+        var nodes = NodesWithPods(nodesTask.Result, summaries);
         var scoped = summaries.Where(p => InScope(p.Namespace)).ToList();
 
         var limits = allPods

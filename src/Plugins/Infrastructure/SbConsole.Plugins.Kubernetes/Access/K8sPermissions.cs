@@ -20,6 +20,10 @@ public sealed class K8sPermissions
 
     public static readonly (string Group, string Resource, string Verb)[] PodActions = [("", "pods", "delete")];
     public static readonly (string Group, string Resource, string Verb)[] ConfigActions = [("", "configmaps", "update")];
+    public static readonly (string Group, string Resource, string Verb)[] NodeActions = [("", "nodes", "patch")];
+
+    /// <summary>ClusterChecks key: may this account cordon / uncordon nodes.</summary>
+    public const string NodesPatch = "nodes/patch";
 
     private readonly IReadOnlyList<K8sRulesReview> _reviews;
     private readonly IReadOnlyDictionary<string, bool> _cluster;

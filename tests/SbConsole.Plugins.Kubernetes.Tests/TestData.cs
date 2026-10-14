@@ -319,4 +319,36 @@ internal static class TestData
             ],
         };
     }
+
+    /// <summary>
+    /// The nodes from mockup 3e, in API (name) order: 12 nodes in 2 pools. pool1 (5 × Standard_D8s_v5) holds
+    /// aks-pool1-38211-vmss00000a — Ready Unknown for 6 minutes and cordoned, 34 pods — and aks-pool1-38211-vmss000004 with
+    /// MemoryPressure; pool2 (7 × Standard_E16s_v5) is tainted workload=memory. 11 ready · 1 cordoned.
+    /// </summary>
+    public static IReadOnlyList<K8sNodeInfo> Nodes()
+    {
+        K8sNodeInfo Make(string pool, string suffix, int i, string type, string ip, long cpuAlloc, long memAlloc, long cpuReq, long memReq,
+            int pods, int ageDays, IReadOnlyList<string> taints) =>
+            new($"aks-{pool}-{suffix}", pool, type, ip, "True", T0.AddDays(-3), [], ["agent"], taints, "v1.30.4", false,
+                cpuAlloc, memAlloc, cpuReq, memReq, pods, T0.AddDays(-ageDays), $"azure:///vm-{pool}-{i}",
+                new Dictionary<string, string> { ["agentpool"] = pool });
+
+        var nodes = new List<K8sNodeInfo>();
+        for (var i = 1; i <= 4; i++)
+        {
+            nodes.Add(Make("pool1", $"38211-vmss{i:x6}", i, "Standard_D8s_v5", $"10.240.0.{3 + i}", 7900, 28 * GiB,
+                4600 + (i * 100), 21 * GiB, 35 + i, 38, []));
+        }
+
+        nodes[3] = nodes[3] with { Pressures = ["MemoryPressure"], CpuRequestedMilli = 5600, MemRequestedBytes = 25 * GiB + GiB / 2, PodCount = 41 };
+        nodes.Add(Make("pool1", "38211-vmss00000a", 10, "Standard_D8s_v5", "10.240.0.13", 7900, 28 * GiB, 4600, 21 * GiB, 34, 38, [])
+            with { ReadyStatus = "Unknown", ReadySince = T0.AddMinutes(-6), Unschedulable = true });
+        for (var i = 0; i < 7; i++)
+        {
+            nodes.Add(Make("pool2", $"40917-vmss{i:x6}", i, "Standard_E16s_v5", $"10.240.1.{4 + i}", 15800, 119 * GiB,
+                7000 - (i * 100), 82 * GiB, 22 + i, 12, ["workload=memory:NoSchedule"]));
+        }
+
+        return nodes;
+    }
 }

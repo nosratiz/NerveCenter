@@ -64,15 +64,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
 
     // ---- Not implemented yet: each later task replaces its own. ----
 
-    public Task<IReadOnlyList<K8sNodeInfo>> ListNodesAsync(string secret, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<IReadOnlyList<K8sPodSummary>> ListPodsOnNodeAsync(string secret, string node, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task SetUnschedulableAsync(string secret, string node, bool unschedulable, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
     public Task<K8sDrainInputs> GetDrainInputsAsync(string secret, string node, CancellationToken ct = default) =>
         throw new NotImplementedException();
 
