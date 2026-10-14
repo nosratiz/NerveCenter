@@ -108,7 +108,7 @@ internal static class PgCellFormatter
         return Text(value);
     }
 
-    private static PgCell FormatJson(string json)
+    internal static PgCell FormatJson(string json)
     {
         try
         {
@@ -124,9 +124,11 @@ internal static class PgCellFormatter
                     var items = root.GetArrayLength();
                     return new PgCell(PgCellKind.Json, $"[…] {items} {(items == 1 ? "item" : "items")}", items, pretty);
                 default:
-                    var scalar = root.ToString();
-                    return new PgCell(PgCellKind.Json,
-                        scalar.Length <= DisplayChars ? scalar : scalar[..DisplayChars] + "…", null, pretty);
+                    // A JSON scalar (string, number, true / false / null) has nothing to expand: show its raw JSON text.
+                    var scalar = root.GetRawText();
+                    return scalar.Length <= DisplayChars
+                        ? new PgCell(PgCellKind.Text, scalar)
+                        : new PgCell(PgCellKind.Text, scalar[..DisplayChars] + "…", Full: Cap(scalar));
             }
         }
         catch (JsonException)

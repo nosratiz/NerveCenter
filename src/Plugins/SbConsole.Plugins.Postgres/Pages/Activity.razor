@@ -403,7 +403,10 @@
         var ct = _cts.Token;
         try
         {
-            if (!await Confirmation.ConfirmAsync("Cancel query of", $"pid {pid}", false, null, ct))
+            if (!await Confirmation.ConfirmAsync(
+                    new ConfirmationRequest("Cancel query", $"pid {pid}", IsProd: false,
+                        Consequence: "Sends pg_cancel_backend: the running statement stops with an error; the session stays connected.",
+                        AuditAction: "pg.backend.cancel"), ct))
             {
                 return;
             }

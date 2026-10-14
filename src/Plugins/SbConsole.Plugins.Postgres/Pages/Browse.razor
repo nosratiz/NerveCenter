@@ -1029,7 +1029,7 @@
                                 {
                                     var cell = row[c];
                                     var cellIndex = c;
-                                    <td>
+                                    <td title="@(cell.Kind == PgCellKind.Null ? null : cell.Full ?? cell.Display)">
                                         @switch (cell.Kind)
                                         {
                                             case PgCellKind.Null:
@@ -1039,7 +1039,7 @@
                                                 <PgJsonCell Cell="cell" Expanded="_jsonOpen.Contains((rowIndex, cellIndex))" OnToggle="() => ToggleJson(rowIndex, cellIndex)" />
                                                 break;
                                             default:
-                                                <span title="@cell.Full">@cell.Display</span>
+                                                <span>@cell.Display</span>
                                                 break;
                                         }
                                     </td>

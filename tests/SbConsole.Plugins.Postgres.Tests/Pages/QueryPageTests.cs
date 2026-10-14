@@ -16,7 +16,7 @@ public class QueryPageTests : PgPageTestBase
     private static PgQueryResult Result(int rows = 3, bool write = false) => new(
         [new PgResultColumn("country", "text"), new PgResultColumn("n", "int8"), new PgResultColumn("meta", "jsonb")],
         Enumerable.Range(1, rows).Select(i => (IReadOnlyList<PgCell>)
-            [Text("DE" + i), Text(i.ToString()), i == 2 ? new PgCell(PgCellKind.Null, null) : new PgCell(PgCellKind.Json, "{…}", 1, "{ \"a\": 1 }")]).ToList(),
+            [Text("DE" + i), Text(i.ToString()), i == 2 ? new PgCell(PgCellKind.Null, null) : new PgCell(PgCellKind.Json, "{…} 1 key", 1, "{ \"a\": 1 }")]).ToList(),
         false, write ? 4 : null, TimeSpan.FromSeconds(1.84), 1, write ? "UPDATE 4" : "SELECT 3");
 
     public QueryPageTests()
@@ -61,6 +61,24 @@ public class QueryPageTests : PgPageTestBase
 
     private static void ClickWrite(IRenderedComponent<Bunit.Rendering.ContainerFragment> cut) =>
         cut.FindAll(".pg-mode-toggle .mud-toggle-item").First(i => i.TextContent.Contains("Write")).Click();
+
+    [Fact]
+    public void Result_cells_carry_the_full_value_in_a_title_and_json_labels_follow_the_cell()
+    {
+        var full = new string('y', 300);
+        Operations.RunQueryAsync(Secret, "app", Arg.Any<PgQueryRequest>(), Arg.Any<CancellationToken>()).Returns(_ => new PgQueryResult(
+            [new PgResultColumn("note", "text"), new PgResultColumn("tags", "jsonb")],
+            [[new PgCell(PgCellKind.Text, new string('y', 200) + "…", Full: full), new PgCell(PgCellKind.Json, "[…] 1 item", 1, "[\n  1\n]")]],
+            false, null, TimeSpan.FromSeconds(1), 1, "SELECT 1"));
+        var cut = RenderQuery();
+        Run(cut);
+        cut.WaitForElement(".pg-result-grid");
+
+        var cells = cut.FindAll(".pg-result-grid tbody td");
+        cells[1].GetAttribute("title").Should().Be(full);
+        cells[2].TextContent.Trim().Should().Be("[…] 1 item");
+        cells[2].GetAttribute("title").Should().Be("[\n  1\n]");
+    }
 
     [Fact]
     public void Read_run_renders_grid_with_type_names_and_status()

@@ -177,13 +177,128 @@ public sealed class OperationsOverviewTests(PostgresFixture fx)
 
             var o = await fx.Operations.GetOverviewAsync(fx.SecretForRole(role, password));
 
-            o.Databases.Should().Contain(d => d.Name == db && d.Bytes == 0);
+            o.Databases.Should().Contain(d => d.Name == db && d.Bytes == null);
             o.Databases.Should().Contain(d => d.Name == "app" && d.Bytes > 0);
         }
         finally
         {
             await ExecAsync(admin, $"DROP DATABASE IF EXISTS {db} WITH (FORCE)");
             await ExecAsync(admin, $"DROP ROLE IF EXISTS {role}");
+        }
+    }
+
+    private async Task<(string Role, string Password)> CreateLimitedRoleAsync(NpgsqlConnection admin)
+    {
+        var role = "limited_" + Guid.NewGuid().ToString("N");
+        const string password = "limited-pw-1";
+        await ExecAsync(admin, $"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER");
+        return (role, password);
+    }
+
+    [DockerFact]
+    public async Task A_limited_role_still_counts_other_users_connections()
+    {
+        await using var admin = await OpenAsync(fx.AdminConnectionString("postgres"));
+        (string Role, string Password) limited = default;
+        try
+        {
+            limited = await CreateLimitedRoleAsync(admin);
+            await using var other1 = await OpenAsync(fx.AdminConnectionString());
+            await using var other2 = await OpenAsync(fx.AdminConnectionString());
+            await using var other3 = await OpenAsync(fx.AdminConnectionString());
+
+            var o = await fx.Operations.GetOverviewAsync(fx.SecretForRole(limited.Role, limited.Password));
+
+            // Three other-user sessions plus this overview's own connection; their backend_type / state are hidden from the role.
+            o.Connections.Should().BeGreaterThanOrEqualTo(4);
+            o.LimitedVisibility.Should().BeTrue();
+        }
+        finally
+        {
+            if (limited.Role is not null) await ExecAsync(admin, $"DROP ROLE IF EXISTS {limited.Role}");
+        }
+    }
+
+    [DockerFact]
+    public async Task A_superuser_has_full_visibility()
+    {
+        var o = await fx.Operations.GetOverviewAsync(fx.Secret());
+
+        o.LimitedVisibility.Should().BeFalse();
+    }
+
+    [DockerFact]
+    public async Task A_role_with_pg_monitor_has_full_visibility()
+    {
+        await using var admin = await OpenAsync(fx.AdminConnectionString("postgres"));
+        (string Role, string Password) monitor = default;
+        try
+        {
+            monitor = await CreateLimitedRoleAsync(admin);
+            await ExecAsync(admin, $"GRANT pg_monitor TO {monitor.Role}");
+            await using var other = await OpenAsync(fx.AdminConnectionString());
+
+            var o = await fx.Operations.GetOverviewAsync(fx.SecretForRole(monitor.Role, monitor.Password));
+
+            o.LimitedVisibility.Should().BeFalse();
+            o.Connections.Should().BeGreaterThanOrEqualTo(2);
+        }
+        finally
+        {
+            if (monitor.Role is not null) await ExecAsync(admin, $"DROP ROLE IF EXISTS {monitor.Role}");
+        }
+    }
+
+    [DockerFact]
+    public async Task Blocked_duration_is_unknown_not_zero_when_query_start_is_hidden()
+    {
+        await using var admin = await OpenAsync(fx.AdminConnectionString("postgres"));
+        await using var a = await OpenAsync(fx.AdminConnectionString());
+        await using var txA = await a.BeginTransactionAsync();
+        using var cts = new CancellationTokenSource();
+        Task? blocked = null;
+        (string Role, string Password) limited = default;
+        try
+        {
+            limited = await CreateLimitedRoleAsync(admin);
+            await ExecAsync(a, "UPDATE orders SET status = 'x' WHERE id = 2");
+            blocked = Task.Run(async () =>
+            {
+                await using var b = await OpenAsync(fx.AdminConnectionString());
+                await using var txB = await b.BeginTransactionAsync();
+                try
+                {
+                    await using var cmd = new NpgsqlCommand("UPDATE orders SET status = 'y' WHERE id = 2", b, txB);
+                    await cmd.ExecuteNonQueryAsync(cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (PostgresException) { }
+                finally
+                {
+                    try { await txB.RollbackAsync(); } catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { }
+                }
+            });
+
+            var secret = fx.SecretForRole(limited.Role, limited.Password);
+            PgOverview o;
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            do
+            {
+                o = await fx.Operations.GetOverviewAsync(secret);
+                if (o.Attention.BlockedCount >= 1) break;
+                await Task.Delay(200);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            o.Attention.BlockedCount.Should().BeGreaterThanOrEqualTo(1);
+            o.Attention.LongestBlockedFor.Should().BeNull();
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            if (blocked is not null) await blocked;
+            await txA.RollbackAsync();
+            if (limited.Role is not null) await ExecAsync(admin, $"DROP ROLE IF EXISTS {limited.Role}");
         }
     }
 

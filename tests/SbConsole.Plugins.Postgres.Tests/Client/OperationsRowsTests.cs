@@ -291,4 +291,51 @@ public sealed class OperationsRowsTests(PostgresFixture fx)
             new PgRowsRequest(oid, [new PgFilter("b", PgFilterOp.Eq, "101")], "id", false, 0, 50));
         bit.Rows.Should().HaveCount(1);
     }
+
+    [DockerFact]
+    public async Task Json_and_jsonb_cells_are_labelled_by_their_shape()
+    {
+        var table = "json_shapes_" + Guid.NewGuid().ToString("N");
+        await using var conn = new Npgsql.NpgsqlConnection(fx.AdminConnectionString());
+        await conn.OpenAsync();
+        try
+        {
+            await using (var create = new Npgsql.NpgsqlCommand($$"""
+                CREATE TABLE {{table}} (id int PRIMARY KEY, jb jsonb, j json);
+                INSERT INTO {{table}} VALUES
+                    (1, '{"a":1,"b":2}', '{"a":1}'),
+                    (2, '[1,2,3]', '[1, [2, [3, [4]]]]'),
+                    (3, '[]', '[]'),
+                    (4, '"hello"', '42'),
+                    (5, 'true', 'null'),
+                    (6, NULL, NULL);
+                """, conn))
+            {
+                await create.ExecuteNonQueryAsync();
+            }
+
+            var tree = await fx.Operations.ListSchemaAsync(fx.Secret(), null);
+            var oid = tree.Schemas.Single(s => s.Name == "public").Tables.Single(t => t.Name == table).Oid;
+            var page = await fx.Operations.PreviewRowsAsync(fx.Secret(), null, Req(oid));
+            var jb = Col(page, "jb");
+            var j = Col(page, "j");
+
+            page.Rows[0][jb].Display.Should().Be("{…} 2 keys");
+            page.Rows[0][j].Display.Should().Be("{…} 1 key");
+            page.Rows[1][jb].Display.Should().Be("[…] 3 items");
+            page.Rows[1][j].Display.Should().Be("[…] 2 items");
+            page.Rows[2][jb].Display.Should().Be("[…] 0 items");
+            page.Rows[2][j].Display.Should().Be("[…] 0 items");
+            page.Rows[3][jb].Should().Be(new PgCell(PgCellKind.Text, "\"hello\""));
+            page.Rows[3][j].Should().Be(new PgCell(PgCellKind.Text, "42"));
+            page.Rows[4][jb].Should().Be(new PgCell(PgCellKind.Text, "true"));
+            page.Rows[4][j].Should().Be(new PgCell(PgCellKind.Text, "null"));
+            page.Rows[5][jb].Kind.Should().Be(PgCellKind.Null);
+        }
+        finally
+        {
+            await using var drop = new Npgsql.NpgsqlCommand($"DROP TABLE IF EXISTS {table}", conn);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
 }

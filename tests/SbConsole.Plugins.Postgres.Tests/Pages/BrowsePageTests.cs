@@ -40,7 +40,7 @@ public class BrowsePageTests : PgPageTestBase
     private static PgCell Text(string value) => new(PgCellKind.Text, value);
 
     private static IReadOnlyList<PgCell> Row(string id, string status = "pending") =>
-        [Text(id), Text(status), new PgCell(PgCellKind.Null, null), new PgCell(PgCellKind.Json, "{…}", 4, "{ \"channel\": \"web\" }")];
+        [Text(id), Text(status), new PgCell(PgCellKind.Null, null), new PgCell(PgCellKind.Json, "{…} 4 keys", 4, "{ \"channel\": \"web\" }")];
 
     private static PgRowPage Page(int count, long? estimate = 184_212, int start = 1) => new(
         [new PgResultColumn("id", "int8"), new PgResultColumn("status", "text"), new PgResultColumn("shipped_at", "timestamptz"), new PgResultColumn("metadata", "jsonb")],
@@ -179,6 +179,37 @@ public class BrowsePageTests : PgPageTestBase
         var cut = RenderBrowse("&db=app&oid=999");
 
         cut.WaitForAssertion(() => cut.Markup.Should().Contain("no longer exists"));
+    }
+
+    private static string Long => new('x', 300);
+
+    private void ArrangeWideRow() =>
+        Operations.PreviewRowsAsync(Secret, "app", Arg.Any<PgRowsRequest>(), Arg.Any<CancellationToken>()).Returns(_ => new PgRowPage(
+            [new PgResultColumn("id", "int8"), new PgResultColumn("note", "text"), new PgResultColumn("tags", "jsonb"), new PgResultColumn("raw", "json")],
+            [[Text("1"), new PgCell(PgCellKind.Text, new string('x', 200) + "…", Full: Long),
+                new PgCell(PgCellKind.Json, "[…] 3 items", 3, "[\n  1,\n  2,\n  3\n]"), new PgCell(PgCellKind.Text, "42")]], 1));
+
+    [Fact]
+    public void Data_grid_cells_carry_the_full_value_in_a_title()
+    {
+        ArrangeWideRow();
+        var cut = RenderOrders();
+        cut.WaitForElement(".pg-data-grid td");
+
+        var cells = cut.FindAll(".pg-data-grid tbody td");
+        cells[0].GetAttribute("title").Should().Be("1");
+        cells[1].GetAttribute("title").Should().Be(Long);
+        cells[3].GetAttribute("title").Should().Be("42");
+    }
+
+    [Fact]
+    public void Json_arrays_show_an_items_label_in_the_data_grid()
+    {
+        ArrangeWideRow();
+        var cut = RenderOrders();
+        cut.WaitForElement(".pg-json-toggle");
+
+        cut.Find(".pg-json-toggle").TextContent.Trim().Should().Be("[…] 3 items");
     }
 
     [Fact]

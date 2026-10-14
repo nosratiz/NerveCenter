@@ -9,10 +9,11 @@ public sealed record PgOverview(
     PgReplication Replication,
     long OldestXidAge,
     IReadOnlyList<PgDatabaseStat> Databases,
-    PgAttention Attention);
+    PgAttention Attention,
+    bool LimitedVisibility = false);
 public sealed record PgLongestTransaction(int Pid, string User, string Application, string State, TimeSpan Age);
 public sealed record PgReplication(int ReplicaCount, TimeSpan? MaxLag, string? LaggiestName, long? WalRetainedBytes);
-public sealed record PgDatabaseStat(string Name, long Bytes, string Owner, int Backends, double? HitRatio, long XactCommit, long Deadlocks);
+public sealed record PgDatabaseStat(string Name, long? Bytes, string Owner, int Backends, double? HitRatio, long XactCommit, long Deadlocks);
 public sealed record PgAttention(
     int BlockedCount, TimeSpan? LongestBlockedFor, int? TopBlockerPid, string? TopBlockerRelation,
     IReadOnlyList<PgIdleTransaction> IdleInTransaction,          // > 5 min only, longest first

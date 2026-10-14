@@ -649,14 +649,14 @@
                             @for (var c = 0; c < row.Count; c++)
                             {
                                 var cell = row[c];
-                                <td class="pg-mono @(c < r.Columns.Count && Numeric.Contains(r.Columns[c].TypeName) ? "pg-num" : null)" title="@(cell.Kind == PgCellKind.Json ? cell.Full : null)">
+                                <td class="pg-mono @(c < r.Columns.Count && Numeric.Contains(r.Columns[c].TypeName) ? "pg-num" : null)" title="@(cell.Kind == PgCellKind.Null ? null : cell.Full ?? cell.Display)">
                                     @if (cell.Kind == PgCellKind.Null)
                                     {
                                         <PgNullChip />
                                     }
                                     else if (cell.Kind == PgCellKind.Json)
                                     {
-                                        @("{…}")@(cell.JsonKeyCount is { } keys ? $" {keys} {(keys == 1 ? "key" : "keys")}" : "")
+                                        @cell.Display
                                     }
                                     else
                                     {

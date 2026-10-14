@@ -33,6 +33,48 @@ public class OverviewPageTests : PgPageTestBase
     }
 
     [Fact]
+    public void A_limited_role_sees_an_info_alert()
+    {
+        Arrange(OverviewTestData.Overview(limitedVisibility: true));
+        var cut = RenderPage();
+
+        cut.Find(".pg-limited-visibility").TextContent.Should()
+            .Contain("This role can't see other sessions' details (grant pg_monitor for full visibility).");
+    }
+
+    [Fact]
+    public void A_fully_visible_role_sees_no_alert()
+    {
+        Arrange(OverviewTestData.Overview());
+        var cut = RenderPage();
+
+        cut.FindAll(".pg-limited-visibility").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_unknown_database_size_renders_a_dash_with_a_title()
+    {
+        Arrange(OverviewTestData.Overview(databases: [new PgDatabaseStat("locked", null, "owner", 0, null, 0, 0)]));
+        var cut = RenderPage();
+
+        var cell = cut.Find(".pg-databases .pg-db-size");
+        cell.TextContent.Trim().Should().Be("—");
+        cell.GetAttribute("title").Should().Be("No CONNECT privilege on this database");
+    }
+
+    [Fact]
+    public void Blocked_sessions_without_a_known_duration_drop_the_for_up_to_text()
+    {
+        var attention = OverviewTestData.NoAttention() with { BlockedCount = 2, LongestBlockedFor = null, TopBlockerPid = 5 };
+        Arrange(OverviewTestData.Overview(attention: attention));
+        var cut = RenderPage();
+
+        var text = cut.Markup;
+        text.Should().Contain("2 sessions blocked");
+        text.Should().NotContain("for up to");
+    }
+
+    [Fact]
     public void Tiles_render_captions_from_the_overview()
     {
         Arrange(OverviewTestData.Overview(connections: 312, maxConnections: 400));

@@ -57,6 +57,10 @@
             var stale = _view.IsStale ? $"stale · {_view.StaleSince?.ToString("HH:mm", Inv)}" : null;
             var connectionsFraction = o.MaxConnections > 0 ? (double)o.Connections / o.MaxConnections : 0;
             var longest = o.LongestTransaction;
+            @if (o.LimitedVisibility)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="pg-limited-visibility">This role can't see other sessions' details (grant pg_monitor for full visibility).</MudAlert>
+            }
             <div class="pg-tiles">
                 <PgStatTile Class="pg-tile-connections" Label="Connections" Value="@o.Connections.ToString(Inv)"
                             Unit="@($"/ {o.MaxConnections} max_connections")" Meter="connectionsFraction"
@@ -189,7 +193,16 @@
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd Class="pg-mono">@context.Name</MudTd>
-                            <MudTd Class="pg-mono pg-num">@PgFormat.Bytes(context.Bytes)</MudTd>
+                            <MudTd Class="pg-mono pg-num">
+                                @if (context.Bytes is { } bytes)
+                                {
+                                    @PgFormat.Bytes(bytes)
+                                }
+                                else
+                                {
+                                    <span class="pg-db-size" title="No CONNECT privilege on this database">—</span>
+                                }
+                            </MudTd>
                             <MudTd Class="pg-mono">@context.Owner</MudTd>
                             <MudTd Class="pg-mono pg-num">@PgFormat.Count(context.Backends)</MudTd>
                             <MudTd>

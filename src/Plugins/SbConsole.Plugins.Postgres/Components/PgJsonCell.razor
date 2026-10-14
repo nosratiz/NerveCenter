@@ -1,8 +1,8 @@
 @using SbConsole.Plugins.Postgres.Client
-@* A json/jsonb cell collapses to its key count (mockup 1b); the page renders the expanded <pre> row beneath. *@
+@* A json/jsonb cell collapses to the cell's own "{…} N keys" / "[…] N items" label (mockup 1b); the page renders the expanded <pre> row beneath. *@
 <button type="button" class="pg-json-toggle pg-mono" aria-expanded="@Expanded.ToString().ToLowerInvariant()" @onclick="OnToggle">
     <MudIcon Icon="@(Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
-    @("{…}")@Label
+    @Cell.Display
 </button>
 
 @code {
@@ -11,11 +11,4 @@
     [Parameter] public bool Expanded { get; set; }
 
     [Parameter] public EventCallback OnToggle { get; set; }
-
-    private string Label => Cell.JsonKeyCount switch
-    {
-        null => "",
-        1 => " 1 key",
-        var n => $" {n} keys",
-    };
 }

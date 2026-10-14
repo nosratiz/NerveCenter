@@ -58,6 +58,9 @@
 .pg-data-grid { overflow-x: auto; }
 .pg-data-grid.pg-loading { opacity: 0.6; }
 .pg-data-grid th, .pg-data-grid td { white-space: nowrap; font-family: var(--mud-typography-mono-family, ui-monospace, monospace); font-size: 0.78rem; }
+/* Bound every data cell: the full value is in the cell's title; the expanded JSON row below wraps instead. */
+.pg-data-grid td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.pg-data-grid .pg-json-row td { max-width: none; overflow: visible; white-space: normal; }
 .pg-sort { all: unset; cursor: pointer; font-weight: 500; }
 .pg-sort:focus-visible { outline: 2px solid var(--mud-palette-primary); }
 .pg-filter-row th { padding-top: 0 !important; vertical-align: top; min-width: 120px; }
@@ -87,6 +90,7 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-grid-scroll { overflow-x: auto; }
 .pg-result-grid { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
 .pg-result-grid th, .pg-result-grid td { text-align: left; padding: 4px 10px; white-space: nowrap; border-bottom: 1px solid var(--mud-palette-divider); }
+.pg-result-grid td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .pg-result-grid .pg-num { text-align: right; }
 .pg-result-grid .pg-rownum { width: 36px; color: var(--mud-palette-text-secondary); }
 .pg-coltype { font-weight: 400; font-size: 0.7rem; }

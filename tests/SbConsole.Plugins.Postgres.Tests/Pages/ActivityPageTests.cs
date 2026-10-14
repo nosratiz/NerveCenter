@@ -31,6 +31,10 @@ public class ActivityPageTests : PgPageTestBase
         B(61, "idle", xactMinutesAgo: 31),
     ];
 
+    private static ConfirmationRequest IsCancelRequest(int pid) => Arg.Is<ConfirmationRequest>(r =>
+        r.Verb == "Cancel query" && r.Target == $"pid {pid}" && !r.IsProd && r.AuditAction == "pg.backend.cancel"
+        && r.Consequence!.Contains("pg_cancel_backend"));
+
     private void Arrange(IReadOnlyList<PgBackend>? backends = null) =>
         Operations.GetActivityAsync(Secret, Arg.Any<CancellationToken>())
             .Returns(_ => new PgActivity(OwnPid, Time.GetUtcNow(), backends ?? Chain()));
@@ -144,7 +148,7 @@ public class ActivityPageTests : PgPageTestBase
     public void Cancel_confirms_plainly_calls_the_handler_and_reloads()
     {
         Arrange();
-        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        Confirmation.ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()).Returns(true);
         Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(B(48230));
         Operations.CancelBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(true);
         var cut = RenderPage();
@@ -161,12 +165,12 @@ public class ActivityPageTests : PgPageTestBase
     public void Declining_the_cancel_confirmation_calls_nothing()
     {
         Arrange();
-        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(false);
+        Confirmation.ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()).Returns(false);
         var cut = RenderPage();
 
         RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
 
-        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()));
         Operations.DidNotReceive().CancelBackendAsync(Secret, Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -175,7 +179,7 @@ public class ActivityPageTests : PgPageTestBase
     {
         Arrange();
         Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns((PgBackend?)null);
-        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        Confirmation.ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()).Returns(true);
         var cut = RenderPage();
 
         RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
@@ -383,12 +387,12 @@ public class ActivityPageTests : PgPageTestBase
     {
         Arrange();
         var gate = new TaskCompletionSource<bool>();
-        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        Confirmation.ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
         Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(B(48230));
         Operations.CancelBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(true);
         var cut = RenderPage();
         RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
-        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()));
         var before = Calls(nameof(IPostgresOperations.GetActivityAsync));
 
         await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(12)));
@@ -441,11 +445,11 @@ public class ActivityPageTests : PgPageTestBase
     {
         Arrange();
         var gate = new TaskCompletionSource<bool>();
-        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        Confirmation.ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
         Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(B(48230));
         var cut = RenderPage();
         RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
-        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(IsCancelRequest(48230), Arg.Any<CancellationToken>()));
 
         await DisposeComponentsAsync();
         gate.SetResult(true);

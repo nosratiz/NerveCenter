@@ -43,12 +43,21 @@ public sealed partial class PostgresOperations
             xidAge = r.IsDBNull(6) ? 0 : r.GetInt64(6);
         }
 
-        int clientBackends, idle, idleInTxn, waiting;
+        // pg_stat_activity blanks backend_type, state, wait_event and the timestamps of other users' sessions unless the
+        // role is a superuser or has pg_read_all_stats, so a plain count(backend_type = 'client backend') sees only
+        // the role's own sessions. "Hidden" counts client-or-unknown rows of other users whose state is NULL.
+        int clientBackends, idle, idleInTxn, waiting, hidden;
+        bool privileged;
+        long? numBackends;
         await using (var q = await QueryAsync(conn, tx, """
             SELECT count(*) FILTER (WHERE backend_type = 'client backend'),
                    count(*) FILTER (WHERE state = 'idle'),
                    count(*) FILTER (WHERE state LIKE 'idle in transaction%'),
-                   count(*) FILTER (WHERE wait_event_type = 'Lock')
+                   count(*) FILTER (WHERE wait_event_type = 'Lock'),
+                   count(*) FILTER (WHERE state IS NULL AND usename IS NOT NULL AND usename <> current_user
+                                      AND (backend_type IS NULL OR backend_type = 'client backend')),
+                   (SELECT rolsuper OR pg_has_role(oid, 'pg_read_all_stats', 'member') FROM pg_roles WHERE rolname = current_user),
+                   (SELECT sum(numbackends) FROM pg_stat_database)
               FROM pg_stat_activity WHERE pid <> pg_backend_pid()
             """, ct))
         {
@@ -58,6 +67,16 @@ public sealed partial class PostgresOperations
             idle = Int(r, 1);
             idleInTxn = Int(r, 2);
             waiting = Int(r, 3);
+            hidden = Int(r, 4);
+            privileged = !r.IsDBNull(5) && r.GetBoolean(5);
+            numBackends = r.IsDBNull(6) ? null : Convert.ToInt64(r.GetValue(6), CultureInfo.InvariantCulture);
+        }
+
+        // When other users' sessions are hidden the activity view undercounts; pg_stat_database.numbackends is not
+        // permission-gated (it includes this connection, which the +1 below adds back).
+        if (hidden > 0 && numBackends is { } total)
+        {
+            clientBackends = Math.Max(clientBackends, (int)Math.Min(int.MaxValue, total - 1));
         }
 
         PgLongestTransaction? longest = null;
@@ -94,7 +113,7 @@ public sealed partial class PostgresOperations
                 }
 
                 databases.Add(new PgDatabaseStat(
-                    r.GetString(0), r.IsDBNull(1) ? 0 : r.GetInt64(1), r.GetString(2), r.GetInt32(3),
+                    r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1), r.GetString(2), r.GetInt32(3),
                     r.IsDBNull(4) ? null : r.GetDouble(4), r.GetInt64(5), r.GetInt64(6)));
                 hitSum += r.IsDBNull(7) ? 0 : r.GetInt64(7);
                 readSum += r.IsDBNull(8) ? 0 : r.GetInt64(8);
@@ -111,7 +130,8 @@ public sealed partial class PostgresOperations
             hitSum + readSum > 0 ? (double)hitSum / (hitSum + readSum) : null, sharedBuffers,
             longest,
             knownBytes, databases.Count,
-            replication, xidAge, databases, attention);
+            replication, xidAge, databases, attention,
+            LimitedVisibility: hidden > 0 || !privileged);
     }
 
     private static async Task<PgReplication> ReadPrimaryReplicationAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
@@ -141,7 +161,7 @@ public sealed partial class PostgresOperations
     private static async Task<PgAttention> ReadAttentionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
     {
         // Blocked sessions: how many, for how long, and which blocker holds up the most victims.
-        var blocked = new List<(int Pid, TimeSpan For, int[] Blockers)>();
+        var blocked = new List<(int Pid, TimeSpan? For, int[] Blockers)>();
         await using (var q = await QueryAsync(conn, tx, """
             SELECT a.pid, now() - a.query_start, pg_blocking_pids(a.pid)
               FROM pg_stat_activity a WHERE cardinality(pg_blocking_pids(a.pid)) > 0
@@ -150,7 +170,7 @@ public sealed partial class PostgresOperations
             var r = q.Reader;
             while (await r.ReadAsync(ct))
             {
-                blocked.Add((r.GetInt32(0), r.IsDBNull(1) ? TimeSpan.Zero : r.GetTimeSpan(1), r.GetFieldValue<int[]>(2)));
+                blocked.Add((r.GetInt32(0), r.IsDBNull(1) ? null : r.GetTimeSpan(1), r.GetFieldValue<int[]>(2)));
             }
         }
 
@@ -225,7 +245,7 @@ public sealed partial class PostgresOperations
 
         return new PgAttention(
             blocked.Count,
-            blocked.Count > 0 ? blocked.Max(b => b.For) : null,
+            blocked.Any(b => b.For is not null) ? blocked.Max(b => b.For) : null,
             topBlocker, topRelation,
             idleTxns, dead,
             unusedCount, unusedBytes, largestName, largestBytes,
