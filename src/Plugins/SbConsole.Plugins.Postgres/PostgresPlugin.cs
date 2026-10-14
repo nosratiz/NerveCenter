@@ -64,8 +64,8 @@ public sealed class PostgresPlugin : IPlugin
 
     public void Initialize(IServiceProvider services)
     {
-        // GetService, not GetRequired: PostgresOperations lands in a later task; until then the plugin fails closed.
-        _operations = services.GetService<IPostgresOperations>();
+        
+        _operations = services.GetRequiredService<IPostgresOperations>();
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
     }
 
