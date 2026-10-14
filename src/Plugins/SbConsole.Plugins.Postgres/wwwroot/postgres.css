@@ -69,6 +69,8 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-data-footer { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; flex-wrap: wrap; }
 .pg-data-footer .pg-spacer { flex: 1; }
 .pg-index-summary { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+/* Long index names and definitions wrap anywhere so the row menu (last column) stays on screen. */
+.pg-indexes td { overflow-wrap: anywhere; }
 .pg-flags { display: flex; gap: 4px; flex-wrap: wrap; }
 .pg-browse-empty { padding: 40px 16px; text-align: center; }
 .pg-query-layout { display: grid; grid-template-columns: minmax(0, 1fr) 264px; min-height: 480px; }
@@ -110,9 +112,21 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-activity-table .pg-depth-2 td:first-child { padding-left: 48px; }
 .pg-activity-table .pg-depth-3 td:first-child { padding-left: 68px; }
 .pg-activity-table .pg-depth-4 td:first-child, .pg-activity-table .pg-depth-5 td:first-child { padding-left: 88px; }
-.pg-activity-table table { table-layout: auto; width: 100%; }
-.pg-activity-table td { white-space: nowrap; }
-.pg-activity-table .pg-query-cell { width: 40%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Fixed layout: every column but Query has a set width, so the query (the only unbounded text) takes
+   what is left and ellipsises instead of pushing Duration and the row actions off-screen. */
+.pg-activity-table table { table-layout: fixed; width: 100%; }
+.pg-activity-table th:nth-child(1) { width: 110px; }
+.pg-activity-table th:nth-child(2) { width: 100px; }
+.pg-activity-table th:nth-child(3) { width: 120px; }
+.pg-activity-table th:nth-child(4) { width: 100px; }
+.pg-activity-table th:nth-child(5) { width: 160px; }
+.pg-activity-table th:nth-child(6) { width: 130px; }
+.pg-activity-table th:nth-child(8) { width: 90px; }
+.pg-activity-table th:nth-child(9) { width: 130px; }
+.pg-activity-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The pid cell carries the "blocks N" / "this console" chips: let them wrap under the pid, never clip. */
+.pg-activity-table td:first-child { white-space: normal; overflow: visible; }
+.pg-activity-table .pg-query-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-activity-table .pg-query-cell > span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .pg-activity-table .pg-row-actions { white-space: nowrap; text-align: right; }
 .pg-blocker-banner { margin: 0 20px; align-items: center; }
