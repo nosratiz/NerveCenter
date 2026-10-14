@@ -27,7 +27,6 @@ public sealed class MudConfirmationService(IDialogService dialogService, ISettin
     public async Task<bool> ConfirmAsync(ConfirmationRequest request, CancellationToken ct = default)
     {
         var requireTyped = await RequireTypedAsync(request.IsProd, ct);
-        var hasDetails = request.Details is { Count: > 0 };
 
         var parameters = new DialogParameters<ConfirmDialog>
         {
@@ -39,11 +38,11 @@ public sealed class MudConfirmationService(IDialogService dialogService, ISettin
             { x => x.Details, request.Details },
             { x => x.AuditAction, request.AuditAction },
             { x => x.Destructive, request.Destructive },
+            { x => x.Detailed, true },
         };
 
-        // With details the title is the bare verb (the PROD chip sits in the content header).
-        var title = hasDetails ? request.Verb : $"{request.Verb} {request.Target}?";
-        var dialog = await dialogService.ShowAsync<ConfirmDialog>(title, parameters);
+        // The detailed title is the bare verb (the PROD marker sits in the content header).
+        var dialog = await dialogService.ShowAsync<ConfirmDialog>(request.Verb, parameters);
         var result = await dialog.Result;
         return result is { Canceled: false };
     }
