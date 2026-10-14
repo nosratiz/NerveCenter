@@ -1,0 +1,40 @@
+@* One KPI tile (mockup 1a): label, big value, optional unit, optional 0-1 meter, caption. A Warning tile
+   gets the warning outline; a Stale tile is dimmed and its caption becomes the "stale · HH:mm" text. *@
+<MudPaper Outlined="true" Class="@Css">
+    <span class="pg-tile-label">@Label</span>
+    <span class="pg-tile-value"><span class="pg-tile-number">@Value</span>@if (Unit is not null){<span class="pg-tile-unit">@Unit</span>}</span>
+    @if (Meter is { } meter)
+    {
+        <MudProgressLinear Value="@Math.Clamp(meter, 0, 1)" Min="0" Max="1" Color="@MeterColor" Size="Size.Small" Class="pg-tile-meter" />
+    }
+    <span class="pg-tile-caption">@(Stale ?? Caption)</span>
+    @ChildContent
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+
+    /// <summary>Small text next to the value, e.g. "/ 400 max_connections".</summary>
+    [Parameter] public string? Unit { get; set; }
+
+    [Parameter] public string? Caption { get; set; }
+
+    /// <summary>Fill fraction 0-1; null draws no meter.</summary>
+    [Parameter] public double? Meter { get; set; }
+
+    [Parameter] public Color MeterColor { get; set; } = Color.Primary;
+
+    [Parameter] public bool Warning { get; set; }
+
+    /// <summary>When set the tile is dimmed and shows this text ("stale · 09:12") instead of the caption.</summary>
+    [Parameter] public string? Stale { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string Css => string.Join(' ', new[] { "pg-tile", Class, Warning ? "pg-warning" : null, Stale is not null ? "pg-stale" : null }
+        .Where(c => !string.IsNullOrEmpty(c)));
+}

@@ -1,1 +1,34 @@
-/* PostgreSQL plugin styles. Colours only via --mud-palette-* variables. */
+/* PostgreSQL plugin styles. Colours only via --mud-palette-* variables; everything else is stock MudBlazor. */
+.pg-page { display: flex; flex-direction: column; min-width: 0; }
+.pg-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--mud-palette-divider); }
+.pg-title { font-size: 1.15rem; font-weight: 500; margin-right: 4px; }
+.pg-spacer { flex: 1; }
+.pg-actions { display: flex; align-items: center; gap: 8px; }
+.pg-meta, .pg-mono { font-family: var(--mud-typography-mono-family, ui-monospace, SFMono-Regular, Menlo, monospace); }
+.pg-meta { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.pg-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.pg-muted { color: var(--mud-palette-text-secondary); }
+
+.pg-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.pg-lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 12px; }
+@media (max-width: 1100px) { .pg-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pg-lower { grid-template-columns: minmax(0, 1fr); } }
+.pg-tile { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.pg-tile-label { font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mud-palette-text-secondary); }
+.pg-tile-value { display: flex; align-items: baseline; gap: 6px; font-size: 1.6rem; font-weight: 500; }
+.pg-tile-unit, .pg-tile-caption { font-size: 0.75rem; color: var(--mud-palette-text-secondary); font-weight: 400; }
+.pg-warning { box-shadow: inset 0 0 0 1px var(--mud-palette-warning); }
+.pg-warning .pg-tile-label, .pg-warning .pg-tile-value { color: var(--mud-palette-warning); }
+.pg-stale { opacity: 0.5; }
+
+.pg-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--mud-palette-divider); }
+.pg-card-note { margin-left: auto; font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.pg-attention-item { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--mud-palette-divider); }
+.pg-attention-sub { font-size: 0.72rem; color: var(--mud-palette-text-secondary); overflow: hidden; text-overflow: ellipsis; }
+.pg-footnote { padding: 10px 14px; border-top: 1px solid var(--mud-palette-divider); font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.pg-num { text-align: right; }
+
+.pg-null { border-style: dashed; color: var(--mud-palette-text-secondary); font-family: var(--mud-typography-mono-family, ui-monospace, monospace); }
+.pg-unreachable-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mud-palette-error); margin-right: 6px; }
+.pg-unreachable { box-shadow: inset 0 0 0 1px var(--mud-palette-error); }
+.pg-error-alert .pg-error-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pg-error-details { font-size: 0.72rem; font-family: var(--mud-typography-mono-family, ui-monospace, monospace); color: var(--mud-palette-text-secondary); padding: 6px 0; }

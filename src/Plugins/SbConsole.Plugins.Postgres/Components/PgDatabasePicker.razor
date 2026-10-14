@@ -1,0 +1,64 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Postgres.Overview
+@inject ListDatabasesQueryHandler ListDatabases
+@inject NavigationManager Navigation
+
+@* Database axis for Browse/Query/Maintenance: ?db= keeps links shareable; defaults to the connection's own database. *@
+@if (_databases.Count > 0)
+{
+    <MudSelect T="string" Class="pg-database-picker" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+               Value="_selected" ValueChanged="SelectAsync">
+        @foreach (var name in _databases)
+        {
+            <MudSelectItem T="string" Value="@name">@name</MudSelectItem>
+        }
+    </MudSelect>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid ConnectionId { get; set; }
+
+    /// <summary>The connection's own database; used when ?db= is absent or unknown.</summary>
+    [Parameter] public string? Default { get; set; }
+
+    [Parameter] public EventCallback<string> SelectedChanged { get; set; }
+
+    private IReadOnlyList<string> _databases = [];
+    private string? _selected;
+    private Guid _loadedFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ConnectionId == Guid.Empty || ConnectionId == _loadedFor)
+        {
+            return;
+        }
+
+        _loadedFor = ConnectionId;
+        var result = await ListDatabases.HandleAsync(ConnectionId);
+        _databases = result.IsSuccess ? result.Value ?? [] : [];
+        if (_databases.Count == 0)
+        {
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        var wanted = query.TryGetValue("db", out var db) ? db.ToString() : null;
+        var pick = _databases.FirstOrDefault(d => d == wanted)
+                   ?? _databases.FirstOrDefault(d => d == Default)
+                   ?? _databases[0];
+        await SelectAsync(pick);
+    }
+
+    private async Task SelectAsync(string name)
+    {
+        _selected = name;
+        var uri = Navigation.GetUriWithQueryParameter("db", name);
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await SelectedChanged.InvokeAsync(name);
+    }
+}

@@ -1,0 +1,410 @@
+@* Mockups 1a (overview) and 1g (unreachable connection). Stock MudBlazor in the Nocturne theme. *@
+@page "/p/postgres/overview"
+@using System.Globalization
+@using SbConsole.Plugins.Postgres.Client
+@using SbConsole.Plugins.Postgres.Overview
+@inject GetOverviewQueryHandler GetOverview
+@inject TimeProvider Clock
+@implements IDisposable
+
+<PageTitle>PostgreSQL overview</PageTitle>
+
+<div class="pg-page">
+    <PgPageHeader Title="Overview">
+        <Chips>
+            <PgConnectionPicker @ref="_picker" Loading="_loading" SelectionChanged="OnSelectionChangedAsync" />
+        </Chips>
+        <Meta>
+            @if (_view?.Overview is { } meta && _view.IsStale == false)
+            {
+                <span class="pg-overview-meta">PostgreSQL @meta.ServerVersion · @(meta.IsReplica ? "replica" : "primary") · up @PgFormat.Duration(Clock.GetUtcNow() - meta.StartedAt)</span>
+            }
+        </Meta>
+        <Actions>
+            @if (_view is { Error: null } && _loadedAt is { } at)
+            {
+                <span class="pg-meta pg-overview-refreshed">refreshed @PgFormat.Ago(Clock.GetUtcNow() - at)</span>
+            }
+            else if (_view?.StaleSince is { } okAt)
+            {
+                <span class="pg-meta pg-overview-last-ok">last ok @okAt.ToString("HH:mm", Inv)</span>
+            }
+            @if (_connection is not null)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-overview-refresh" Disabled="_loading" OnClick="LoadAsync">Refresh</MudButton>
+            }
+        </Actions>
+    </PgPageHeader>
+
+    <div class="pg-body">
+        @if (_view?.Error is not null && _connection is not null)
+        {
+            <PgErrorAlert Info="@(_view.ErrorInfo ?? new PgErrorInfo(_view.Error, null, null, null, null, null, true))"
+                          Title="@($"Can't reach {_connection.Name}.")" Class="pg-overview-error">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-overview-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Class="pg-overview-edit" Href="/connections">Edit connection</MudButton>
+                <span class="pg-meta pg-overview-retry-in">retrying in @_retryIn s</span>
+            </PgErrorAlert>
+        }
+
+        @if (_view?.Overview is { } o)
+        {
+            var stale = _view.IsStale ? $"stale · {_view.StaleSince?.ToString("HH:mm", Inv)}" : null;
+            var connectionsFraction = o.MaxConnections > 0 ? (double)o.Connections / o.MaxConnections : 0;
+            var longest = o.LongestTransaction;
+            <div class="pg-tiles">
+                <PgStatTile Class="pg-tile-connections" Label="Connections" Value="@o.Connections.ToString(Inv)"
+                            Unit="@($"/ {o.MaxConnections} max_connections")" Meter="connectionsFraction"
+                            MeterColor="@(connectionsFraction >= 0.9 ? Color.Error : connectionsFraction >= 0.75 ? Color.Warning : Color.Primary)"
+                            Caption="@($"{Math.Round(connectionsFraction * 100):0}% · {o.Idle} idle · {o.Waiting} waiting")" Stale="@stale" />
+                <PgStatTile Class="pg-tile-cache" Label="Cache hit ratio"
+                            Value="@(o.CacheHitRatio is { } hit ? PgFormat.Percent(hit * 100) : "—")"
+                            Meter="o.CacheHitRatio" MeterColor="Color.Success"
+                            Caption="@($"shared_buffers {o.SharedBuffers}")" Stale="@stale" />
+                <PgStatTile Class="pg-tile-longest" Label="Longest open transaction"
+                            Value="@(longest is null ? "0 s" : PgFormat.Duration(longest.Age))"
+                            Warning="@(longest is not null && longest.Age > WarnAge)"
+                            Caption="@(longest is null ? "no open transactions" : $"pid {longest.Pid} · {longest.User} · {longest.State}")" Stale="@stale">
+                    @if (longest is not null && stale is null)
+                    {
+                        <MudLink Class="pg-longest-link" Href="@Link(PostgresPlugin.ActivityHref)" Typo="Typo.caption">View in Activity →</MudLink>
+                    }
+                </PgStatTile>
+                <PgStatTile Class="pg-tile-size" Label="Database size" Value="@PgFormat.Bytes(o.TotalDatabaseBytes)"
+                            Caption="@($"{o.DatabaseCount} databases")" Stale="@stale" />
+                <PgStatTile Class="pg-tile-replication" Label="Replication lag"
+                            Value="@(o.Replication.ReplicaCount == 0 || o.Replication.MaxLag is null ? "—" : PgFormat.Duration(o.Replication.MaxLag.Value))"
+                            Caption="@ReplicationCaption(o.Replication)" Stale="@stale" />
+            </div>
+        }
+        else if (_view is null)
+        {
+            <div class="pg-tiles pg-overview-skeleton">
+                @for (var i = 0; i < 5; i++)
+                {
+                    <MudPaper Outlined="true" Class="pg-tile">
+                        <MudSkeleton Width="60%" />
+                        <MudSkeleton Height="34px" Width="45%" />
+                        <MudSkeleton Width="80%" />
+                    </MudPaper>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="pg-tiles pg-tiles-skeleton">
+                @for (var i = 0; i < 5; i++)
+                {
+                    <MudPaper Outlined="true" Class="pg-tile pg-stale">
+                        <MudSkeleton Width="60%" />
+                        <MudSkeleton Height="34px" Width="45%" />
+                        <MudSkeleton Width="80%" />
+                    </MudPaper>
+                }
+            </div>
+        }
+
+        <div class="pg-lower">
+            <MudPaper Outlined="true" Class="pg-attention">
+                <div class="pg-card-head">
+                    <span>Needs attention</span>
+                    @if (_view?.Error is null && _view?.Overview is not null)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="@(Attention.Count > 0 ? Color.Warning : Color.Default)" Class="pg-attention-count">@Attention.Count</MudChip>
+                        <span class="pg-card-note">worst first</span>
+                    }
+                    else
+                    {
+                        <span class="pg-card-note">@WaitingText</span>
+                    }
+                </div>
+                @if (_view?.Overview is { } ov && _view.Error is null)
+                {
+                    @if (Attention.Count == 0)
+                    {
+                        <div class="pg-attention-empty pg-body pg-muted">Nothing needs attention.</div>
+                    }
+                    else
+                    {
+                        <MudList T="string" Dense="true" Padding="false">
+                            @foreach (var item in Attention)
+                            {
+                                <div class="pg-attention-item">
+                                    <MudChip T="string" Size="Size.Small" Color="item.Color" Class="pg-attention-chip">@item.Chip</MudChip>
+                                    <div>
+                                        <div>@item.Title</div>
+                                        <div class="pg-attention-sub pg-mono">@item.Detail</div>
+                                    </div>
+                                    <MudLink Href="@item.Href" Typo="Typo.caption">@item.LinkText</MudLink>
+                                </div>
+                            }
+                        </MudList>
+                    }
+                }
+                else
+                {
+                    @for (var i = 0; i < 3; i++)
+                    {
+                        <div class="pg-attention-item">
+                            <MudSkeleton Height="22px" SkeletonType="SkeletonType.Rectangle" />
+                            <div>
+                                <MudSkeleton Width="60%" />
+                                <MudSkeleton Width="85%" Height="14px" />
+                            </div>
+                            <MudSkeleton Width="50px" />
+                        </div>
+                    }
+                }
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="pg-databases-card">
+                <div class="pg-card-head">
+                    <span>Databases</span>
+                    @if (_view?.Error is null && _view?.Overview is { } dbHead)
+                    {
+                        <span class="pg-meta">@dbHead.Databases.Count</span>
+                        <span class="pg-card-note">pg_database · pg_stat_database</span>
+                    }
+                    else
+                    {
+                        <span class="pg-card-note">@WaitingText</span>
+                    }
+                </div>
+                @if (_view?.Overview is { } dbs && _view.Error is null)
+                {
+                    <MudTable T="PgDatabaseStat" Class="pg-databases" Items="dbs.Databases" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Name</MudTh>
+                            <MudTh Class="pg-num">Size</MudTh>
+                            <MudTh>Owner</MudTh>
+                            <MudTh Class="pg-num">Connections</MudTh>
+                            <MudTh>Hit ratio</MudTh>
+                            <MudTh Class="pg-num">Commits/s</MudTh>
+                            <MudTh Class="pg-num">Deadlocks</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd Class="pg-mono">@context.Name</MudTd>
+                            <MudTd Class="pg-mono pg-num">@PgFormat.Bytes(context.Bytes)</MudTd>
+                            <MudTd Class="pg-mono">@context.Owner</MudTd>
+                            <MudTd Class="pg-mono pg-num">@PgFormat.Count(context.Backends)</MudTd>
+                            <MudTd>
+                                @if (context.HitRatio is { } ratio)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="@(ratio >= 0.99 ? Color.Success : ratio >= 0.95 ? Color.Warning : Color.Error)">@PgFormat.Percent(ratio * 100)</MudChip>
+                                }
+                                else
+                                {
+                                    <span class="pg-muted">—</span>
+                                }
+                            </MudTd>
+                            <MudTd Class="pg-mono pg-num">@CommitRate(context.Name)</MudTd>
+                            <MudTd Class="pg-mono pg-num">@PgFormat.Count(context.Deadlocks)</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else
+                {
+                    @for (var i = 0; i < 3; i++)
+                    {
+                        <div class="pg-attention-item">
+                            <MudSkeleton Width="70%" />
+                            <MudSkeleton Width="50%" />
+                            <MudSkeleton Width="40px" />
+                        </div>
+                    }
+                }
+                <div class="pg-footnote pg-databases-footnote">Metrics are read-only queries against pg_stat_* and are not audited. Everything under Activity and Maintenance is.</div>
+            </MudPaper>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    private static readonly TimeSpan WarnAge = TimeSpan.FromMinutes(5);
+    private const int RetrySeconds = 30;
+    private const string WaitingText = "waiting for connection";
+
+    private readonly CancellationTokenSource _cts = new();
+    private PgConnectionPicker? _picker;
+    private ConnectionInfo? _connection;
+    private OverviewView? _view;
+    private DateTimeOffset? _loadedAt;
+    private Guid? _dataConnectionId;
+    private bool _loading;
+    private int _generation;
+    private int _retryIn = RetrySeconds;
+    private ITimer? _retryTimer;
+    private bool _disposed;
+
+    private sealed record AttentionItem(string Chip, Color Color, string Title, string Detail, string Href, string LinkText);
+
+    private IReadOnlyList<AttentionItem> Attention => _view?.Overview is { } o ? BuildAttention(o) : [];
+
+    private string Link(string href) => $"{href}?connectionId={_connection?.Id}";
+
+    private async Task OnSelectionChangedAsync(ConnectionInfo connection)
+    {
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        StopRetry();
+        if (_dataConnectionId != connection.Id)
+        {
+            // Another connection's numbers must never sit under this connection's name while it loads.
+            _dataConnectionId = connection.Id;
+            _view = null;
+            _loadedAt = null;
+        }
+
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await GetOverview.HandleAsync(connection.Id, _cts.Token);
+            if (generation != _generation)
+            {
+                return;
+            }
+
+            _view = result.IsSuccess
+                ? result.Value
+                : new OverviewView(null, false, null, result.Error, new PgErrorInfo(result.Error ?? "Connection not found.", null, null, null, null, null, false),
+                    new Dictionary<string, double?>());
+            _loadedAt = Clock.GetUtcNow();
+            if (_view?.Error is not null)
+            {
+                StartRetry();
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (_picker is not null && !_disposed)
+        {
+            await _picker.RefreshReachabilityAsync();
+        }
+    }
+
+    private void StartRetry()
+    {
+        _retryIn = RetrySeconds;
+        _retryTimer = Clock.CreateTimer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void StopRetry()
+    {
+        _retryTimer?.Dispose();
+        _retryTimer = null;
+    }
+
+    private async Task TickAsync()
+    {
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _retryTimer is null)
+                {
+                    return;
+                }
+
+                _retryIn--;
+                if (_retryIn <= 0)
+                {
+                    await LoadAsync();
+                }
+                else
+                {
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just ends the countdown.
+        }
+    }
+
+    private string CommitRate(string database) =>
+        _view?.CommitsPerSecond.TryGetValue(database, out var rate) == true && rate is { } r
+            ? PgFormat.Count((long)Math.Round(r))
+            : "—";
+
+    private static string ReplicationCaption(PgReplication r) => r.ReplicaCount == 0
+        ? "no replicas"
+        : $"{r.ReplicaCount} streaming {(r.ReplicaCount == 1 ? "replica" : "replicas")}"
+          + (r.WalRetainedBytes is { } wal ? $" · WAL {PgFormat.Bytes(wal)} retained" : "");
+
+    private IReadOnlyList<AttentionItem> BuildAttention(PgOverview o)
+    {
+        var a = o.Attention;
+        var items = new List<AttentionItem>();
+        if (a.BlockedCount > 0)
+        {
+            var upTo = a.LongestBlockedFor is { } blocked ? $" for up to {PgFormat.Duration(blocked)}" : "";
+            var blocker = a.TopBlockerPid is { } pid
+                ? $"blocker pid {pid}" + (a.TopBlockerRelation is { } rel ? $" on {rel}" : "")
+                : "";
+            items.Add(new("blocked", Color.Error, $"{a.BlockedCount} {Plural(a.BlockedCount, "session")} blocked{upTo}", blocker,
+                Link(PostgresPlugin.ActivityHref), "Open Activity →"));
+        }
+
+        if (a.IdleInTransaction.Count > 0)
+        {
+            var n = a.IdleInTransaction.Count;
+            var detail = string.Join(" · ", a.IdleInTransaction.Take(3).Select(t => $"pid {t.Pid} ({PgFormat.Duration(t.Age)})"));
+            items.Add(new("idle in txn", Color.Warning, $"{n} {Plural(n, "session")} idle in transaction > 5m", detail,
+                Link(PostgresPlugin.ActivityHref), "Open Activity →"));
+        }
+
+        if (a.DeadTupleTables.Count > 0)
+        {
+            var n = a.DeadTupleTables.Count;
+            var detail = string.Join(" · ", a.DeadTupleTables.Take(4).Select(t => $"{t.Name} {t.DeadPercent.ToString("0", Inv)}%"));
+            items.Add(new("bloat", Color.Warning, $"{n} {Plural(n, "table")} over 30% dead tuples", detail,
+                Link(PostgresPlugin.MaintenanceHref), "Open Maintenance →"));
+        }
+
+        if (a.UnusedIndexCount > 0)
+        {
+            var since = a.StatsResetAt is { } reset ? $" ({Math.Max(0, (int)(Clock.GetUtcNow() - reset).TotalDays)}d)" : "";
+            var detail = PgFormat.Bytes(a.UnusedIndexBytes)
+                         + (a.LargestUnusedIndex is { } name
+                             ? $" · largest {name}" + (a.LargestUnusedIndexBytes is { } big ? $" {PgFormat.Bytes(big)}" : "")
+                             : "");
+            items.Add(new("unused idx", Color.Info, $"{a.UnusedIndexCount} {Plural(a.UnusedIndexCount, "index", "indexes")} with 0 scans since stats reset{since}", detail,
+                Link(PostgresPlugin.BrowseHref), "Open Browse →"));
+        }
+
+        return items;
+    }
+
+    private static string Plural(int n, string singular, string? plural = null) => n == 1 ? singular : plural ?? singular + "s";
+
+    public void Dispose()
+    {
+        _disposed = true;
+        StopRetry();
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}
