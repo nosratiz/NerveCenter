@@ -1,0 +1,56 @@
+# Config objects for the Config page. gateway-config is used by payment-gateway (env + volume);
+# reports-config is used by nothing (the "unused" badge). Secret values are dummies.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: checkout
+data:
+  REDIS_URL: "redis://cart-redis.checkout.svc.cluster.local:6379/0"
+  MERCHANT_CACHE_SIZE: "5000"
+  CACHE_TTL_SECONDS: "300"
+  FEATURE_FLAGS: "3ds2,apple-pay,partial-capture"
+  PROVIDERS_JSON: '{"providers": [{"id": "stripe", "enabled": true, "priority": 1, "endpoint": "https://api.stripe.com/v1", "timeoutMs": 2500, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR"], "methods": ["card"], "webhookPath": "/webhooks/stripe"}, {"id": "adyen", "enabled": true, "priority": 2, "endpoint": "https://checkout-test.adyen.com/v71", "timeoutMs": 2750, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR", "USD"], "methods": ["card", "sepa_debit"], "webhookPath": "/webhooks/adyen"}, {"id": "paypal", "enabled": true, "priority": 3, "endpoint": "https://api-m.sandbox.paypal.com/v2", "timeoutMs": 3000, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR", "USD", "GBP"], "methods": ["card", "sepa_debit", "ideal"], "webhookPath": "/webhooks/paypal"}, {"id": "klarna", "enabled": false, "priority": 4, "endpoint": "https://api.playground.klarna.com", "timeoutMs": 3250, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR", "USD", "GBP", "SEK"], "methods": ["card"], "webhookPath": "/webhooks/klarna"}, {"id": "mollie", "enabled": true, "priority": 5, "endpoint": "https://api.mollie.com/v2", "timeoutMs": 3500, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR"], "methods": ["card", "sepa_debit"], "webhookPath": "/webhooks/mollie"}, {"id": "braintree", "enabled": true, "priority": 6, "endpoint": "https://payments.sandbox.braintree-api.com/graphql", "timeoutMs": 3750, "retry": {"maxAttempts": 3, "backoffMs": [100, 400, 1600]}, "currencies": ["EUR", "USD"], "methods": ["card", "sepa_debit", "ideal"], "webhookPath": "/webhooks/braintree"}], "fallback": "stripe"}'
+  logging.yaml: |
+    version: 1
+    root:
+      level: info
+      handlers: [console]
+    handlers:
+      console:
+        class: StreamHandler
+        formatter: json
+    formatters:
+      json:
+        format: '%(asctime)s %(levelname)s %(name)s %(message)s'
+    loggers:
+      gateway.providers: {level: debug}
+      gateway.http: {level: warn}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reports-config
+  namespace: checkout
+data:
+  REPORT_SCHEDULE: "0 6 * * 1"
+  REPORT_RECIPIENTS: "finance@example.com"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: stripe-live
+  namespace: checkout
+type: Opaque
+stringData:
+  api-key: "sk_demo_local_only_not_a_real_key"
+  webhook-secret: "whsec_demo_local_only"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ghcr-pull
+  namespace: checkout
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: '{"auths": {"ghcr.io": {"auth": "ZGVtbzpkZW1v"}}}'
