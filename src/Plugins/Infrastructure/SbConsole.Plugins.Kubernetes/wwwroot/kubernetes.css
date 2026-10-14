@@ -91,3 +91,34 @@ pre.k8s-log { max-height: 60vh; white-space: pre; }
 .k8s-event-age { font-size: 0.75rem; }
 .k8s-event-message { font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k8s-overview-footnote { border-top: none; padding: 0; }
+
+/* Workloads (mockups 3b, 3g) */
+.k8s-header .k8s-wl-filter { width: 240px; }
+.k8s-header .k8s-wl-labels { width: 160px; }
+.k8s-header .k8s-wl-filter .mud-input-control, .k8s-header .k8s-wl-labels .mud-input-control { margin-top: 0; }
+.k8s-tab-count { margin-left: 6px; font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+.k8s-tab-failure { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--mud-palette-error); vertical-align: middle; }
+.k8s-wl-table td { vertical-align: middle; }
+.k8s-wl-table .k8s-wl-name { font-family: var(--mud-typography-mono-family, ui-monospace, SFMono-Regular, Menlo, monospace); color: var(--mud-palette-primary); text-decoration: none; }
+.k8s-wl-table a.k8s-wl-name:hover, .k8s-wl-table button.k8s-wl-name:hover { text-decoration: underline; }
+.k8s-wl-ns { color: var(--mud-palette-primary); font-size: 0.8rem; }
+.k8s-wl-images { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.78rem; }
+.k8s-wl-unhealthy { background: var(--mud-palette-warning-hover); }
+.k8s-wl-short { color: var(--mud-palette-warning); }
+.k8s-wl-actions { width: 1%; white-space: nowrap; }
+.k8s-wl-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.k8s-wl-more td { text-align: center; font-size: 0.8rem; }
+.k8s-wl-loading { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; }
+.k8s-job-status { white-space: nowrap; }
+.k8s-job-reason { margin-left: 6px; font-size: 0.75rem; }
+.k8s-menu-note { padding: 6px 16px; font-size: 0.75rem; max-width: 260px; }
+.k8s-wl-footnote { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-top: none; padding: 0; }
+
+/* Scale dialog */
+.k8s-scale-summary { margin-bottom: 10px; }
+.k8s-scale-hpa { margin-bottom: 10px; }
+.k8s-scale-field { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.k8s-scale-field .k8s-scale-replicas { max-width: 110px; }
+.k8s-scale-field .k8s-scale-minus, .k8s-scale-field .k8s-scale-plus { min-width: 36px; }
+.k8s-scale-hint { font-size: 0.75rem; }
+.k8s-scale-audit { margin-top: 12px; }
