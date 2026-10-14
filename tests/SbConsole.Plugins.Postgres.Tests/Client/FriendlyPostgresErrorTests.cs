@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using FluentAssertions;
 using Npgsql;
 using SbConsole.Plugins.Postgres.Client;
+using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Postgres.Tests.Client;
 
@@ -63,6 +64,47 @@ public class FriendlyPostgresErrorTests
         FriendlyPostgresError.Describe(Pg("42601", "x", position: 12)).Line.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("23505", "That would duplicate a unique key.")]
+    [InlineData("23503", "That would break a foreign key.")]
+    [InlineData("23502", "A required column was null.")]
+    [InlineData("23514", "A check constraint failed.")]
+    public void Constraint_violations_without_names_use_generic_sentences(string state, string expected) =>
+        FriendlyPostgresError.From(Pg(state, "x")).Should().Be(expected);
+
+    [Fact]
+    public void Long_syntax_token_is_capped()
+    {
+        var info = FriendlyPostgresError.Describe(Pg("42601", $"syntax error at or near \"{new string('a', 2000)}\""));
+        info.Message.Length.Should().BeLessThanOrEqualTo(FriendlyError.MaxLength + FriendlyError.TruncationMarker.Length);
+    }
+
+    [Fact]
+    public void Long_hint_is_capped()
+    {
+        var info = FriendlyPostgresError.Describe(Pg("42703", "x", hint: new string('h', 2000)));
+        info.Hint!.Length.Should().BeLessThanOrEqualTo(FriendlyError.MaxLength + FriendlyError.TruncationMarker.Length);
+    }
+
+    [Theory]
+    [InlineData(SocketError.ConnectionRefused, "Can't reach the server — the connection was refused.")]
+    [InlineData(SocketError.HostNotFound, "Can't reach the server — the host name didn't resolve.")]
+    [InlineData(SocketError.TryAgain, "Can't reach the server — the host name didn't resolve.")]
+    [InlineData(SocketError.NoData, "Can't reach the server — the host name didn't resolve.")]
+    [InlineData(SocketError.TimedOut, "Can't reach the server — it didn't answer in time.")]
+    [InlineData(SocketError.NetworkUnreachable, "Can't reach the server.")]
+    public void Socket_errors_map_by_code(SocketError code, string expected)
+    {
+        var info = FriendlyPostgresError.Describe(new NpgsqlException("x", new SocketException((int)code)));
+        info.Message.Should().Be(expected);
+        info.IsConnectionFailure.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Npgsql_exception_with_unrelated_inner_is_not_a_connection_failure() =>
+        FriendlyPostgresError.Describe(new NpgsqlException("x", new InvalidOperationException("y")))
+            .IsConnectionFailure.Should().BeFalse();
+
     [Fact]
     public void Connection_refused_is_a_connection_failure()
     {
@@ -76,10 +118,10 @@ public class FriendlyPostgresErrorTests
     public void Timeouts_are_connection_failures()
     {
         FriendlyPostgresError.Describe(new NpgsqlException("x", new TimeoutException()))
-            .Message.Should().Be("Can't reach the server — it didn't answer in time.");
+            .Should().Match<PgErrorInfo>(i => i.IsConnectionFailure && i.Message == "Can't reach the server — it didn't answer in time.");
         FriendlyPostgresError.Describe(new TimeoutException()).IsConnectionFailure.Should().BeTrue();
         FriendlyPostgresError.Describe(new NpgsqlException("x", new SocketException((int)SocketError.TimedOut)))
-            .Message.Should().Be("Can't reach the server — it didn't answer in time.");
+            .Should().Match<PgErrorInfo>(i => i.IsConnectionFailure && i.Message == "Can't reach the server — it didn't answer in time.");
     }
 
     [Fact]

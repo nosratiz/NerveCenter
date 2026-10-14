@@ -20,6 +20,10 @@ public static partial class FriendlyPostgresError
 
     public static string From(Exception ex) => Describe(ex).Message;
 
+    /// <summary>
+    /// Maps an exception to a user-safe description. <paramref name="sql"/> must be the exact statement text
+    /// the server's <c>Position</c> refers to (the statement that was sent), or the line/column will be wrong.
+    /// </summary>
     public static PgErrorInfo Describe(Exception ex, string? sql = null)
     {
         switch (ex)
@@ -35,9 +39,14 @@ public static partial class FriendlyPostgresError
             case NpgsqlException { InnerException: TimeoutException }:
                 return Failure("Can't reach the server — it didn't answer in time.");
             case NpgsqlException { InnerException: SocketException socket }:
-                return socket.SocketErrorCode == SocketError.TimedOut
-                    ? Failure("Can't reach the server — it didn't answer in time.")
-                    : Failure("Can't reach the server — the connection was refused.");
+                return socket.SocketErrorCode switch
+                {
+                    SocketError.ConnectionRefused => Failure("Can't reach the server — the connection was refused."),
+                    SocketError.HostNotFound or SocketError.TryAgain or SocketError.NoData =>
+                        Failure("Can't reach the server — the host name didn't resolve."),
+                    SocketError.TimedOut => Failure("Can't reach the server — it didn't answer in time."),
+                    _ => Failure("Can't reach the server."),
+                };
             default:
                 return Plain(FriendlyError.From(ex));
         }
@@ -59,7 +68,8 @@ public static partial class FriendlyPostgresError
             column = c;
         }
 
-        return new PgErrorInfo(Sentence(pg), pg.Hint, pg.SqlState, condition, line, column, false);
+        var hint = pg.Hint is null ? null : FriendlyError.Truncate(pg.Hint);
+        return new PgErrorInfo(FriendlyError.Truncate(Sentence(pg)), hint, pg.SqlState, condition, line, column, false);
     }
 
     private static string Sentence(PostgresException pg)
@@ -97,10 +107,18 @@ public static partial class FriendlyPostgresError
 
             case "25006": return "This is a read-only transaction — switch to Write to change data.";
             case "57014": return "The statement was cancelled — it hit the timeout or someone cancelled it.";
-            case "23505": return $"That would duplicate a unique key (`{pg.ConstraintName}`).";
-            case "23503": return $"That would break foreign key `{pg.ConstraintName}`.";
-            case "23502": return $"Column `{pg.ColumnName}` can't be null.";
-            case "23514": return $"Check constraint `{pg.ConstraintName}` failed.";
+            case "23505": return string.IsNullOrEmpty(pg.ConstraintName)
+                ? "That would duplicate a unique key."
+                : $"That would duplicate a unique key (`{pg.ConstraintName}`).";
+            case "23503": return string.IsNullOrEmpty(pg.ConstraintName)
+                ? "That would break a foreign key."
+                : $"That would break foreign key `{pg.ConstraintName}`.";
+            case "23502": return string.IsNullOrEmpty(pg.ColumnName)
+                ? "A required column was null."
+                : $"Column `{pg.ColumnName}` can't be null.";
+            case "23514": return string.IsNullOrEmpty(pg.ConstraintName)
+                ? "A check constraint failed."
+                : $"Check constraint `{pg.ConstraintName}` failed.";
             case "40P01": return "Deadlock — the server rolled this statement back.";
             case "55P03": return "The row or table is locked by another session.";
             case "42501": return "Permission denied for this role.";

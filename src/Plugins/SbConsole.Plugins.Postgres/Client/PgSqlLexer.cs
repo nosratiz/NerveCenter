@@ -1,6 +1,10 @@
 namespace SbConsole.Plugins.Postgres.Client;
 
-public sealed record PgStatement(int Start, int Length, string Text, string FirstKeyword);
+public sealed record PgStatement(int Start, int Length, string Text, string FirstKeyword)
+{
+    /// <summary>The statement text with leading whitespace and comments removed.</summary>
+    public string Body => PgSqlLexer.StripLeadingTrivia(Text);
+}
 
 /// <summary>
 /// Splits a SQL script on top-level semicolons, honouring every PostgreSQL quoting form.
@@ -75,6 +79,23 @@ public static class PgSqlLexer
         }
 
         return true;
+    }
+
+    internal static string StripLeadingTrivia(string text)
+    {
+        var i = 0;
+        while (i < text.Length)
+        {
+            var next = SkipTrivia(text, i);
+            if (next == i)
+            {
+                break;
+            }
+
+            i = next;
+        }
+
+        return text[i..];
     }
 
     private static string FirstKeyword(string text)

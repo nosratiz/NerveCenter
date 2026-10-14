@@ -57,7 +57,7 @@ public static partial class PgSqlGuard
             {
                 foreach (var (pattern, label) in NoTransaction)
                 {
-                    if (pattern.IsMatch(statement.Text))
+                    if (pattern.IsMatch(statement.Body))
                     {
                         throw new PgSqlRefusedException(
                             $"`{label}` can't run in a transaction — run it from a SQL client.");

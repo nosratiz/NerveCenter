@@ -26,48 +26,62 @@ public static class PgFormat
     /// <summary>Tree-badge form: 999, 88K, 2.1M, 410M, 1.1B.</summary>
     public static string Compact(long value)
     {
-        (double Divisor, string Suffix)[] steps = [(1e9, "B"), (1e6, "M"), (1e3, "K")];
-        foreach (var (divisor, suffix) in steps)
+        (double Divisor, string Suffix)[] steps = [(1e3, "K"), (1e6, "M"), (1e9, "B")];
+        var abs = Math.Abs((double)value);
+        var index = -1;
+        for (var k = 0; k < steps.Length; k++)
         {
-            if (Math.Abs(value) >= divisor)
+            if (abs >= steps[k].Divisor)
             {
-                var scaled = value / divisor;
-                return scaled.ToString(scaled < 10 ? "0.#" : "0", Inv) + suffix;
+                index = k;
             }
         }
 
-        return value.ToString(Inv);
+        if (index < 0)
+        {
+            return value.ToString(Inv);
+        }
+
+        var rounded = RoundCompact(value / steps[index].Divisor);
+        if (Math.Abs(rounded) >= 1000 && index < steps.Length - 1)
+        {
+            index++;
+            rounded = RoundCompact(value / steps[index].Divisor);
+        }
+
+        return rounded.ToString(Math.Abs(rounded) < 10 ? "0.#" : "0", Inv) + steps[index].Suffix;
     }
 
-    /// <summary>"0.8 s", "41 s", "14m 02s", "3h 12m", "41d".</summary>
+    private static double RoundCompact(double scaled) =>
+        Math.Abs(scaled) < 10 ? Math.Round(scaled, 1, MidpointRounding.AwayFromZero)
+                              : Math.Round(scaled, 0, MidpointRounding.AwayFromZero);
+
+    /// <summary>"0.8 s", "41 s", "14m 02s", "3h 12m", "41d". Negative spans format as their absolute value.</summary>
     public static string Duration(TimeSpan span)
     {
-        if (span < TimeSpan.Zero)
+        var seconds = Math.Abs(span.TotalSeconds);
+        if (seconds < 9.95)
         {
-            span = TimeSpan.Zero;
+            return $"{seconds.ToString("0.0", Inv)} s";
         }
 
-        if (span.TotalSeconds < 10)
+        var total = (long)Math.Round(seconds, MidpointRounding.AwayFromZero);
+        if (total < 60)
         {
-            return $"{span.TotalSeconds.ToString("0.0", Inv)} s";
+            return $"{total} s";
         }
 
-        if (span.TotalMinutes < 1)
+        if (total < 3600)
         {
-            return $"{(int)span.TotalSeconds} s";
+            return $"{total / 60}m {total % 60:00}s";
         }
 
-        if (span.TotalHours < 1)
+        if (total < 86400)
         {
-            return $"{(int)span.TotalMinutes}m {span.Seconds:00}s";
+            return $"{total / 3600}h {total % 3600 / 60:00}m";
         }
 
-        if (span.TotalDays < 1)
-        {
-            return $"{(int)span.TotalHours}h {span.Minutes:00}m";
-        }
-
-        return $"{(int)span.TotalDays}d";
+        return $"{total / 86400}d";
     }
 
     public static string Ago(TimeSpan span) =>

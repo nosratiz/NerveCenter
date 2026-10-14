@@ -53,15 +53,18 @@ public class PgSqlGuardTests
             .Should().Throw<PgSqlRefusedException>().WithMessage("Nothing to run.");
 
     [Theory]
-    [InlineData("create index concurrently i on t(a)")]
-    [InlineData("REINDEX INDEX CONCURRENTLY i")]
-    [InlineData("create unique index  concurrently i on t(a)")]
-    [InlineData("create database x")]
-    [InlineData("drop database x")]
-    [InlineData("alter system set work_mem = '1MB'")]
-    public void Refuses_statements_that_cannot_run_in_a_transaction_in_write_mode(string sql) =>
+    [InlineData("create index concurrently i on t(a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("REINDEX INDEX CONCURRENTLY i", "REINDEX … CONCURRENTLY")]
+    [InlineData("create unique index  concurrently i on t(a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("create database x", "CREATE/DROP DATABASE")]
+    [InlineData("drop database x", "CREATE/DROP DATABASE")]
+    [InlineData("alter system set work_mem = '1MB'", "ALTER SYSTEM")]
+    [InlineData("-- note\nCREATE INDEX CONCURRENTLY i ON t (a)", "CREATE INDEX CONCURRENTLY")]
+    [InlineData("/* x */ ALTER SYSTEM SET work_mem = '1MB'", "ALTER SYSTEM")]
+    public void Refuses_statements_that_cannot_run_in_a_transaction_in_write_mode(string sql, string label) =>
         FluentActions.Invoking(() => PgSqlGuard.Check(sql, true))
-            .Should().Throw<PgSqlRefusedException>();
+            .Should().Throw<PgSqlRefusedException>()
+            .WithMessage($"`{label}` can't run in a transaction — run it from a SQL client.");
 
     [Fact]
     public void Refuses_create_index_concurrently_in_write_mode() =>

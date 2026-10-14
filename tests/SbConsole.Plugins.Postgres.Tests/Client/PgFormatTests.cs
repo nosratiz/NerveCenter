@@ -29,8 +29,21 @@ public class PgFormatTests
     [InlineData(9.4, "9.4 s")]
     [InlineData(11520, "3h 12m")]
     [InlineData(41 * 86400, "41d")]
+    [InlineData(9.96, "10 s")]
+    [InlineData(10, "10 s")]
+    [InlineData(59.6, "1m 00s")]
+    [InlineData(60, "1m 00s")]
+    [InlineData(3600, "1h 00m")]
+    [InlineData(86400, "1d")]
+    [InlineData(-41, "41 s")]
     public void Duration_formats(double seconds, string expected) =>
         PgFormat.Duration(TimeSpan.FromSeconds(seconds)).Should().Be(expected);
+
+    [Fact]
+    public void Ago_boundary_at_one_second() => PgFormat.Ago(TimeSpan.FromSeconds(1)).Should().Be("1.0 s ago");
+
+    [Fact]
+    public void Compact_rounds_up_into_next_unit() => PgFormat.Compact(999_999).Should().Be("1M");
 
     [Fact]
     public void Ago_appends_ago_or_just_now()
