@@ -28,5 +28,17 @@
     "kind": "sqlite",
     "secret": "Path=/sqlite/new.db;Mode=ReadWrite;BusyTimeoutMs=5000;StatementTimeoutS=30",
     "tags": ["demo"]
+  },
+  {
+    "name": "pg-local",
+    "kind": "postgres",
+    "secret": "Host=postgres;Port=5432;Database=app;Username=sbconsole;Password=sbconsole;SSL Mode=Prefer;Timeout=5;Mode=ReadWrite;StatementTimeoutS=30",
+    "tags": ["prod"]
+  },
+  {
+    "name": "pg-local-ro",
+    "kind": "postgres",
+    "secret": "Host=postgres;Port=5432;Database=app;Username=sbconsole;Password=sbconsole;SSL Mode=Prefer;Timeout=5;Mode=ReadOnly;StatementTimeoutS=30",
+    "tags": ["demo"]
   }
 ]

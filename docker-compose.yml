@@ -5,6 +5,7 @@
 #   docker compose --profile rabbitmq up -d    # ...plus RabbitMQ, seeded vhost /orders
 #   docker compose --profile aws up -d         # ...plus LocalStack (SQS/SNS)
 #   docker compose --profile redis up -d       # ...plus Redis, seeded with sample keys
+#   docker compose --profile postgres up -d    # ...plus PostgreSQL 16, seeded, with a live lock-contention demo
 #   docker compose --profile app up -d --build # ...plus SbConsole itself, built from source
 #
 # The app itself normally runs on the host via `dotnet run` (see .claude/launch.json); this
@@ -302,6 +303,53 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------------------
+  # PostgreSQL 16 (profile: postgres), seeded on first init of the postgres-data volume from
+  # docker/postgres/init (databases app, analytics, billing; ~1.1M rows in app). pg_stat_statements
+  # is preloaded and track_io_timing is on so the plugin's Overview/Query EXPLAIN have data.
+  # Published on 5433, not 5432, to stay clear of a local Postgres. The healthcheck uses TCP
+  # (127.0.0.1) on purpose: the entrypoint's temporary init server only listens on a unix socket,
+  # so a socket check would report healthy halfway through seeding.
+  # ---------------------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: nervecenter-postgres
+    profiles: ["postgres"]
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "track_io_timing=on"]
+    environment:
+      POSTGRES_USER: sbconsole
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sbconsole}
+      POSTGRES_DB: app
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U sbconsole -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 10s
+
+  # Long-running: one session idle in transaction holding a row lock on orders.id=1
+  # (application_name checkout-api) and two sessions waiting on it (checkout-api,
+  # fulfilment-worker), so the Activity page has a blocking chain to show. The cycle restarts
+  # every 15 minutes; it never exits on errors.
+  postgres-blocker:
+    image: postgres:16
+    container_name: nervecenter-postgres-blocker
+    profiles: ["postgres"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["sh", "/blocker.sh"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-sbconsole}
+    volumes:
+      - ./docker/postgres/blocker.sh:/blocker.sh:ro
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------------------
   # SbConsole itself (profile: app), built from source. For when you want the "one shared
   # instance per team" deployment shape locally rather than `dotnet run`.
   # ---------------------------------------------------------------------------------------
@@ -345,3 +393,4 @@ volumes:
   sqlserver-data:
   sbconsole-data:
   sqlite-demo:
+  postgres-data:

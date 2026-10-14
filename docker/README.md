@@ -395,16 +395,16 @@ the host publishes the right ports, the container does not.
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
 `SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`,
-`REDIS_PORT`, `REDIS_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
+`REDIS_PORT`, `REDIS_PASSWORD`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
 broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile sqlite --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile postgres --profile sqlite --profile app down -v
 ```
 
-`-v` drops the named volumes (Kafka log segments, SQL Server data, the containerised app's
+`-v` drops the named volumes (Kafka log segments, SQL Server data, PostgreSQL data, the containerised app's
 SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
 
 ## SQLite
@@ -500,3 +500,58 @@ a new one in; and a *hard link* to SbConsole's own database placed under a root 
 compares resolved paths, not file identity (creating one needs write access to both locations).
 Roots must never contain SbConsole's own data directory (the folder of `SBC_DB_PATH`, which also
 holds the data-protection keys).
+
+## PostgreSQL (opt-in)
+
+```bash
+docker compose --profile postgres up -d
+```
+
+| Service            | Host address     | What it is                                                              |
+|--------------------|------------------|-------------------------------------------------------------------------|
+| `postgres`         | `localhost:5433` | PostgreSQL 16, user `sbconsole` / password `sbconsole`, seeded on first start |
+| `postgres-blocker` | (long-running)   | Keeps a lock-contention scenario alive for the Activity page            |
+
+The host port is 5433 so it doesn't clash with a Postgres already on 5432 (`POSTGRES_PORT`; the
+password is `POSTGRES_PASSWORD`). The server runs with `pg_stat_statements` preloaded and
+`track_io_timing=on`. The seed runs once, when the `postgres-data` volume is first created
+(`docker/postgres/init/*.sql`, about 35 s on a laptop; the healthcheck only turns healthy when it
+is done):
+
+| Database    | Contents |
+|-------------|----------|
+| `app`       | `customers` (20k), `products` (2k), `orders` (200k, jsonb `metadata`, a few `pending`), `order_items` (400k), `payments` (150k), `sessions` (50k), `events` (300k); schemas `audit` and `reporting` (view `v_order_totals`, materialized view `mv_daily`); function `order_total(bigint)`; extensions `pgstattuple` and `pg_stat_statements` |
+| `analytics` | one small table, `daily_orders` |
+| `billing`   | one small table, `invoices` |
+
+What it is built to show:
+
+- **Maintenance:** autovacuum is switched off on `sessions` and `order_items`, then 40 % of their
+  rows are deleted, so 40 % of each table is dead tuples.
+- **Browse / Overview:** `idx_orders_legacy_ref` is never read (the "unused index" problem);
+  `idx_orders_status_pending` is a partial index; `idx_orders_metadata_gin` a GIN index.
+- **Activity:** `postgres-blocker` holds a transaction open with a row lock on `orders.id = 1`
+  (`checkout-api`, idle in transaction) and starts two waiters on the same row (`checkout-api`,
+  `fulfilment-worker`), so the page shows a blocking chain. The cycle restarts every 15 minutes
+  and the holder's transaction is rolled back, which resolves the chain for a moment. Terminating
+  the holder in the UI works; the next cycle makes a new one.
+
+Demo connections: `docker/sqlite/demo-connections.json` is the one file for every plugin, so it
+also holds `pg-local` (read-write, tag `prod`, which exercises the typed confirmations) and
+`pg-local-ro` (read-only, tag `demo`), both `Host=postgres`, port 5432, database `app`, which is
+how the containerised app (`--profile app`, same compose network) reaches the server. They are
+created at startup if missing, like the SQLite ones.
+
+For `dotnet run` on the host, copy `docker/sqlite/demo-connections.json` somewhere outside the
+repo, change `Host=postgres` to `Host=localhost` and `Port=5432` to `Port=5433` in the two
+`postgres` entries (and the `/sqlite` paths as described above, or delete the sqlite entries),
+and point `SBC_DEMO_CONNECTIONS` at the copy. Or create the connection by hand on the Connections
+page with Host `localhost`, Port `5433`, Database `app`, user/password `sbconsole`.
+
+Reset only this data: `docker compose --profile postgres down` then
+`docker volume rm nervecenter_postgres-data` (the next `up` re-seeds). `docker compose
+--profile postgres exec postgres psql -U sbconsole -d app` opens a shell on the server.
+
+The `sbconsole` user is a superuser, so every page works in the demo. The plugin also works as a
+plain role, with less visibility: without `pg_monitor`, other users' queries and `pg_stat_activity`
+rows are hidden and Activity says so.

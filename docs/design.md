@@ -1719,3 +1719,109 @@ anything.
   SET NULL), an index, a view, 12 rows, `ANALYZE`; no functions in defaults because files are
   opened with `trusted_schema = OFF`. Nothing extra is confirmed for prod-tagged new connections:
   nothing existing is touched.
+
+## 18. PostgreSQL plugin (`SbConsole.Plugins.Postgres`) (2026-10-14)
+
+Spec: `docs/superpowers/specs/2026-10-14-postgres-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-10-14-postgres-plugin.md`. Five pages — Overview, Browse, Query,
+Activity, Maintenance — and the audited actions behind them. Driver: Npgsql, referenced by the
+plugin only. This section records the decisions and the places review changed the spec.
+
+- **A connection is a server, not a database.** The saved secret is an Npgsql string plus two house
+  keys (`Mode`, `StatementTimeoutS`); the database is a per-page picker (`pg_database`, `?db=`)
+  that re-opens against the chosen database. Every connection the plugin opens sets
+  `application_name=sbconsole`, which is how Activity recognises its own backends: "this console"
+  chip, excluded from blocker/idle problems, and Cancel/Terminate refuse them (matched on the
+  application name server-side, not on a pid the client sent).
+- **The read-only guard is a seatbelt, not a privilege boundary.** Read mode runs in
+  `BEGIN READ ONLY` with `SET LOCAL statement_timeout`; `PgSqlLexer` splits statements and refuses
+  transaction/session control up front for a friendly message. The enforcement is on the server:
+  read mode sends the text as a **single `NpgsqlBatchCommand`**, so the server's extended protocol
+  itself rejects a second statement (`COMMIT; DELETE …`) even if the lexer were fooled. The lexer
+  still has to agree with the server about where statements end, and review found mismatches that
+  are now fixed and tested: a `\r` ends a `--` comment; non-ASCII identifier characters directly
+  before `$$` or `E'…'` don't start a dollar quote or escape string. **Limit:** functions with side
+  effects (`pg_terminate_backend`, `dblink`, `pg_reload_conf`) still run inside a read-only
+  transaction; a read-only role is the real fix, and the connection form says so.
+- **Write mode** needs `Mode=ReadWrite` in the saved secret (re-read per run; the page switch is a
+  convenience). A script runs as one transaction made of **one single-command batch per statement**
+  (so the position of a server error maps to the failing statement via `PgQueryException(inner,
+  start)`); any error rolls back. Statements that can't run in a transaction block (`VACUUM`,
+  `COPY`, `CREATE DATABASE`, `CREATE INDEX CONCURRENTLY`) are refused.
+- **Every user-SQL run is audited**, reads included (`pg.query.read` / `pg.query.write`), because
+  free-form SQL against a shared server is what an audit log is for; this makes Query's Run a
+  command handler. Catalog/metric reads are queries and are not. A cancelled run is audited
+  "· cancelled", added to history and rethrown. A refused export is not audited (nothing ran).
+- **Capped reads cancel.** Reading stops at the row cap and cancels the command rather than
+  draining the cursor, so a `SELECT *` on a 50M-row table costs one page. Write mode does drain
+  capped selects (the statement must finish inside its transaction); the UI says so.
+- **Browse queries are built from the catalog, never from client text.** The select list casts odd
+  types `::text` and omits type modifiers (`char(3)`/`bit(n)` casts keep none, so a typmod mismatch
+  can't fail the query), `ORDER BY` is qualified, and the target is looked up by **OID** and quoted
+  from the catalog result. The same OID-not-name rule covers VACUUM/ANALYZE/VACUUM FULL and
+  REINDEX/Drop index. **REINDEX CONCURRENTLY changes the index OID**, so Browse reloads the detail
+  afterwards and keeps the selection by name. Limit: `?oid=` is not restricted to the schemas the
+  tree shows (it is read-only metadata the role could already select).
+- **Browse owns its URL.** `PgConnectionPicker`/`PgDatabasePicker` are built with `ManageUrl=false`
+  on Browse and Query; the page writes `?connectionId=&db=&oid=` itself so a picker clearing its
+  selection (connection change, failed load) raises `SelectedChanged` and the parent drops the stale
+  `db`/`oid`. `?oid=` without `?db=` is dropped.
+- **Overview keeps a stale snapshot.** The last good `PgOverview` (and the previous
+  `xact_commit` sample for commits/s) lives in `IPluginStore` under `overview:<connectionId>`.
+  When the server is unreachable the page renders the cached tiles dimmed with "stale · HH:mm",
+  an alert with the friendly sentence, and retries every 30 s. Writing the snapshot is the plugin's
+  own store, so it isn't audited. Limit: the commits/s baseline is shared across circuits
+  (two viewers shorten each other's interval).
+- **Limited visibility without `pg_monitor`.** A role that isn't superuser or `pg_monitor` sees
+  other sessions' `pg_stat_activity` rows with the query and some columns nulled, and
+  `pg_stat_replication`/`pg_stat_progress_vacuum` partly empty. Tiles and the Activity tree show
+  what the role can see and say so; nothing is guessed. `pgstattuple` is optional: bloat is "—"
+  with a hint when the extension isn't installed in the current database; the plugin never installs
+  extensions.
+- **Blocking chain.** `pg_blocking_pids` places a waiter under its first blocker; cycles fall back
+  to flat rows. The "relation" the banner names uses the tuple-lock aware rule from the operations
+  layer (a row lock waits on the *transaction*, not the relation), restricted to the current
+  database. `ActivityTree.Build(activity, activeOnly, showIdle)` is pure and unit-tested;
+  `WorstBlocker` ignores the filters, so the banner can name an idle-in-transaction blocker the
+  table currently hides. Auto-refresh pauses while a confirm or action is in flight; a pid can still
+  be reused in the window between confirm and click, so Cancel/Terminate re-read the row and verify
+  it is a client backend (`GetBackend`) right before acting.
+- **`ConfirmationRequest` overload (the one additive SDK change).** `IConfirmationService` gained
+  `ConfirmAsync(ConfirmationRequest)` (verb, target, `IsProd`, consequence, label/value details,
+  audit action, `Destructive`); the default implementation falls back to the old call, so existing
+  callers and plugins are untouched. `ConfirmDialog` takes a **`Detailed` flag** set by the request
+  overload, so the richer layout (consequence paragraph, details table, "Audited as …", error
+  outline for `Destructive`) never appears on the old path. The typed text is the whole target
+  (`pid 48213`), so pasting a bare number doesn't match. Terminate/VACUUM FULL/Drop index use it.
+- **Maintenance timeouts.** VACUUM and ANALYZE run outside a transaction with the statement
+  timeout raised to `max(setting, 600 s)`; VACUUM FULL to 3600 s, and the session `statement_timeout`
+  is `RESET` afterwards so a pooled connection doesn't carry it. A cancelled maintenance run is
+  audited. Actions are dispose-safe (the page may be left while one runs). Not built: the
+  header overflow button, a dead-% meter bar, showing more than one running vacuum.
+- **Audit page has no hash search.** The Query page's "audit row" link therefore goes to `/audit`
+  (target `{connection}/{database}`), not to a row; a deep link needs a host change (search by
+  detail hash) and is left as a follow-up.
+- **Testing exception.** `PostgresOperations` is tested against a real `postgres:16` Testcontainer
+  (`Testcontainers.PostgreSql`; the repo's first Testcontainers use), because catalog SQL, read-only
+  transactions, timeouts, cancel/terminate and lock detection can't be honestly faked. The tests
+  skip themselves when Docker is unavailable (`[DockerFact]`) and share one container
+  (`"postgres"` collection; `MaxRowsOverride` is static, so tests touching it must stay in that
+  collection). Handlers and pages use a substituted `IPostgresOperations`, like every other plugin.
+- **Known limitations.** Partitioned tables show parent-only sizes and DDL; PG18 virtual generated
+  columns aren't distinguished; very large `bytea`/`text` cells are loaded whole; `timestamp` cells
+  show the server's text form (`+00`); the JSON tab shows 200 rows until "Show all"; Browse's
+  filter chips and low-cardinality flag from the mockup, and a "Show lock tree" menu item, were not
+  built; a pid-reuse window exists between confirm and action (mitigated above).
+- **Local dev stack.** Compose profile `postgres`: `postgres:16` on host port 5433 (preloaded
+  `pg_stat_statements`, `track_io_timing=on`) seeded by `docker/postgres/init/*.sql` on first
+  start of the `postgres-data` volume (databases `app` ~1.1M rows, `analytics`, `billing`;
+  `sessions` and `order_items` have autovacuum off and 40 % deleted for Maintenance; an unused
+  `idx_orders_legacy_ref` for Overview), plus `postgres-blocker`, a `psql` loop that keeps one
+  idle-in-transaction row lock and two waiters (`checkout-api`, `fulfilment-worker`) alive for
+  Activity, restarting every 15 minutes. The healthcheck connects over TCP: the entrypoint's
+  temporary init server listens on the socket only, so a socket check would report healthy
+  mid-seed. `pg-local` (read-write, `prod`) and `pg-local-ro` (read-only, `demo`) were added to
+  the single `docker/sqlite/demo-connections.json` (§16.1; Host `postgres`, the compose network),
+  pinned by the Postgres `DemoConnectionsFileTests`; the SQLite test now only checks `kind ==
+  "sqlite"` entries. For `dotnet run` the README says to copy the file and change Host/Port to
+  `localhost`/`5433`.
