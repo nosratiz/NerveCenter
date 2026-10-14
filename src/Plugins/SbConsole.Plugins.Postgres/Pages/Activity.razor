@@ -208,8 +208,18 @@
         }
 
         var (rows, hidden) = ActivityTree.Build(data, _activeOnly, _showIdle);
-        _rows = _userFilter is null ? rows : rows.Where(r => r.Backend.User == _userFilter).ToList();
-        _hiddenIdle = hidden;
+        if (_userFilter is null)
+        {
+            _rows = rows;
+            _hiddenIdle = hidden;
+        }
+        else
+        {
+            // Counted after the user filter, so "N idle hidden" matches what show all would add.
+            _rows = rows.Where(r => r.Backend.User == _userFilter).ToList();
+            _hiddenIdle = Math.Max(0, data.Backends.Count(b => b.State == "idle" && b.User == _userFilter) - _rows.Count(r => r.Backend.State == "idle"));
+        }
+
         // Over all backends, so the banner survives Active only and the user filter.
         var worst = ActivityTree.WorstBlocker(data);
         _banner = worst is not null && worst.BlocksCount > 0 && worst.Backend.State.StartsWith("idle in transaction", StringComparison.Ordinal) ? worst : null;
@@ -293,7 +303,7 @@
         {
             await InvokeAsync(async () =>
             {
-                if (_disposed || _loading || _interval <= 0 || _connection is null)
+                if (_disposed || _loading || _acting || _interval <= 0 || _connection is null)
                 {
                     return;
                 }

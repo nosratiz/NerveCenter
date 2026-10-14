@@ -352,6 +352,28 @@ public class BrowsePageTests : PgPageTestBase
     }
 
     [Fact]
+    public async Task A_slow_reindex_finishing_after_another_object_was_selected_keeps_that_selection()
+    {
+        Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(_ => OrdersDetail([Idx(2, "idx_legacy")]));
+        Operations.GetObjectDetailAsync(Secret, "app", Customers, Arg.Any<CancellationToken>()).Returns(_ =>
+            OrdersDetail() with { Oid = Customers, Name = "customers" });
+        Confirmation.ConfirmAsync("Reindex", "idx_legacy", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+        var gate = new TaskCompletionSource<string>();
+        Operations.ReindexIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderOrders();
+        OpenIndexMenu(cut);
+        cut.Find(".mud-popover-open .pg-index-reindex").Click();
+        cut.WaitForAssertion(() => Operations.Received(1).ReindexIndexAsync(Secret, "app", 2, Arg.Any<CancellationToken>()));
+
+        cut.FindAll(".pg-tree-item").First(i => i.TextContent.Contains("customers")).Click();
+        cut.WaitForAssertion(() => cut.Find(".pg-object-title").TextContent.Should().Contain("customers"));
+        gate.SetResult("public.idx_legacy");
+        await FlushAsync(cut);
+
+        cut.Find(".pg-object-title").TextContent.Should().Contain("customers").And.NotContain("orders");
+    }
+
+    [Fact]
     public void Declining_reindex_runs_nothing()
     {
         Operations.GetObjectDetailAsync(Secret, "app", Orders, Arg.Any<CancellationToken>()).Returns(OrdersDetail([Idx(2, "idx_legacy")]));

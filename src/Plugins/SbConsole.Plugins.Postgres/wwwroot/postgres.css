@@ -120,4 +120,4 @@ pre.pg-json, pre.pg-ddl { margin: 0; padding: 10px 12px; overflow: auto; white-s
 .pg-autorefresh { min-width: 96px; }
 .pg-activity-empty { padding: 24px 6px; }
 .pg-activity-footnote { display: flex; gap: 14px; }
-.pg-menu-danger .mud-menu-item-text, .pg-menu-danger.mud-menu-item { color: var(--mud-palette-error); }
+.pg-menu-danger .mud-menu-item-text { color: var(--mud-palette-error); }

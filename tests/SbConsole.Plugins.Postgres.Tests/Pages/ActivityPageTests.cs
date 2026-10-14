@@ -264,6 +264,19 @@ public class ActivityPageTests : PgPageTestBase
     }
 
     [Fact]
+    public void Hidden_idle_count_respects_the_user_filter()
+    {
+        Arrange([B(10, user: "alice"), B(11, user: "bob"), B(12, "idle", user: "alice"), B(13, "idle", user: "bob"), B(14, "idle", user: "bob")]);
+        var cut = RenderPage();
+        cut.Find(".pg-idle-hidden").TextContent.Should().Contain("3 idle backends hidden");
+
+        OpenRowMenu(cut, 11);
+        cut.Find(".mud-popover-open .pg-filter-user").Click();
+
+        cut.WaitForAssertion(() => cut.Find(".pg-idle-hidden").TextContent.Should().Contain("2 idle backends hidden"));
+    }
+
+    [Fact]
     public void Active_only_shows_active_rows_and_drops_the_idle_footer_but_keeps_the_banner()
     {
         Arrange();
@@ -294,7 +307,7 @@ public class ActivityPageTests : PgPageTestBase
     }
 
     [Fact]
-    public void Auto_refresh_off_never_reloads()
+    public async Task Auto_refresh_off_never_reloads()
     {
         Arrange();
         var cut = RenderPage();
@@ -304,9 +317,78 @@ public class ActivityPageTests : PgPageTestBase
         cut.WaitForAssertion(() => cut.FindAll(".pg-next-refresh").Should().BeEmpty());
         var before = Calls(nameof(IPostgresOperations.GetActivityAsync));
 
-        cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(30)));
+        await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(30)));
 
         Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task A_tick_while_a_load_is_in_flight_does_not_start_a_second_load()
+    {
+        Arrange();
+        var cut = RenderPage();
+        var before = Calls(nameof(IPostgresOperations.GetActivityAsync));
+        var gate = new TaskCompletionSource<PgActivity>();
+        Operations.GetActivityAsync(Secret, Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+
+        await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(5)));
+        cut.WaitForAssertion(() => Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().Be(before + 1));
+        await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(5)));
+
+        Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().Be(before + 1);
+        gate.SetResult(new PgActivity(OwnPid, Time.GetUtcNow(), Chain()));
+    }
+
+    [Fact]
+    public async Task After_dispose_advancing_time_loads_nothing()
+    {
+        Arrange();
+        var cut = RenderPage();
+        await DisposeComponentsAsync();
+        var before = Calls(nameof(IPostgresOperations.GetActivityAsync));
+
+        Time.Advance(TimeSpan.FromSeconds(30));
+        await Task.Delay(50);
+
+        Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Auto_refresh_pauses_while_a_confirmation_is_open()
+    {
+        Arrange();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        Operations.GetBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(B(48230));
+        Operations.CancelBackendAsync(Secret, 48230, Arg.Any<CancellationToken>()).Returns(true);
+        var cut = RenderPage();
+        RowOf(cut, 48230).QuerySelector(".pg-cancel")!.Click();
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync("Cancel query of", "pid 48230", false, Arg.Any<int?>(), Arg.Any<CancellationToken>()));
+        var before = Calls(nameof(IPostgresOperations.GetActivityAsync));
+
+        await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(12)));
+
+        Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().Be(before);
+        gate.SetResult(false);
+        await cut.InvokeAsync(() => Task.CompletedTask);
+        await cut.InvokeAsync(() => Time.Advance(TimeSpan.FromSeconds(5)));
+        cut.WaitForAssertion(() => Calls(nameof(IPostgresOperations.GetActivityAsync)).Should().BeGreaterThan(before));
+    }
+
+    [Fact]
+    public void Cancel_and_terminate_are_disabled_on_a_read_only_connection()
+    {
+        Connections.ListAsync("postgres", Arg.Any<CancellationToken>()).Returns(
+        [
+            new ConnectionInfo(ConnectionId, ConnectionName, "postgres", ["prod"], true, Time.GetUtcNow(), null, Time.GetUtcNow(),
+                new Dictionary<string, string> { ["Server"] = "db:5432", ["Database"] = "app", ["Mode"] = "read-only" }),
+        ]);
+        Arrange();
+        var cut = RenderPage();
+
+        RowOf(cut, 48230).QuerySelector(".pg-cancel")!.HasAttribute("disabled").Should().BeTrue();
+        OpenRowMenu(cut, 48230);
+        cut.Find(".mud-popover-open .pg-terminate").ClassList.Should().Contain("mud-disabled");
     }
 
     [Fact]

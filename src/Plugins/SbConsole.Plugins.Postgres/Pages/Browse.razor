@@ -1147,7 +1147,11 @@
             _indexBusy = false;
         }
 
-        await SelectObjectAsync(detail.Oid, updateUrl: false);
+        // The action can outlive the selection: only reload if the user is still on the table it ran against.
+        if (_detail?.Oid == detail.Oid)
+        {
+            await SelectObjectAsync(detail.Oid, updateUrl: false);
+        }
     }
 
     private static string OperatorLabel(PgFilterOp op) => Operators.First(o => o.Op == op).Label;
