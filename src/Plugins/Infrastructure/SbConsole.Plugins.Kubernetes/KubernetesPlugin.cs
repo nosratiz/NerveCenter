@@ -29,9 +29,9 @@ public sealed class KubernetesPlugin : IPlugin
     private IKubernetesOperations? _operations;
     private TimeProvider _clock = TimeProvider.System;
 
-    // The badge is polled by the shell; one overview per connection per 15 s is plenty.
-    private static readonly TimeSpan BadgeTtl = TimeSpan.FromSeconds(15);
-    private readonly ConcurrentDictionary<string, (DateTimeOffset At, int? Count)> _badgeCache = new();
+    // Metrics, problems and the badge all derive from one overview per connection per 15 s (success or failure).
+    private static readonly TimeSpan OverviewTtl = TimeSpan.FromSeconds(15);
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, K8sOverview? Overview)> _overviewCache = new();
 
     public string Id => PluginId;
     public string DisplayName => "Kubernetes";
@@ -91,18 +91,20 @@ public sealed class KubernetesPlugin : IPlugin
     public Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default) =>
         _operations?.TestConnectionAsync(secret, ct) ?? Task.FromResult(NotInitialized);
 
-    /// <summary>Nodes ready and crash-looping pods across the whole cluster; any failure reports nothing.</summary>
-    public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
+    /// <summary>The cached overview for the secret, or null when the probe failed (failures are cached too).</summary>
+    private async Task<K8sOverview?> CachedOverviewAsync(string secret, CancellationToken ct)
     {
-        if (_operations is null)
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
+        var now = _clock.GetUtcNow();
+        if (_overviewCache.TryGetValue(key, out var cached) && now - cached.At < OverviewTtl)
         {
-            return [];
+            return cached.Overview;
         }
 
-        K8sOverview overview;
+        K8sOverview? overview;
         try
         {
-            overview = await _operations.GetOverviewAsync(connectionString, [], ct);
+            overview = await _operations!.GetOverviewAsync(secret, [], ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -111,6 +113,26 @@ public sealed class KubernetesPlugin : IPlugin
         catch (Exception)
         {
             // No logger on the plugin instance; the host reports an unreachable connection on its own.
+            overview = null;
+        }
+
+        foreach (var entry in _overviewCache)
+        {
+            if (now - entry.Value.At >= OverviewTtl)
+            {
+                _overviewCache.TryRemove(entry.Key, out _);
+            }
+        }
+
+        _overviewCache[key] = (now, overview);
+        return overview;
+    }
+
+    /// <summary>Nodes ready and crash-looping pods across the whole cluster; any failure reports nothing.</summary>
+    public async Task<IReadOnlyList<PluginDashboardMetric>> GetDashboardMetricsAsync(string connectionString, CancellationToken ct = default)
+    {
+        if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { } overview)
+        {
             return [];
         }
 
@@ -125,12 +147,11 @@ public sealed class KubernetesPlugin : IPlugin
     public async Task<IReadOnlyList<PluginDashboardProblem>> GetDashboardProblemsAsync(
         Guid connectionId, string connectionString, IPluginStore store, CancellationToken ct = default)
     {
-        if (_operations is null)
+        if (_operations is null || await CachedOverviewAsync(connectionString, ct) is not { } overview)
         {
             return [];
         }
 
-        var overview = await _operations.GetOverviewAsync(connectionString, [], ct);
         return AttentionRules.Build(overview, _clock.GetUtcNow(), href => href)
             .Take(5)
             .Select(i => new PluginDashboardProblem(i.Severity, i.Title, i.Detail, i.Href))
@@ -145,31 +166,19 @@ public sealed class KubernetesPlugin : IPlugin
             return null;
         }
 
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(connectionString)));
-        var now = _clock.GetUtcNow();
-        if (_badgeCache.TryGetValue(key, out var cached) && now - cached.At < BadgeTtl)
-        {
-            return cached.Count;
-        }
-
-        int? count;
         try
         {
-            var overview = await _operations.GetOverviewAsync(connectionString, [], ct);
-            var total = AttentionRules.BuildAll(overview, now, href => href).Count;
-            count = total > 0 ? total : null;
+            if (await CachedOverviewAsync(connectionString, ct) is not { } overview)
+            {
+                return null;
+            }
+
+            var total = AttentionRules.BuildAll(overview, _clock.GetUtcNow(), href => href).Count;
+            return total > 0 ? total : null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             return null;
         }
-        catch (Exception)
-        {
-            // A badge is decoration: a broken probe just hides it (and is not retried for 15 s).
-            count = null;
-        }
-
-        _badgeCache[key] = (now, count);
-        return count;
     }
 }

@@ -113,4 +113,32 @@ public class KubernetesPluginDashboardTests
         (await plugin.GetNavBadgeAsync(KubernetesPlugin.OverviewHref, "s")).Should().BeNull();
         await _ops.Received(2).GetOverviewAsync("s", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Metrics_problems_and_badge_share_one_overview_for_fifteen_seconds()
+    {
+        Returns("s", Troubled());
+        var plugin = Plugin();
+
+        await plugin.GetDashboardMetricsAsync("s");
+        await plugin.GetDashboardProblemsAsync(Guid.NewGuid(), "s", Substitute.For<IPluginStore>());
+        await plugin.GetNavBadgeAsync(KubernetesPlugin.OverviewHref, "s");
+        await _ops.Received(1).GetOverviewAsync("s", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+
+        _clock.Advance(TimeSpan.FromSeconds(16));
+        await plugin.GetDashboardMetricsAsync("s");
+        await _ops.Received(2).GetOverviewAsync("s", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_failed_overview_is_cached_too()
+    {
+        _ops.GetOverviewAsync("down", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).ThrowsAsync(new HttpRequestException("x"));
+        var plugin = Plugin();
+
+        (await plugin.GetDashboardMetricsAsync("down")).Should().BeEmpty();
+        (await plugin.GetDashboardProblemsAsync(Guid.NewGuid(), "down", Substitute.For<IPluginStore>())).Should().BeEmpty();
+        (await plugin.GetNavBadgeAsync(KubernetesPlugin.OverviewHref, "down")).Should().BeNull();
+        await _ops.Received(1).GetOverviewAsync("down", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
 }

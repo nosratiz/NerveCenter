@@ -8,7 +8,7 @@ namespace SbConsole.Plugins.Kubernetes.Client;
 public sealed partial class KubernetesOperations
 {
     /// <summary>Global constraint: parallel per-namespace fetches are capped at 8.</summary>
-    private const int MaxNamespaceFanOut = 8;
+    internal const int MaxNamespaceFanOut = 8;
 
     private static readonly TimeSpan WarningsWindow = TimeSpan.FromHours(1);
     private const int MaxRecentWarnings = 50;
@@ -21,18 +21,20 @@ public sealed partial class KubernetesOperations
         var scope = namespaces.Count == 0 ? null : new HashSet<string>(namespaces, StringComparer.Ordinal);
         bool InScope(string? ns) => scope is null || (ns is not null && scope.Contains(ns));
 
+        // One gate per overview call: pods, deployments, jobs and events share the cap of 8 namespace requests.
+        using var gate = new SemaphoreSlim(MaxNamespaceFanOut);
         var versionTask = client.Version.GetCodeAsync(cancellationToken: ct);
         var nodesTask = ListNodesOrEmptyAsync(client, ct);
         var podsTask = ListScopedAsync(namespaces,
             async () => (await client.CoreV1.ListPodForAllNamespacesAsync(cancellationToken: ct)).Items,
-            async ns => (await client.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct)).Items, ct);
+            async ns => (await client.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct)).Items, gate, ct);
         var deploymentsTask = ListScopedAsync(namespaces,
             async () => (await client.AppsV1.ListDeploymentForAllNamespacesAsync(cancellationToken: ct)).Items,
-            async ns => (await client.AppsV1.ListNamespacedDeploymentAsync(ns, cancellationToken: ct)).Items, ct);
+            async ns => (await client.AppsV1.ListNamespacedDeploymentAsync(ns, cancellationToken: ct)).Items, gate, ct);
         var jobsTask = ListScopedAsync(namespaces,
             async () => (await client.BatchV1.ListJobForAllNamespacesAsync(cancellationToken: ct)).Items,
-            async ns => (await client.BatchV1.ListNamespacedJobAsync(ns, cancellationToken: ct)).Items, ct);
-        var eventsTask = ListWarningEventsAsync(client, namespaces, ct);
+            async ns => (await client.BatchV1.ListNamespacedJobAsync(ns, cancellationToken: ct)).Items, gate, ct);
+        var eventsTask = ListWarningEventsAsync(client, namespaces, gate, ct);
         var namespaceCountTask = CountNamespacesAsync(client, namespaces, ct);
         var identityTask = GetIdentityAsync(client, secret, ct);
         var usageTask = NodeUsageAsync(client, ct);
@@ -91,13 +93,13 @@ public sealed partial class KubernetesOperations
     /// Warning events via events.k8s.io; the built-in "view" ClusterRole only grants core/v1 events, so a 403 there
     /// falls back to the core API (same objects, older shape).
     /// </summary>
-    private async Task<IReadOnlyList<K8sEvent>> ListWarningEventsAsync(IKubernetes client, IReadOnlyList<string> namespaces, CancellationToken ct)
+    private async Task<IReadOnlyList<K8sEvent>> ListWarningEventsAsync(IKubernetes client, IReadOnlyList<string> namespaces, SemaphoreSlim gate, CancellationToken ct)
     {
         try
         {
             var events = await ListScopedAsync(namespaces,
                 async () => (await client.EventsV1.ListEventForAllNamespacesAsync(fieldSelector: "type=Warning", cancellationToken: ct)).Items,
-                async ns => (await client.EventsV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, ct);
+                async ns => (await client.EventsV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, gate, ct);
             return events.Select(K8sMappers.Event).ToList();
         }
         catch (HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
@@ -107,7 +109,7 @@ public sealed partial class KubernetesOperations
 
         var core = await ListScopedAsync(namespaces,
             async () => (await client.CoreV1.ListEventForAllNamespacesAsync(fieldSelector: "type=Warning", cancellationToken: ct)).Items,
-            async ns => (await client.CoreV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, ct);
+            async ns => (await client.CoreV1.ListNamespacedEventAsync(ns, fieldSelector: "type=Warning", cancellationToken: ct)).Items, gate, ct);
         return core.Select(K8sMappers.Event).ToList();
     }
 
@@ -182,11 +184,11 @@ public sealed partial class KubernetesOperations
 
     /// <summary>
     /// Lists cluster-wide (callers filter to the selection client-side); when that is forbidden and namespaces are
-    /// selected, lists each namespace instead, at most <see cref="MaxNamespaceFanOut"/> at a time. A 403 with no
+    /// selected, lists each namespace instead, through the caller's shared <paramref name="gate"/> (<see cref="MaxNamespaceFanOut"/> at a time per overview). A 403 with no
     /// selection, or on a selected namespace, propagates.
     /// </summary>
-    private static async Task<IReadOnlyList<T>> ListScopedAsync<T>(
-        IReadOnlyList<string> namespaces, Func<Task<IList<T>>> all, Func<string, Task<IList<T>>> one, CancellationToken ct)
+    internal static async Task<IReadOnlyList<T>> ListScopedAsync<T>(
+        IReadOnlyList<string> namespaces, Func<Task<IList<T>>> all, Func<string, Task<IList<T>>> one, SemaphoreSlim gate, CancellationToken ct)
     {
         try
         {
@@ -197,7 +199,6 @@ public sealed partial class KubernetesOperations
             // Namespace-scoped account: fall back to one list per selected namespace.
         }
 
-        using var gate = new SemaphoreSlim(MaxNamespaceFanOut);
         var tasks = namespaces.Distinct(StringComparer.Ordinal).Select(async ns =>
         {
             await gate.WaitAsync(ct);
