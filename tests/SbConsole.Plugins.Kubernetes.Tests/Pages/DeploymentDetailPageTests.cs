@@ -162,7 +162,7 @@ public class DeploymentDetailPageTests : K8sPageTestBase
         var cut = RenderPage();
 
         var conditions = Text(cut.Find(".k8s-conditions"));
-        conditions.Should().Contain("Available").And.Contain("Progressing").And.Contain("ProgressDeadlineExceeded · 38m");
+        conditions.Should().Contain("Available").And.Contain("Progressing").And.Contain("ProgressDeadlineExceeded · 28m");
         var events = cut.FindAll(".k8s-events .k8s-event-row");
         events.Should().HaveCount(2);
         Text(events[0]).Should().Contain("2m").And.Contain("BackOff").And.Contain("x2k4q").And.Contain("Back-off restarting failed container gateway").And.Contain("×14");

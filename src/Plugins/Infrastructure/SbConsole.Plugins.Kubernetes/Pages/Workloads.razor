@@ -112,11 +112,9 @@
     private bool _showAll;
     private bool _loading;
     private int _generation;
-    private int _openDialogs;
+    private K8sDialogGate _dialogs = null!; // OnInitialized; no event can reach the page before it runs
     private bool _disposed;
-    private IJSObjectReference? _module;
-    private IJSObjectReference? _visibility;
-    private DotNetObjectReference<Workloads>? _self;
+    private K8sVisibilityHook? _visibility;
 
     private RenderFragment Table(K8sWorkloadKind kind) => __builder =>
     {
@@ -345,6 +343,8 @@
     protected override void OnInitialized()
     {
         _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _dialogs = new K8sDialogGate(_poller);
+        _visibility = new K8sVisibilityHook(SetHidden);
         var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
         if (query.TryGetValue("tab", out var tab))
         {
@@ -354,51 +354,13 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (firstRender && _visibility is not null)
         {
-            return;
-        }
-
-        try
-        {
-            var module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
-            if (module is null)
-            {
-                return;
-            }
-
-            if (_disposed)
-            {
-                await module.DisposeAsync();
-                return;
-            }
-
-            _module = module;
-            _self = DotNetObjectReference.Create(this);
-            var visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
-            if (_disposed)
-            {
-                // DisposeAsync ran while the hook was being installed: release it or the browser keeps a listener
-                // that calls a disposed DotNetObjectReference.
-                if (visibility is not null)
-                {
-                    await visibility.InvokeVoidAsync("dispose");
-                    await visibility.DisposeAsync();
-                }
-
-                return;
-            }
-
-            _visibility = visibility;
-        }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
-        {
-            // Without the visibility hook the poller keeps running while the tab is hidden; copy just does nothing.
+            await _visibility.StartAsync(JS);
         }
     }
 
-    /// <summary>Called by kubernetes.js <c>watchVisibility</c>: no polling while the browser tab is hidden.</summary>
-    [JSInvokable]
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
     public Task SetHidden(bool hidden)
     {
         if (_disposed || _poller is null)
@@ -605,7 +567,7 @@
         {
             await InvokeAsync(async () =>
             {
-                if (_disposed || _loading || _openDialogs > 0)
+                if (_disposed || _loading || _dialogs.IsOpen)
                 {
                     return;
                 }
@@ -619,29 +581,6 @@
         }
     }
 
-    /// <summary>Runs a dialog with the poller paused, so a refresh never repaints the rows under it.</summary>
-    private async Task<T> WithDialogAsync<T>(Func<Task<T>> dialog)
-    {
-        _openDialogs++;
-        if (_poller is not null)
-        {
-            _poller.Paused = true;
-        }
-
-        try
-        {
-            return await dialog();
-        }
-        finally
-        {
-            _openDialogs--;
-            if (_poller is not null)
-            {
-                _poller.Paused = _openDialogs > 0;
-            }
-        }
-    }
-
     private async Task ScaleAsync(K8sWorkload row)
     {
         if (_connection is not { } connection)
@@ -649,7 +588,7 @@
             return;
         }
 
-        var result = await WithDialogAsync(async () =>
+        var result = await _dialogs.RunAsync(async () =>
         {
             var reference = await ScaleDialog.ShowAsync(Dialogs, connection, row.Kind, row.Namespace, row.Name);
             return await reference.Result;
@@ -671,7 +610,7 @@
         }
 
         // Mutating: a plain two-button confirmation, never typed.
-        if (!await WithDialogAsync(() => Confirmation.ConfirmAsync("Restart", row.Name, isProd: false)) || _disposed)
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync("Restart", row.Name, isProd: false)) || _disposed)
         {
             return;
         }
@@ -702,17 +641,8 @@
 
         var kind = row.Kind.ToString();
         // IsProd comes from the picker's server-side ConnectionInfo, never from the query string.
-        var request = new ConfirmationRequest($"Delete {kind}", row.Name, connection.IsProd,
-            Consequence: $"Deletes the {kind} and, in the background, everything it owns ({Owned(row.Kind)}).",
-            Details:
-            [
-                new ConfirmationDetail("Namespace", row.Namespace),
-                new ConfirmationDetail("Ready", $"{row.Ready}/{row.Desired}"),
-                new ConfirmationDetail("Images", K8sFormat.Images(row.Images)),
-            ],
-            AuditAction: WorkloadAudit.Action(row.Kind, "delete"),
-            Destructive: true);
-        if (!await WithDialogAsync(() => Confirmation.ConfirmAsync(request)) || _disposed)
+        var request = WorkloadConfirmations.Delete(connection, row.Kind, row.Namespace, row.Name, row.Ready, row.Desired, row.Images);
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync(request)) || _disposed)
         {
             return;
         }
@@ -734,13 +664,6 @@
         await LoadAsync();
     }
 
-    private static string Owned(K8sWorkloadKind kind) => kind switch
-    {
-        K8sWorkloadKind.Deployment => "ReplicaSets and Pods",
-        K8sWorkloadKind.CronJob => "Jobs and Pods",
-        _ => "Pods",
-    };
-
     private async Task ViewYamlAsync(K8sWorkload row)
     {
         if (_connection is not { } connection)
@@ -750,7 +673,7 @@
 
         var resourceKind = Enum.Parse<K8sResourceKind>(row.Kind.ToString());
         var ct = _cts.Token;
-        await WithDialogAsync(async () =>
+        await _dialogs.RunAsync(async () =>
         {
             var reference = await YamlDialog.ShowAsync(Dialogs, $"{Lower(row.Kind)}/{row.Name}",
                 () => GetResourceYaml.HandleAsync(connection.Id, resourceKind, row.Namespace, row.Name, ct));
@@ -763,12 +686,12 @@
         var command = $"kubectl -n {row.Namespace} get {Lower(row.Kind)} {row.Name} -o yaml";
         try
         {
-            if (_module is null || _disposed)
+            if (_visibility?.Module is not { } module || _disposed)
             {
                 return;
             }
 
-            await _module.InvokeVoidAsync("copyText", command);
+            await module.InvokeVoidAsync("copyText", command);
             Snackbar.Add("Copied the kubectl command.", Severity.Info);
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
@@ -783,24 +706,9 @@
         _poller?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
-        try
+        if (_visibility is not null)
         {
-            if (_visibility is not null)
-            {
-                await _visibility.InvokeVoidAsync("dispose");
-                await _visibility.DisposeAsync();
-            }
-
-            if (_module is not null)
-            {
-                await _module.DisposeAsync();
-            }
+            await _visibility.DisposeAsync();
         }
-        catch (Exception ex) when (ex is JSDisconnectedException or JSException or TaskCanceledException)
-        {
-            // The circuit is already gone; nothing to release.
-        }
-
-        _self?.Dispose();
     }
 }

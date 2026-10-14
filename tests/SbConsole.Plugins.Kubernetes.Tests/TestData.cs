@@ -193,7 +193,7 @@ internal static class TestData
     /// <summary>
     /// Mockup 3c, captured at <see cref="T0"/>: checkout/payment-gateway, desired 4 ready 2, RollingUpdate 25% / 0. Revision 23
     /// (2.14.1, 38 min old) has two OOM-crash-looping pods; revision 22 (2.13.4) still serves two; revisions 19–21 are kept
-    /// at desired 0. Progressing=False ProgressDeadlineExceeded, one Service with 2 endpoints, memory limit 512 Mi.
+    /// at desired 0. Progressing=False ProgressDeadlineExceeded since 28 min (the 600 s deadline after the rollout began), one Service with 2 endpoints, memory limit 512 Mi.
     /// </summary>
     public static K8sDeploymentDetail PaymentGatewayDetail()
     {
@@ -202,7 +202,7 @@ internal static class TestData
         [
             new K8sCondition("Available", "True", "MinimumReplicasAvailable", "Deployment has minimum availability.", T0.AddDays(-9)),
             new K8sCondition("Progressing", "False", "ProgressDeadlineExceeded",
-                "ReplicaSet \"payment-gateway-7d9f8\" has timed out progressing.", T0.AddMinutes(-38)),
+                "ReplicaSet \"payment-gateway-7d9f8\" has timed out progressing.", T0.AddMinutes(-28)),
             new K8sCondition("ReplicaFailure", "False", null, null, T0.AddDays(-9)),
         ]) with
         {

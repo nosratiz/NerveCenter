@@ -33,7 +33,7 @@ public static class RolloutHistory
         }
 
         var current = d.ReplicaSets.FirstOrDefault(r => r.IsCurrent);
-        var started = current?.CreatedAt ?? Progressing(d)?.LastTransition ?? now;
+        var started = RolloutStarted(d, current) ?? now;
         var crashLooping = current is null
             ? []
             : d.Pods.Where(p => p.ReplicaSet == current.Name && p.Status == "CrashLoopBackOff").ToList();
@@ -61,6 +61,16 @@ public static class RolloutHistory
             .OrderByDescending(r => r.Revision)
             .FirstOrDefault()?.Revision;
     }
+
+    /// <summary>
+    /// When the stuck rollout began. Progressing turns False once <c>progressDeadlineSeconds</c> pass without progress, so
+    /// the start is that transition minus the deadline. That holds after a rollback onto an old ReplicaSet, whose creation
+    /// time would overstate it; the current ReplicaSet's creation is only the fallback.
+    /// </summary>
+    private static DateTimeOffset? RolloutStarted(K8sDeploymentDetail d, K8sReplicaSet? current) =>
+        Progressing(d)?.LastTransition is { } turnedFalse && d.ProgressDeadlineSeconds is { } deadline
+            ? turnedFalse - TimeSpan.FromSeconds(deadline)
+            : current?.CreatedAt ?? Progressing(d)?.LastTransition;
 
     private static K8sReplicaSet? Serving(K8sDeploymentDetail d) =>
         d.ReplicaSets

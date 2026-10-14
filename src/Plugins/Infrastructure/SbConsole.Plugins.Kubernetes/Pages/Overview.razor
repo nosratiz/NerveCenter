@@ -251,9 +251,7 @@
     private int _retryIn = RetrySeconds;
     private ITimer? _retryTimer;
     private bool _disposed;
-    private IJSObjectReference? _module;
-    private IJSObjectReference? _visibility;
-    private DotNetObjectReference<Overview>? _self;
+    private K8sVisibilityHook? _visibility;
 
     /// <summary>The overview when it is current (not stale, no error): the cards that need live data render only from this.</summary>
     private K8sOverview? Fresh => _view is { Error: null, IsStale: false, Overview: { } o } ? o : null;
@@ -262,53 +260,21 @@
 
     private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
 
-    protected override void OnInitialized() =>
+    protected override void OnInitialized()
+    {
         _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _visibility = new K8sVisibilityHook(SetHidden);
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (firstRender && _visibility is not null)
         {
-            return;
-        }
-
-        try
-        {
-            var module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
-            if (module is null)
-            {
-                return;
-            }
-
-            if (_disposed)
-            {
-                await module.DisposeAsync();
-                return;
-            }
-
-            _module = module;
-
-            _self = DotNetObjectReference.Create(this);
-            var visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
-            if (_disposed)
-            {
-                // DisposeAsync already ran while the hook was being installed: release it here or the browser keeps a
-                // listener that calls a disposed DotNetObjectReference.
-                await visibility.InvokeVoidAsync("dispose");
-                await visibility.DisposeAsync();
-                return;
-            }
-
-            _visibility = visibility;
-        }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
-        {
-            // Without the visibility hook the poller simply keeps running while the tab is hidden.
+            await _visibility.StartAsync(JS);
         }
     }
 
-    /// <summary>Called by kubernetes.js <c>watchVisibility</c>: no polling while the browser tab is hidden.</summary>
-    [JSInvokable]
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
     public Task SetHidden(bool hidden)
     {
         if (_disposed || _poller is null)
@@ -541,24 +507,9 @@
         StopRetry();
         _cts.Cancel();
         _cts.Dispose();
-        try
+        if (_visibility is not null)
         {
-            if (_visibility is not null)
-            {
-                await _visibility.InvokeVoidAsync("dispose");
-                await _visibility.DisposeAsync();
-            }
-
-            if (_module is not null)
-            {
-                await _module.DisposeAsync();
-            }
+            await _visibility.DisposeAsync();
         }
-        catch (Exception ex) when (ex is JSDisconnectedException or JSException or TaskCanceledException)
-        {
-            // The circuit is already gone; nothing to release.
-        }
-
-        _self?.Dispose();
     }
 }

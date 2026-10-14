@@ -110,6 +110,40 @@ public class RolloutHistoryTests
         RolloutHistory.Stuck(d, T0).Should().BeNull();
     }
 
+    private static K8sDeploymentDetail WithProgressing(K8sDeploymentDetail d, DateTimeOffset? lastTransition) => d with
+    {
+        Deployment = d.Deployment with
+        {
+            Conditions = [new K8sCondition("Progressing", "False", "ProgressDeadlineExceeded", null, lastTransition)],
+        },
+    };
+
+    [Fact]
+    public void Stuck_after_a_rollback_reusing_an_old_replica_set_measures_from_the_deadline_not_the_replica_set_age()
+    {
+        // Rolled back onto revision 23's nine-day-old ReplicaSet; the 600 s deadline ran out 5 minutes ago.
+        var d = WithProgressing(TestData.PaymentGatewayDetail(), T0.AddMinutes(-5));
+        d = d with { ReplicaSets = d.ReplicaSets.Select(r => r.IsCurrent ? r with { CreatedAt = T0.AddDays(-9) } : r).ToList() };
+
+        RolloutHistory.Stuck(d, T0)!.ProgressingFor.Should().Be(TimeSpan.FromMinutes(15));
+    }
+
+    [Fact]
+    public void Stuck_without_a_progress_deadline_falls_back_to_the_current_replica_set_age()
+    {
+        var d = WithProgressing(TestData.PaymentGatewayDetail(), T0.AddMinutes(-5)) with { ProgressDeadlineSeconds = null };
+
+        RolloutHistory.Stuck(d, T0)!.ProgressingFor.Should().Be(TimeSpan.FromMinutes(38));
+    }
+
+    [Fact]
+    public void Stuck_without_a_transition_time_falls_back_to_the_current_replica_set_age()
+    {
+        var d = WithProgressing(TestData.PaymentGatewayDetail(), null);
+
+        RolloutHistory.Stuck(d, T0)!.ProgressingFor.Should().Be(TimeSpan.FromMinutes(38));
+    }
+
     [Fact]
     public void Stuck_without_any_serving_old_revision_has_no_serving_revision()
     {
