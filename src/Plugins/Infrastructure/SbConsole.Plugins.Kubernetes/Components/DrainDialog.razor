@@ -313,10 +313,10 @@
         _error = null;
         _total = _plan.Pods.Count(p => p.Group != DrainGroup.DaemonSet);
         var closable = MudDialog.Options;
-        await MudDialog.SetOptionsAsync(closable with { CloseButton = false, CloseOnEscapeKey = false });
         var progress = new UiProgress(p => InvokeAsync(() => OnProgress(p)));
         try
         {
+            await MudDialog.SetOptionsAsync(closable with { CloseButton = false, CloseOnEscapeKey = false });
             var result = await DrainHandler.HandleAsync(
                 new DrainCommand(new K8sTarget(ConnectionId, ConnectionName, null, Node.Name), new DrainOptions(_emptyDir, _force, _grace)),
                 progress, _cts.Token);

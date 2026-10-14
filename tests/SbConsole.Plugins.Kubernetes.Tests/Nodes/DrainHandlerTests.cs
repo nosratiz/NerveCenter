@@ -351,6 +351,50 @@ public class DrainHandlerTests
     }
 
     [Fact]
+    public async Task Evictable_pods_are_attempted_before_pdb_blocked_ones()
+    {
+        Arrange([Ledger(1), Ledger(2), Api(1)], [LedgerPdb]);
+        var order = new List<string>();
+        _ops.EvictPodAsync(Secret, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lock (order)
+                {
+                    order.Add(ci.ArgAt<string>(2));
+                }
+
+                return K8sEvictionOutcome.Evicted;
+            });
+
+        await Handler().HandleAsync(Command(), _progress).WaitAsync(TimeSpan.FromSeconds(10));
+
+        order.Should().HaveCount(3);
+        order[0].Should().Be("api-1");
+    }
+
+    [Fact]
+    public async Task A_forced_delete_is_not_sent_when_the_drain_was_stopped_while_the_eviction_was_in_flight()
+    {
+        Arrange([Ledger(1)], [LedgerPdb]);
+        var gate = new TaskCompletionSource<K8sEvictionOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ops.EvictPodAsync(Secret, "payments", "ledger-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        using var cts = new CancellationTokenSource();
+
+        var run = Handler().HandleAsync(Command(force: true), _progress, cts.Token);
+        await WaitForAsync(() => EvictCalls() == 1);
+        await cts.CancelAsync();
+        gate.SetResult(K8sEvictionOutcome.BlockedByPdb);
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await _ops.DidNotReceiveWithAnyArgs().DeletePodAsync(default!, default!, default!, default, default);
+        result.Value!.Cancelled.Should().BeTrue();
+        result.Value.Pods.Single().Should().Be(
+            new DrainPodResult("payments", "ledger-1", DrainPodOutcome.Blocked, "PodDisruptionBudget still blocking (stopped)"));
+        AuditDetail().Should().Contain("blocked 1").And.Contain("deleted 0").And.Contain("cancelled after 1 of 1");
+        AuditSucceeded().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task An_ownerless_pod_under_a_blocking_pdb_is_never_evicted_without_force()
     {
         var labels = new Dictionary<string, string> { ["app"] = "debug" };

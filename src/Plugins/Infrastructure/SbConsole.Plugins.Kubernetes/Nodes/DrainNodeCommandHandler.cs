@@ -154,6 +154,11 @@ public sealed class DrainNodeCommandHandler(
                 }
 
                 blocked = true;
+                if (token.IsCancellationRequested)
+                {
+                    return Stopped(); // stopped or out of time while the eviction was in flight: no new destructive call
+                }
+
                 if (options.Force)
                 {
                     await operations.DeletePodAsync(secret, ns, name, options.GracePeriodSeconds, CancellationToken.None);
