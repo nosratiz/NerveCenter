@@ -598,13 +598,14 @@ docker compose --profile kubernetes up -d
 | Service    | Host address             | What it is                                                         |
 |------------|--------------------------|--------------------------------------------------------------------|
 | `k3s`      | `https://localhost:6443` | Single-node k3s v1.30 (Traefik off), static-token auth, privileged |
-| `k3s-seed` | (one-shot)               | Applies `docker/kubernetes/seed/*.yaml`; its log ends with `done`  |
+| `k3s-seed` | (one-shot)               | `alpine/k8s` image; applies `docker/kubernetes/seed/*.yaml`; its log ends with `done` |
 
 The API server is also `https://k3s:6443` on the compose network; both names are in its
 certificate, but the demo kubeconfigs use `insecure-skip-tls-verify: true` anyway because the CA
 is regenerated with the volume. The host port is `K3S_PORT`. First start takes about a minute
 (k3s boot plus image pulls). The seed is idempotent (`kubectl apply`); re-run it with
-`docker compose --profile kubernetes up -d k3s-seed`.
+`docker compose --profile kubernetes up -d k3s-seed`. Re-running the seed resets the demo state
+(workloads, ConfigMaps and the regenerated TLS secret go back to their seeded form).
 
 Auth is two static bearer tokens from `docker/kubernetes/tokens.csv`. **They are local-only demo
 values, checked in on purpose; never reuse them anywhere.**
@@ -617,7 +618,7 @@ values, checked in on purpose; never reuse them anywhere.**
 The bindings (`seed/01-rbac.yaml`) are mounted into k3s's auto-deploy manifests directory rather
 than applied by the seed: the tokens carry no groups, so the admin user couldn't grant itself
 anything. The `k3s` container has a fixed `hostname` so the node keeps its name when the
-container is recreated.
+container is recreated (`k3s-node-1`).
 
 What each namespace demonstrates:
 
@@ -635,7 +636,8 @@ The handler and page tests cover those states with substituted operations.
 
 Demo connections: `docker/sqlite/demo-connections.json` holds `k3s-local` (admin token, tag
 `prod`, so destructive actions ask for the typed name) and `k3s-local-viewer` (viewer token, tag
-`demo`, the read-only state). Both use `server: https://k3s:6443`, which is how the containerised
+`demo`; read-only, and it can't list nodes, Secrets or `events.k8s.io` events, so the plugin shows
+those as not permitted or falls back to core events). Both use `server: https://k3s:6443`, which is how the containerised
 app (`--profile app`, same compose network) reaches the cluster. For `dotnet run` on the host,
 copy the demo file outside the repo, replace `https://k3s:6443` with `https://localhost:6443` in
 the two `kubernetes` entries, and point `SBC_DEMO_CONNECTIONS` at the copy.

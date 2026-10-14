@@ -16,7 +16,7 @@ public sealed class K8sPoller(TimeProvider clock, TimeSpan interval, Func<Task> 
     /// <summary>Set while a dialog is open.</summary>
     public bool Paused { get; set; }
 
-    /// <summary>Set from kubernetes.js <c>watchVisibility</c> (the page's [JSInvokable] SetHidden).</summary>
+    /// <summary>Set from kubernetes.js <c>watchVisibility</c> (via <c>K8sVisibilityHook</c>).</summary>
     public bool Hidden { get; set; }
 
     public void Start()
