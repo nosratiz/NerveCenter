@@ -71,7 +71,7 @@
                 <MudTh>Wait event</MudTh><MudTh>Query</MudTh><MudTh Class="pg-num">Duration</MudTh><MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
-                @{ var b = context.Backend; }
+                @{ var b = context.Backend; MudMenu? menu = null; }
                 <MudTd>
                     <span class="pg-pid pg-mono" id="pg-backend-@b.Pid">@(context.Depth > 0 ? "↳ " : "")@b.Pid</span>
                     @if (context.BlocksCount > 0)
@@ -93,12 +93,12 @@
                 <MudTd Class="pg-row-actions">
                     <MudButton Variant="Variant.Text" Size="Size.Small" Class="pg-cancel" Disabled="!CanCancel(context)"
                                OnClick="() => CancelAsync(context)">Cancel</MudButton>
-                    <MudMenu Class="pg-row-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for pid {b.Pid}")">
+                    <MudMenu @ref="menu" Class="pg-row-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for pid {b.Pid}")">
                         <MudMenuItem Class="pg-copy-query" OnClick="() => CopyAsync(b.Query)">Copy query</MudMenuItem>
                         <MudMenuItem Class="pg-filter-user" OnClick="() => FilterByUser(b.User)">Filter by @b.User</MudMenuItem>
-                        <MudMenuItem Class="pg-cancel-menu" Disabled="!CanCancel(context)" OnClick="() => CancelAsync(context)">Cancel query</MudMenuItem>
+                        <MudMenuItem Class="pg-cancel-menu" Disabled="!CanCancel(context)" OnClick="() => CloseThenAsync(menu, () => CancelAsync(context))">Cancel query</MudMenuItem>
                         <MudDivider />
-                        <MudMenuItem Class="pg-terminate pg-menu-danger" Disabled="!CanTerminate(context)" OnClick="() => TerminateAsync(context)">Terminate backend…</MudMenuItem>
+                        <MudMenuItem Class="pg-terminate pg-menu-danger" Disabled="!CanTerminate(context)" OnClick="() => CloseThenAsync(menu, () => TerminateAsync(context))">Terminate backend…</MudMenuItem>
                     </MudMenu>
                 </MudTd>
             </RowTemplate>
@@ -353,6 +353,17 @@
     {
         _userFilter = null;
         Recompute();
+    }
+
+    // The popover must be gone before a dialog opens, or it stays visible behind the dialog's overlay.
+    private static async Task CloseThenAsync(MudMenu? menu, Func<Task> action)
+    {
+        if (menu is not null)
+        {
+            await menu.CloseMenuAsync();
+        }
+
+        await action();
     }
 
     private async Task JumpToAsync(int pid)

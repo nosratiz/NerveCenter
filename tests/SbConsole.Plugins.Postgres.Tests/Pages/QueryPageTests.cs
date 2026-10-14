@@ -227,6 +227,18 @@ public class QueryPageTests : PgPageTestBase
     }
 
     [Fact]
+    public void Url_keeps_sql_so_a_reinitialised_page_still_prefills()
+    {
+        // Root cause of the lost prefill: the page's own URL write dropped sql, so the interactive instance (which re-reads
+        // Navigation.Uri after prerender) found nothing to prefill from.
+        var cut = RenderQuery("&db=app&sql=" + Uri.EscapeDataString("SELECT 1"));
+        cut.WaitForAssertion(() => Nav.Uri.Should().Contain("db=app"));
+        Nav.Uri.Should().Contain("sql=SELECT%201");
+
+        cut.Find(".pg-editor textarea").GetAttribute("value").Should().Be("SELECT 1");
+    }
+
+    [Fact]
     public void Export_csv_calls_the_export_handler_with_the_editor_text()
     {
         Operations.ExportQueryCsvAsync(Secret, "app", "select 1", 30, Arg.Any<CancellationToken>())

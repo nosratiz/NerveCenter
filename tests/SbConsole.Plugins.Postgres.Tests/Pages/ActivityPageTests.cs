@@ -77,7 +77,7 @@ public class ActivityPageTests : PgPageTestBase
         rows[1].ClassList.Should().Contain("pg-depth-1");
         rows[2].ClassList.Should().Contain("pg-depth-2");
         rows[1].TextContent.Should().Contain("↳");
-        rows[0].QuerySelector(".pg-blocks-chip")!.TextContent.Should().Contain("blocks 2");
+        rows[0].QuerySelector(".pg-blocks-chip")!.TextContent.Should().Contain("blocks 3");
         RowOf(cut, OwnPid).QuerySelector(".pg-own-chip")!.TextContent.Should().Contain("this console");
         RowOf(cut, Blocker).QuerySelector(".pg-own-chip").Should().BeNull();
     }
@@ -89,7 +89,7 @@ public class ActivityPageTests : PgPageTestBase
         var cut = RenderPage();
 
         var text = cut.Find(".pg-blocker-banner").TextContent;
-        text.Should().Contain("pid 48213 has been idle in transaction for 14m 02s and is blocking 2 sessions on orders.")
+        text.Should().Contain("pid 48213 has been idle in transaction for 14m 02s and is blocking 3 sessions on orders.")
             .And.Contain("Cancelling does nothing to an idle backend — terminating it will.")
             .And.Contain("Jump to blocker");
     }
@@ -209,12 +209,37 @@ public class ActivityPageTests : PgPageTestBase
         seen.IsProd.Should().BeTrue();
         seen.Destructive.Should().BeTrue();
         seen.AuditAction.Should().Be("pg.backend.terminate");
-        seen.Consequence.Should().Contain("pg_terminate_backend").And.Contain("14m 02s").And.Contain("api").And.Contain("The 2 blocked sessions will proceed.");
+        seen.Consequence.Should().Contain("pg_terminate_backend").And.Contain("14m 02s").And.Contain("api").And.Contain("The 3 blocked sessions will proceed.");
         seen.Details.Should().Contain(d => d.Label == "pid" && d.Value == "48213");
         seen.Details.Should().Contain(d => d.Label == "user" && d.Value == "app_rw · api · 10.0.4.18");
-        seen.Details.Should().Contain(d => d.Label == "state" && d.Value == "idle in transaction · 14m 02s · blocks 2");
+        seen.Details.Should().Contain(d => d.Label == "state" && d.Value == "idle in transaction · 14m 02s · blocks 3");
         seen.Details.Should().Contain(d => d.Label == "query");
         cut.WaitForAssertion(() => Operations.Received(1).TerminateBackendAsync(Secret, Blocker, Arg.Any<CancellationToken>()));
+    }
+
+    [Fact]
+    public void Row_menu_closes_before_the_terminate_confirmation_opens()
+    {
+        Arrange();
+        var gate = new TaskCompletionSource<bool>();
+        Confirmation.ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var cut = RenderPage();
+
+        OpenRowMenu(cut, Blocker);
+        cut.Find(".mud-popover-open .pg-terminate").Click();
+
+        cut.WaitForAssertion(() => Confirmation.Received(1).ConfirmAsync(Arg.Any<ConfirmationRequest>(), Arg.Any<CancellationToken>()));
+        cut.WaitForAssertion(() => cut.FindAll(".mud-popover-open .pg-terminate").Should().BeEmpty());
+        gate.SetResult(false);
+    }
+
+    [Fact]
+    public void Banner_counts_transitive_victims()
+    {
+        Arrange();
+        var cut = RenderPage();
+
+        cut.Find(".pg-blocker-banner").TextContent.Should().Contain("blocking 3 sessions");
     }
 
     [Fact]

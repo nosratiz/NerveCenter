@@ -195,6 +195,7 @@
     private string? _database;
     private string _lastUrl = "";
     private string _sql = "";
+    private string _prefill = "";
     private bool _write;
     private int _toggleKey;
     private int _rowCap = 1_000;
@@ -237,6 +238,7 @@
         if (query.TryGetValue("sql", out var sql))
         {
             _sql = sql.ToString();
+            _prefill = _sql;
         }
     }
 
@@ -352,7 +354,8 @@
         UpdateUrl();
     }
 
-    // Composed from tracked state, never from Navigation.Uri: it lags a NavigateTo on Blazor Server. sql is not written back.
+    // Composed from tracked state, never from Navigation.Uri: it lags a NavigateTo on Blazor Server. sql is carried only while the editor still holds the prefill:
+    // prerender and the interactive instance each initialise from the URL, so dropping it early loses the prefill.
     private void UpdateUrl()
     {
         if (_connection is not { } connection || _disposed)
@@ -364,6 +367,7 @@
         {
             ["connectionId"] = connection.Id.ToString(),
             ["db"] = string.IsNullOrEmpty(_database) ? null : _database,
+            ["sql"] = _prefill.Length > 0 && _sql == _prefill ? _prefill : null,
         });
         if (uri != _lastUrl)
         {

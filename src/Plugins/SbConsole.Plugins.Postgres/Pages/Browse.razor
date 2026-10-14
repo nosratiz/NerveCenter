@@ -1081,6 +1081,17 @@
         }
     };
 
+    // The popover must be gone before a dialog opens, or it stays visible behind the dialog's overlay.
+    private static async Task CloseThenAsync(MudMenu? menu, Func<Task> action)
+    {
+        if (menu is not null)
+        {
+            await menu.CloseMenuAsync();
+        }
+
+        await action();
+    }
+
     private async Task ReindexAsync(PgIndex index)
     {
         if (_connection is not { } connection || _detail is not { } detail || _indexBusy || _disposed)
@@ -1169,6 +1180,7 @@
                 <MudTh Class="pg-num">Scans</MudTh><MudTh Class="pg-num">Tuples read</MudTh><MudTh>Flags</MudTh><MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
+                    @{ MudMenu? menu = null; }
                     <MudTd Class="pg-mono">@context.Name</MudTd>
                     <MudTd Class="pg-mono">@context.ColumnsText</MudTd>
                     <MudTd Class="pg-mono">@context.Method</MudTd>
@@ -1185,12 +1197,12 @@
                         </div>
                     </MudTd>
                     <MudTd>
-                        <MudMenu Class="pg-index-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
+                        <MudMenu @ref="menu" Class="pg-index-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
                             <MudMenuItem Class="pg-index-copy" OnClick="() => CopyAsync(context.Definition)">Copy definition</MudMenuItem>
-                            <MudMenuItem Class="pg-index-reindex" Disabled="!ReadWrite || _indexBusy" OnClick="() => ReindexAsync(context)">REINDEX CONCURRENTLY</MudMenuItem>
+                            <MudMenuItem Class="pg-index-reindex" Disabled="!ReadWrite || _indexBusy" OnClick="() => CloseThenAsync(menu, () => ReindexAsync(context))">REINDEX CONCURRENTLY</MudMenuItem>
                             <MudDivider />
                             <MudMenuItem Class="pg-index-drop pg-menu-danger" Disabled="@(!ReadWrite || _indexBusy || context.BacksConstraint)" title="@DropTitle(context)"
-                                         OnClick="() => DropAsync(context)">Drop index…</MudMenuItem>
+                                         OnClick="() => CloseThenAsync(menu, () => DropAsync(context))">Drop index…</MudMenuItem>
                         </MudMenu>
                     </MudTd>
             </RowTemplate>

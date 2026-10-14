@@ -92,6 +92,7 @@
                     <MudTh>Dead %</MudTh><MudTh Class="pg-num">Bloat est.</MudTh><MudTh>Last vacuum</MudTh><MudTh>Last autovacuum</MudTh><MudTh>Last analyze</MudTh><MudTh></MudTh>
                 </HeaderContent>
                 <RowTemplate>
+                    @{ MudMenu? menu = null; }
                     <MudTd Class="pg-mono">@context.Schema.@context.Name</MudTd>
                     <MudTd Class="pg-mono pg-num">@PgFormat.Bytes(context.TotalBytes)</MudTd>
                     <MudTd Class="pg-mono pg-num">@PgFormat.Compact(context.Live)</MudTd>
@@ -124,9 +125,9 @@
                                    title="@ReadOnlyTitle" OnClick="() => RunOneAsync(context, PgMaintenanceKind.Vacuum)">VACUUM</MudButton>
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pg-analyze" Disabled="@(!ReadWrite || _acting)"
                                    title="@ReadOnlyTitle" OnClick="() => RunOneAsync(context, PgMaintenanceKind.Analyze)">ANALYZE</MudButton>
-                        <MudMenu Class="pg-maintenance-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
+                        <MudMenu @ref="menu" Class="pg-maintenance-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" AriaLabel="@($"Actions for {context.Name}")">
                             <MudMenuItem Class="pg-vacuum-full pg-menu-danger" Disabled="@(!ReadWrite || _acting)"
-                                         OnClick="() => VacuumFullAsync(context)">VACUUM FULL…</MudMenuItem>
+                                         OnClick="() => CloseThenAsync(menu, () => VacuumFullAsync(context))">VACUUM FULL…</MudMenuItem>
                         </MudMenu>
                     </MudTd>
                 </RowTemplate>
@@ -381,6 +382,17 @@
         }
 
         await ReloadIfSameAsync(connection.Id, database);
+    }
+
+    // The popover must be gone before a dialog opens, or it stays visible behind the dialog's overlay.
+    private static async Task CloseThenAsync(MudMenu? menu, Func<Task> action)
+    {
+        if (menu is not null)
+        {
+            await menu.CloseMenuAsync();
+        }
+
+        await action();
     }
 
     private async Task VacuumFullAsync(PgTableHealth table)

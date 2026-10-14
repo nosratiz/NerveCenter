@@ -11,19 +11,12 @@ public static class ActivityTree
     /// is followed by its victims (depth 1, a victim's first visible blocker only), recursively, each backend once.
     /// Cycles: the remaining backends are appended flat at depth 0. Visibility: <paramref name="activeOnly"/> shows only
     /// 'active' backends; otherwise idle backends are hidden unless <paramref name="showIdle"/> is set. HiddenIdle is the
-    /// number of 'idle' backends not visible. BlocksCount is counted over all backends, visible or not.
+    /// number of 'idle' backends not visible. BlocksCount is the transitive victim count (see TransitiveVictims), counted over all backends, visible or not.
     /// </summary>
     public static (IReadOnlyList<ActivityRow> Rows, int HiddenIdle) Build(PgActivity activity, bool activeOnly, bool showIdle)
     {
         var all = activity.Backends;
-        var blocks = new Dictionary<int, int>();
-        foreach (var b in all)
-        {
-            foreach (var blocker in b.BlockedBy.Distinct())
-            {
-                blocks[blocker] = blocks.GetValueOrDefault(blocker) + 1;
-            }
-        }
+        var blocks = all.Select(b => b.Pid).Distinct().ToDictionary(pid => pid, pid => TransitiveVictims(activity, pid));
 
         var visible = all.Where(b => activeOnly ? b.State == "active" : (showIdle || b.State != "idle")).ToList();
         var hidden = all.Count(b => b.State == "idle") - visible.Count(b => b.State == "idle");
@@ -67,6 +60,46 @@ public static class ActivityTree
         }
 
         return (rows, hidden);
+    }
+
+    /// <summary>
+    /// Distinct backends waiting on <paramref name="pid"/> directly or through a chain of waiters. Cycle-safe; the backend
+    /// itself is never counted.
+    /// </summary>
+    public static int TransitiveVictims(PgActivity activity, int pid)
+    {
+        var victimsOf = new Dictionary<int, List<int>>();
+        foreach (var b in activity.Backends)
+        {
+            foreach (var blocker in b.BlockedBy.Distinct())
+            {
+                if (!victimsOf.TryGetValue(blocker, out var list))
+                {
+                    victimsOf[blocker] = list = [];
+                }
+
+                list.Add(b.Pid);
+            }
+        }
+
+        var seen = new HashSet<int> { pid };
+        var queue = new Queue<int>();
+        queue.Enqueue(pid);
+        while (queue.Count > 0)
+        {
+            if (victimsOf.TryGetValue(queue.Dequeue(), out var next))
+            {
+                foreach (var victim in next)
+                {
+                    if (seen.Add(victim))
+                    {
+                        queue.Enqueue(victim);
+                    }
+                }
+            }
+        }
+
+        return seen.Count - 1;
     }
 
     /// <summary>

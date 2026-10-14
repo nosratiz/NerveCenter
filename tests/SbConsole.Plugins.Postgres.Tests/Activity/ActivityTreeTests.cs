@@ -147,4 +147,32 @@ public class ActivityTreeTests
         worst!.Backend.Pid.Should().Be(10);
         worst.BlocksCount.Should().Be(2);
     }
+
+    [Fact]
+    public void TransitiveVictims_counts_the_whole_chain_below_a_blocker()
+    {
+        var a = A(1, B(10), B(11, blockedBy: [10]), B(12, blockedBy: [11]), B(13, blockedBy: [10, 11]));
+
+        ActivityTree.TransitiveVictims(a, 10).Should().Be(3);
+        ActivityTree.TransitiveVictims(a, 11).Should().Be(2);
+        ActivityTree.TransitiveVictims(a, 12).Should().Be(0);
+        ActivityTree.TransitiveVictims(a, 999).Should().Be(0);
+    }
+
+    [Fact]
+    public void TransitiveVictims_terminates_on_a_cycle_and_never_counts_the_blocker_itself()
+    {
+        var a = A(1, B(10, blockedBy: [12]), B(11, blockedBy: [10]), B(12, blockedBy: [11]));
+
+        ActivityTree.TransitiveVictims(a, 10).Should().Be(2);
+    }
+
+    [Fact]
+    public void BlocksCount_is_transitive()
+    {
+        var (rows, _) = ActivityTree.Build(A(1, B(10, xactMinutesAgo: 5), B(11, blockedBy: [10], xactMinutesAgo: 4), B(12, blockedBy: [11], xactMinutesAgo: 3)), false, false);
+
+        rows.Single(r => r.Backend.Pid == 10).BlocksCount.Should().Be(2);
+        rows.Single(r => r.Backend.Pid == 11).BlocksCount.Should().Be(1);
+    }
 }
