@@ -39,3 +39,11 @@ export function scrollToBottom(id) {
         element.scrollTop = element.scrollHeight;
     }
 }
+
+// Log viewer search: brings the current match into view.
+export function scrollIntoView(id) {
+    const element = document.getElementById(id);
+    if (element) {
+        element.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+}

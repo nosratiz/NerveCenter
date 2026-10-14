@@ -102,6 +102,12 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, NullLogger<GetPodDetailQueryHandler>.Instance));
         Services.AddSingleton(new DeletePodCommandHandler(
             Operations, Connections, Audit, NullLogger<DeletePodCommandHandler>.Instance));
+        Services.AddSingleton(new ReadPodLogsQueryHandler(
+            Operations, Connections, NullLogger<ReadPodLogsQueryHandler>.Instance));
+        Services.AddSingleton(new FollowPodLogsQueryHandler(
+            Operations, Connections, NullLogger<FollowPodLogsQueryHandler>.Instance));
+        Services.AddSingleton(new DownloadPodLogsQueryHandler(
+            Operations, Connections, NullLogger<DownloadPodLogsQueryHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

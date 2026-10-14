@@ -64,15 +64,6 @@ public sealed partial class KubernetesOperations(KubernetesClientFactory clients
 
     // ---- Not implemented yet: each later task replaces its own. ----
 
-    public Task<IReadOnlyList<string>> ReadLogsAsync(string secret, string ns, string pod, K8sLogRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public IAsyncEnumerable<string> FollowLogsAsync(string secret, string ns, string pod, K8sLogRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
-    public Task<byte[]> DownloadAllLogsAsync(string secret, string ns, string pod, CancellationToken ct = default) =>
-        throw new NotImplementedException();
-
     public Task<IReadOnlyList<K8sNodeInfo>> ListNodesAsync(string secret, CancellationToken ct = default) =>
         throw new NotImplementedException();
 

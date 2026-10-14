@@ -1,0 +1,795 @@
+@* Mockup 3d, spec §7: one pod — facts, containers (termination reason as the loudest thing), and tabs for Logs, Events,
+   Describe (read-only YAML) and Env (Secret values never shown). No connection picker: the cluster comes from ?connectionId=,
+   looked up server-side. ?container= / ?previous= preselect the log viewer. *@
+@page "/p/kubernetes/pods/{Namespace}/{Name}"
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Kubernetes.Access
+@using SbConsole.Plugins.Kubernetes.Pods
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject GetPodDetailQueryHandler GetDetail
+@inject GetPermissionsQueryHandler GetPermissions
+@inject GetResourceYamlQueryHandler GetResourceYaml
+@inject DownloadPodLogsQueryHandler DownloadLogs
+@inject DeletePodCommandHandler DeleteHandler
+@inject IConnectionProvider Connections
+@inject IConfirmationService Confirmation
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@Name · Pod</PageTitle>
+
+<div class="k8s-page k8s-pod">
+    <K8sPageHeader Title="">
+        <Chips>
+            <MudBreadcrumbs Items="Crumbs" Class="k8s-breadcrumbs" />
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-kind-chip">Pod</MudChip>
+            @if (_connection?.IsProd == true)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Class="k8s-prod-chip">PROD</MudChip>
+            }
+        </Chips>
+        <Actions>
+            @if (_connection is not null && _detail is not null)
+            {
+                <MudButton Class="k8s-pod-yaml" Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Outlined.Code" OnClick="ViewYamlAsync">YAML</MudButton>
+                <MudMenu Class="k8s-pod-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" Dense="true"
+                         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"More actions for {Name}")">
+                    <MudMenuItem Class="k8s-copy-pod" Icon="@Icons.Material.Outlined.ContentCopy" OnClick="CopyNameAsync">Copy pod name</MudMenuItem>
+                    <MudMenuItem Class="k8s-download-logs" Icon="@Icons.Material.Outlined.Download" OnClick="DownloadLogsAsync">Download logs (all containers)</MudMenuItem>
+                    @if (CanDelete)
+                    {
+                        <MudDivider />
+                        <MudMenuItem Class="k8s-delete-pod" Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error" OnClick="DeleteAsync">
+                            <span class="mud-error-text">Delete pod…</span>
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_noConnection)
+    {
+        <div class="k8s-body">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="k8s-pod-noconn">
+                This link doesn't say which cluster to use, or that cluster is no longer saved.
+                <MudLink Href="@KubernetesPlugin.WorkloadsHref">Open Workloads</MudLink> and choose the pod there.
+            </MudAlert>
+        </div>
+    }
+    else if (_connection is not null)
+    {
+        <div class="k8s-body">
+            @if (_error is not null)
+            {
+                <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Title="@($"Can't load pod {Namespace}/{Name}.")" Class="k8s-pod-error">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-pod-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                </K8sErrorAlert>
+            }
+
+            @if (_gone)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="k8s-pod-gone">
+                    Pod @Namespace/@Name no longer exists.
+                    <MudLink Href="@WorkloadsLink(Namespace)">Back to Workloads</MudLink>
+                </MudAlert>
+            }
+            else if (_detail is { } d)
+            {
+                @Facts(d)
+                @ContainersCard(d)
+                @Tabs(d)
+            }
+            else if (_error is null)
+            {
+                <div class="k8s-wl-loading">
+                    @for (var i = 0; i < 4; i++)
+                    {
+                        <MudSkeleton Height="28px" />
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(10);
+    internal const int EnvRowCap = 20;
+    internal const string Masked = "••••••••";
+
+    [Parameter] public string Namespace { get; set; } = "";
+
+    [Parameter] public string Name { get; set; } = "";
+
+    private readonly CancellationTokenSource _cts = new();
+    private K8sPoller? _poller;
+    private ConnectionInfo? _connection;
+    private bool _noConnection;
+    private K8sPermissions? _permissions;
+    private K8sPodDetail? _detail;
+    private bool _gone;
+    private string? _error;
+    private bool _loading;
+    private string? _key;
+    private int _generation;
+    private K8sDialogGate _dialogs = null!; // OnInitialized; no event can reach the page before it runs
+    private bool _disposed;
+    private K8sVisibilityHook? _visibility;
+    private string? _initialContainer;
+    private bool? _initialPrevious;
+    private int _activeTab;
+    private string? _envContainer;
+    private bool _envAll;
+
+    // ---- Rendering ----
+
+    private RenderFragment Facts(K8sPodDetail d) => __builder =>
+    {
+        var now = Clock.GetUtcNow();
+        var p = d.Pod;
+        var owner = d.OwnerChain.FirstOrDefault();
+        <div class="k8s-facts">
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Phase</span>
+                <span class="k8s-pod-phase">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@PhaseChip.ColorFor(p.Status)" Class="k8s-pod-status">@p.Status</MudChip>
+                    @if (p.Restarts > 0)
+                    {
+                        <span class="k8s-mono">↻ @p.Restarts</span>
+                    }
+                </span>
+                <span class="k8s-tile-caption">@(p.ReadyContainers < p.TotalContainers ? $"{p.Phase} / not ready" : $"{p.Phase} · {p.ReadyContainers}/{p.TotalContainers} ready")</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Node</span>
+                <span class="k8s-mono k8s-fact-value k8s-fact-ellipsis" title="@p.NodeName">@(p.NodeName ?? "—")</span>
+                <span class="k8s-tile-caption">@NodeText(d)</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">IP</span>
+                <span class="k8s-mono k8s-fact-value">@(d.PodIp ?? "—")</span>
+                <span class="k8s-tile-caption">host @(d.HostIp ?? "—")</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">QoS</span>
+                <span class="k8s-mono k8s-fact-value">@d.QosClass</span>
+                <span class="k8s-tile-caption">@QosText(d)</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Owner</span>
+                @if (owner is null)
+                {
+                    <span class="k8s-fact-value k8s-muted">none</span>
+                }
+                else if (DeploymentLink(d) is { } href)
+                {
+                    <MudLink Href="@href" Class="k8s-mono k8s-fact-value k8s-fact-ellipsis">@owner.Kind @owner.Name</MudLink>
+                }
+                else
+                {
+                    <span class="k8s-mono k8s-fact-value k8s-fact-ellipsis">@owner.Kind @owner.Name</span>
+                }
+                <span class="k8s-tile-caption">@(owner?.Revision is { } rev ? $"rev {rev} · " : "")started @K8sFormat.Age(now - p.CreatedAt) ago</span>
+            </MudPaper>
+            <MudPaper Outlined="true" Class="k8s-tile">
+                <span class="k8s-tile-label">Service account</span>
+                <span class="k8s-mono k8s-fact-value k8s-fact-ellipsis">@(d.ServiceAccount ?? "—")</span>
+                <span class="k8s-tile-caption">@Plural(d.VolumeCount, "volume", "volumes") · @Plural(d.SecretMountCount, "secret mount", "secret mounts")</span>
+            </MudPaper>
+        </div>
+    };
+
+    private RenderFragment ContainersCard(K8sPodDetail d) => __builder =>
+    {
+        var now = Clock.GetUtcNow();
+        var init = d.Containers.Count(c => c.IsInit);
+        <MudPaper Outlined="true" Class="k8s-containers-card">
+            <div class="k8s-card-head">
+                <strong>Containers</strong>
+                <span class="k8s-card-note k8s-mono">@(init > 0 ? $"{init} init · " : "")@(d.Containers.Count - init) app</span>
+            </div>
+            <MudSimpleTable Dense="true" Hover="true" Class="k8s-containers">
+                <thead>
+                    <tr><th>Name</th><th>Image</th><th>State</th><th>Last termination</th><th>Restarts</th><th>Ready</th><th>Ports</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in d.Containers)
+                    {
+                        var term = c.LastTermination ?? (c.State == "Terminated" ? c.CurrentTermination : null);
+                        <tr>
+                            <td class="k8s-mono">@(c.IsInit ? "init · " + c.Name : c.Name)</td>
+                            <td class="k8s-mono"><div class="k8s-container-image" title="@c.Image">@c.Image</div></td>
+                            <td><MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@StateColor(c)">@StateText(c)</MudChip></td>
+                            <td>
+                                @if (term is null)
+                                {
+                                    <span class="k8s-muted">—</span>
+                                }
+                                else
+                                {
+                                    <span class="k8s-term-cell">
+                                        @if (IsBadExit(term))
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" Class="k8s-term-chip">exit @term.ExitCode · @(term.Reason ?? "Error")</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="k8s-term-ok">exit @term.ExitCode</MudChip>
+                                        }
+                                        <span class="k8s-mono k8s-muted k8s-term-when">@TermWhen(term, now)</span>
+                                    </span>
+                                }
+                            </td>
+                            <td class="k8s-mono">@c.Restarts</td>
+                            <td>
+                                @if (c.IsInit)
+                                {
+                                    <span class="k8s-muted">—</span>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@(c.Ready ? Color.Success : Color.Error)">@(c.Ready ? "yes" : "no")</MudChip>
+                                }
+                            </td>
+                            <td class="k8s-mono">@(c.Ports.Count == 0 ? "—" : string.Join(" · ", c.Ports))</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    };
+
+    private RenderFragment Tabs(K8sPodDetail d) => __builder =>
+    {
+        <MudTabs Outlined="true" Border="true" KeepPanelsAlive="true" @bind-ActivePanelIndex="_activeTab" Class="k8s-pod-tabs">
+            <MudTabPanel Text="Logs" Icon="@Icons.Material.Outlined.Article">
+                <LogViewer ConnectionId="_connection!.Id" Namespace="@Namespace" Pod="@Name"
+                           Containers="@(d.Containers.Select(LogContainer.From).ToList())"
+                           InitialContainer="@_initialContainer" InitialPrevious="_initialPrevious" />
+            </MudTabPanel>
+            <MudTabPanel Text="@($"Events {d.Events.Count}")" Icon="@Icons.Material.Outlined.Notifications">
+                @EventsTable(d)
+            </MudTabPanel>
+            <MudTabPanel Text="Describe" Icon="@Icons.Material.Outlined.Code">
+                <div class="k8s-pod-describe">
+                    <div class="k8s-describe-head k8s-muted">read-only · managedFields hidden</div>
+                    <YamlView Yaml="@d.DescribeYaml" />
+                </div>
+            </MudTabPanel>
+            <MudTabPanel Text="@($"Env {d.Env.Count}")" Icon="@Icons.Material.Outlined.Key">
+                @EnvTable(d)
+            </MudTabPanel>
+        </MudTabs>
+    };
+
+    private RenderFragment EventsTable(K8sPodDetail d) => __builder =>
+    {
+        var now = Clock.GetUtcNow();
+        if (d.Events.Count == 0)
+        {
+            <div class="k8s-events-empty k8s-muted k8s-pod-events">No recent events for this pod.</div>
+            return;
+        }
+
+        <MudSimpleTable Dense="true" Class="k8s-pod-events">
+            <thead><tr><th>Age</th><th>Type</th><th>Reason</th><th>Message</th><th>Count</th></tr></thead>
+            <tbody>
+                @foreach (var e in d.Events)
+                {
+                    <tr>
+                        <td class="k8s-mono k8s-muted">@K8sFormat.Age(now - e.LastSeen)</td>
+                        <td class="@(e.Type == "Warning" ? "k8s-event-warning" : "k8s-event-normal")">@e.Type</td>
+                        <td class="k8s-mono">@e.Reason</td>
+                        <td>@e.Message</td>
+                        <td class="k8s-mono">×@e.Count</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    };
+
+    private RenderFragment EnvTable(K8sPodDetail d) => __builder =>
+    {
+        var containers = d.Containers.Select(c => c.Name).Where(n => d.Env.Any(e => e.Container == n)).ToList();
+        var selected = _envContainer is not null && containers.Contains(_envContainer) ? _envContainer : DefaultEnvContainer(d, containers);
+        var rows = d.Env.Where(e => e.Container == selected).ToList();
+        var shown = _envAll ? rows : rows.Take(EnvRowCap).ToList();
+        <div class="k8s-env-head">
+            @if (containers.Count > 0)
+            {
+                <MudSelect T="string" Class="k8s-env-container" Label="Container" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Value="selected" ValueChanged="@(v => { _envContainer = v; _envAll = false; })">
+                    @foreach (var name in containers)
+                    {
+                        <MudSelectItem T="string" Value="@name">@name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            <span class="k8s-muted k8s-env-caption"><MudIcon Icon="@Icons.Material.Outlined.Lock" Size="Size.Small" /> values from Secrets are never shown</span>
+        </div>
+        @if (rows.Count == 0)
+        {
+            <div class="k8s-events-empty k8s-muted">No environment variables.</div>
+            return;
+        }
+
+        <MudSimpleTable Dense="true" Class="k8s-env">
+            <thead><tr><th>Name</th><th>Value</th><th>Source</th></tr></thead>
+            <tbody>
+                @foreach (var e in shown)
+                {
+                    <tr class="k8s-env-row">
+                        <td class="k8s-mono">@e.Name</td>
+                        <td class="k8s-mono k8s-env-value">
+                            @if (e.Source == K8sEnvSource.Secret)
+                            {
+                                @* Never e.Value: the model leaves it null for Secrets, and the page must not print one regardless. *@
+                                <span class="k8s-env-masked">@Masked</span>
+                            }
+                            else if (e.Source == K8sEnvSource.Unresolved)
+                            {
+                                <span class="k8s-muted">unresolved</span>
+                            }
+                            else
+                            {
+                                @e.Value
+                            }
+                        </td>
+                        <td>
+                            @if (e.Source == K8sEnvSource.Secret)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@Icons.Material.Outlined.Lock" Class="k8s-env-secret">secret @e.SourceName</MudChip>
+                            }
+                            else
+                            {
+                                <span class="k8s-mono k8s-muted">@SourceText(e)</span>
+                            }
+                        </td>
+                    </tr>
+                }
+                @if (!_envAll && rows.Count > EnvRowCap)
+                {
+                    <tr class="k8s-env-all">
+                        <td colspan="3">
+                            <span class="k8s-muted">@(rows.Count - EnvRowCap) more · </span>
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => _envAll = true)">show all</MudButton>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    };
+
+    // ---- Text helpers ----
+
+    private static string Plural(int n, string one, string many) => n == 1 ? $"{n} {one}" : $"{n} {many}";
+
+    private static string NodeText(K8sPodDetail d)
+    {
+        if (d.Node is not { } node)
+        {
+            return d.Pod.NodeName is null ? "not scheduled" : "—";
+        }
+
+        var ready = node.ReadyStatus == "True" ? "Ready" : node.ReadyStatus == "False" ? "NotReady" : "Unknown";
+        var text = node.MemoryRequestFraction is { } f ? $"{ready} · memory {K8sFormat.Percent(f)}" : ready;
+        return node.Pressures.Count > 0 ? $"{text} · {string.Join(", ", node.Pressures)}" : text;
+    }
+
+    /// <summary>"req {cpu} / {mem} · lim {cpu} / {mem}": requests are the pod's; limits sum the app containers that set one ("—" when none does).</summary>
+    private static string QosText(K8sPodDetail d)
+    {
+        var app = d.Containers.Where(c => !c.IsInit).ToList();
+        static string Sum(IEnumerable<long?> values, Func<long, string> format)
+        {
+            var set = values.OfType<long>().ToList();
+            return set.Count == 0 ? "—" : format(set.Sum());
+        }
+
+        var cpuReq = d.Pod.CpuRequestMilli > 0 ? K8sFormat.Cpu(d.Pod.CpuRequestMilli) : "—";
+        var memReq = d.Pod.MemRequestBytes > 0 ? K8sFormat.Bytes(d.Pod.MemRequestBytes) : "—";
+        var cpuLim = Sum(app.Select(c => c.Resources.CpuLimitMilli), K8sFormat.Cpu);
+        var memLim = Sum(app.Select(c => c.Resources.MemLimitBytes), K8sFormat.Bytes);
+        return $"req {cpuReq} / {memReq} · lim {cpuLim} / {memLim}";
+    }
+
+    private static string StateText(K8sContainer c) => c.State switch
+    {
+        "Running" => "Running",
+        _ when c.StateReason is { } reason => $"{c.State} · {reason}",
+        _ => c.State,
+    };
+
+    private static Color StateColor(K8sContainer c) => c.State switch
+    {
+        "Running" => c.Ready || c.IsInit ? Color.Success : Color.Warning,
+        "Waiting" => c.StateReason is "ContainerCreating" or "PodInitializing" ? Color.Warning : Color.Error,
+        _ => c.CurrentTermination is { ExitCode: not 0 } ? Color.Error : Color.Default,
+    };
+
+    private static bool IsBadExit(K8sTermination t) => t.ExitCode != 0 || t.Reason is "OOMKilled" or "Error";
+
+    private static string TermWhen(K8sTermination t, DateTimeOffset now)
+    {
+        var ago = t.FinishedAt is { } f ? K8sFormat.Ago(now - f) : null;
+        var ran = t.StartedAt is { } s && t.FinishedAt is { } e ? "ran " + K8sFormat.Age(e - s) : null;
+        return string.Join(" · ", new[] { ago, ran }.OfType<string>());
+    }
+
+    private static string SourceText(K8sEnvVar e) => e.Source switch
+    {
+        K8sEnvSource.Literal => "literal",
+        K8sEnvSource.ConfigMap => $"cm {e.SourceName}",
+        K8sEnvSource.FieldRef => $"fieldRef {e.SourceName}",
+        K8sEnvSource.ResourceFieldRef => $"resourceFieldRef {e.SourceName}",
+        K8sEnvSource.Unresolved => e.SourceName is null ? "unresolved" : $"unresolved · {e.SourceName}",
+        _ => e.SourceName ?? "",
+    };
+
+    /// <summary>The container whose env opens first: the one the log viewer opens on, when it has env rows.</summary>
+    private string? DefaultEnvContainer(K8sPodDetail d, IReadOnlyList<string> withEnv)
+    {
+        var app = d.Containers.Where(c => !c.IsInit).ToList();
+        var preferred = _initialContainer
+                        ?? app.FirstOrDefault(c => c is { State: "Waiting", StateReason: "CrashLoopBackOff" })?.Name
+                        ?? app.FirstOrDefault()?.Name;
+        return preferred is not null && withEnv.Contains(preferred) ? preferred : withEnv.FirstOrDefault();
+    }
+
+    /// <summary>The top-level owner when it is a Deployment (its page exists), else null.</summary>
+    private string? DeploymentLink(K8sPodDetail d) =>
+        _connection is { } c && d.Pod.Owner is { Kind: "Deployment" } owner
+            ? $"{KubernetesPlugin.DeploymentHref(Namespace, owner.Name)}?connectionId={c.Id}"
+            : null;
+
+    private IReadOnlyList<BreadcrumbItem> Crumbs
+    {
+        get
+        {
+            if (_connection is not { } c)
+            {
+                return [new BreadcrumbItem(Namespace, null, disabled: true), new BreadcrumbItem(Name, null, disabled: true)];
+            }
+
+            var crumbs = new List<BreadcrumbItem>
+            {
+                new(c.Name, $"{KubernetesPlugin.WorkloadsHref}?connectionId={c.Id}"),
+                new(Namespace, WorkloadsLink(Namespace)),
+            };
+            if (_detail?.Pod.Owner is { } owner)
+            {
+                var href = DeploymentLink(_detail);
+                crumbs.Add(new BreadcrumbItem(owner.Name, href, disabled: href is null));
+            }
+
+            crumbs.Add(new BreadcrumbItem(Name, null, disabled: true));
+            return crumbs;
+        }
+    }
+
+    private string WorkloadsLink(string ns) =>
+        _connection is { } c
+            ? $"{KubernetesPlugin.WorkloadsHref}?connectionId={c.Id}&ns={Uri.EscapeDataString(ns)}"
+            : KubernetesPlugin.WorkloadsHref;
+
+    // ---- RBAC (spec §11): nothing mutating renders until the probe answers; incomplete reviews render everything. ----
+
+    private bool CanDelete => _permissions is { } p && (p.Incomplete || p.Can("", "pods", "delete", Namespace));
+
+    // ---- Lifecycle ----
+
+    protected override void OnInitialized()
+    {
+        _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _dialogs = new K8sDialogGate(_poller);
+        _visibility = new K8sVisibilityHook(SetHidden);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        var connectionId = query.TryGetValue("connectionId", out var raw) && Guid.TryParse(raw.ToString(), out var id) ? id : (Guid?)null;
+        var key = $"{connectionId}/{Namespace}/{Name}";
+        if (key == _key)
+        {
+            return;
+        }
+
+        _key = key;
+        _generation++;
+        _connection = null;
+        _noConnection = false;
+        _permissions = null;
+        _detail = null;
+        _gone = false;
+        _error = null;
+        _envContainer = null;
+        _envAll = false;
+        _poller?.Stop();
+        _initialContainer = query.TryGetValue("container", out var container) && !string.IsNullOrEmpty(container.ToString())
+            ? container.ToString()
+            : null;
+        _initialPrevious = query.TryGetValue("previous", out var previous) && bool.TryParse(previous.ToString(), out var p) ? p : null;
+        _activeTab = query.TryGetValue("tab", out var tab) ? tab.ToString().ToLowerInvariant() switch
+        {
+            "events" => 1,
+            "describe" => 2,
+            "env" => 3,
+            _ => 0,
+        } : 0;
+
+        if (connectionId is not { } cid)
+        {
+            _noConnection = true;
+            return;
+        }
+
+        var generation = _generation;
+        IReadOnlyList<ConnectionInfo> connections;
+        try
+        {
+            connections = await Connections.ListAsync(KubernetesPlugin.Kind, _cts.Token);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
+
+        // IsProd comes from this server-side ConnectionInfo, never from the query string.
+        _connection = connections.FirstOrDefault(c => c.Id == cid);
+        if (_connection is null)
+        {
+            _noConnection = true;
+            return;
+        }
+
+        _poller?.Start();
+        await LoadAsync(background: false, withPermissions: true);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _visibility is not null)
+        {
+            await _visibility.StartAsync(JS);
+        }
+    }
+
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
+    public Task SetHidden(bool hidden)
+    {
+        if (!_disposed && _poller is not null)
+        {
+            _poller.Hidden = hidden;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task LoadAsync() => LoadAsync(background: false, withPermissions: true);
+
+    private async Task LoadAsync(bool background, bool withPermissions)
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            // Sequential on purpose: the handlers share the circuit's scoped services.
+            if (withPermissions || _permissions is null)
+            {
+                var permissions = await GetPermissions.HandleAsync(connection.Id, [Namespace], false, _cts.Token);
+                if (generation != _generation || _disposed)
+                {
+                    return;
+                }
+
+                // A failed lookup leaves the server's 403 as the backstop rather than hiding everything.
+                _permissions = permissions.Value ?? K8sPermissions.All;
+            }
+
+            var result = await GetDetail.HandleAsync(connection.Id, Namespace, Name, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                _detail = result.Value;
+                _gone = result.Value is null;
+                _error = null;
+            }
+            else
+            {
+                // Keep the last detail (if any) and say why it is not fresh.
+                _error = result.Error ?? "Loading the pod failed.";
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _dialogs.IsOpen || _gone)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true, withPermissions: false);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    // ---- Actions ----
+
+    private async Task ViewYamlAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var ct = _cts.Token;
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await YamlDialog.ShowAsync(Dialogs, $"pod/{Name}",
+                () => GetResourceYaml.HandleAsync(connection.Id, K8sResourceKind.Pod, Namespace, Name, ct));
+            return await reference.Result;
+        });
+    }
+
+    private async Task CopyNameAsync()
+    {
+        if (_visibility?.Module is not { } module)
+        {
+            Snackbar.Add("Couldn't copy — select the name and copy it instead.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            await module.InvokeVoidAsync("copyText", Name);
+            Snackbar.Add("Pod name copied.", Severity.Success);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Couldn't copy — select the name and copy it instead.", Severity.Warning);
+        }
+    }
+
+    private async Task DownloadLogsAsync()
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var result = await DownloadLogs.HandleAsync(connection.Id, Namespace, Name, _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess || result.Value is not { } bytes)
+        {
+            Snackbar.Add(result.Error ?? "Downloading the logs failed.", Severity.Error);
+            return;
+        }
+
+        if (_visibility?.Module is not { } module)
+        {
+            Snackbar.Add("Couldn't start the download — reload the page and try again.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            await module.InvokeVoidAsync("downloadFile", $"{Name}.log", streamRef);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException)
+        {
+            Snackbar.Add("Couldn't start the download — reload the page and try again.", Severity.Warning);
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_connection is not { } connection || _detail is not { } d)
+        {
+            return;
+        }
+
+        // IsProd comes from the server-side ConnectionInfo, never from the query string.
+        var owner = d.Pod.Owner;
+        var request = new ConfirmationRequest("Delete pod", Name, connection.IsProd,
+            Consequence: owner is not null ? $"Its {owner.Kind} will create a replacement." : "Nothing owns this pod; it won't come back.",
+            Details:
+            [
+                new ConfirmationDetail("Node", d.Pod.NodeName ?? "—"),
+                new ConfirmationDetail("Status", d.Pod.Status),
+            ],
+            AuditAction: DeletePodCommandHandler.AuditAction,
+            Destructive: true);
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync(request)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await DeleteHandler.HandleAsync(new DeletePodCommand(new K8sTarget(connection.Id, connection.Name, Namespace, Name)), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Delete failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Deleted pod {Name}.", Severity.Success);
+        Navigation.NavigateTo(DeploymentLink(d) ?? WorkloadsLink(Namespace));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+        if (_visibility is not null)
+        {
+            await _visibility.DisposeAsync();
+        }
+    }
+}

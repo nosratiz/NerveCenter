@@ -168,3 +168,33 @@ pre.k8s-log { max-height: 60vh; white-space: pre; }
 .k8s-history-text { min-width: 0; }
 .k8s-history-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .k8s-history-sub { font-size: 0.72rem; }
+
+/* Log viewer (mockup 3d) */
+.k8s-log-viewer { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.k8s-log-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.k8s-log-toolbar .k8s-log-container { flex: 0 0 200px; }
+.k8s-log-toolbar .k8s-log-tail { flex: 0 0 100px; }
+.k8s-log-toolbar .k8s-log-search { flex: 1 1 200px; min-width: 160px; }
+.k8s-log-toolbar .mud-input-control { margin-top: 0; }
+.k8s-log-matches { font-size: 0.75rem; min-width: 3.5em; text-align: right; }
+pre.k8s-log > .k8s-log-line { white-space: pre; min-height: 1.45em; }
+.k8s-log-line.k8s-log-error { color: var(--mud-palette-error); }
+.k8s-log-line.k8s-log-warn { color: var(--mud-palette-warning); }
+.k8s-log-line.k8s-log-info { color: var(--mud-palette-text-primary); }
+pre.k8s-log mark { background: var(--mud-palette-warning-lighten); color: var(--mud-palette-text-primary); border-radius: 2px; }
+pre.k8s-log mark.k8s-log-mark-current { background: var(--mud-palette-warning); color: var(--mud-palette-warning-text); }
+.k8s-log-empty, .k8s-log-ended { font-size: 0.8rem; padding: 0 4px; }
+.k8s-log-exit { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 0.8rem; border-radius: var(--mud-default-borderradius); box-shadow: inset 0 0 0 1px var(--mud-palette-error); color: var(--mud-palette-error); }
+
+/* Pod detail (mockup 3d) */
+.k8s-pod-phase { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.k8s-containers-card, .k8s-pod-tabs { min-width: 0; }
+.k8s-containers { overflow-x: auto; }
+.k8s-containers td, .k8s-containers th, .k8s-env td, .k8s-env th, .k8s-pod-events td, .k8s-pod-events th { font-size: 0.8rem; }
+.k8s-container-image { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k8s-term-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.k8s-term-when { font-size: 0.72rem; }
+.k8s-describe-head, .k8s-env-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 8px 0; font-size: 0.78rem; }
+.k8s-env-head .k8s-env-container { flex: 0 0 220px; }
+.k8s-env-masked { letter-spacing: 0.1em; }
+.k8s-env-value { overflow-wrap: anywhere; }

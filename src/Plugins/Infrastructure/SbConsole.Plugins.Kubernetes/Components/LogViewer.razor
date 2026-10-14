@@ -1,0 +1,593 @@
+@using Microsoft.AspNetCore.Components.Rendering
+@using SbConsole.Plugins.Kubernetes.Pods
+@inject ReadPodLogsQueryHandler ReadLogs
+@inject FollowPodLogsQueryHandler FollowLogs
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* Pod log viewer (mockup 3d, spec §7): container / Current-Previous / Follow / Timestamps / Tail / search toolbar over a
+   <pre> of lines. Log text is untrusted: it is only ever added as text content (never MarkupString), search matches
+   become <mark> elements built here. Following streams into a ring buffer of Tail lines, repainted at most every 250 ms. *@
+<div class="k8s-log-viewer">
+    <div class="k8s-log-toolbar">
+        <MudSelect T="string" Class="k8s-log-container" Label="Container" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   Value="_container" ValueChanged="OnContainerChangedAsync">
+            @foreach (var c in Containers)
+            {
+                <MudSelectItem T="string" Value="@c.Name">@(c.IsInit ? "init · " + c.Name : c.Name)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudToggleGroup T="bool" Class="k8s-log-instance" Value="_previous" ValueChanged="OnInstanceChangedAsync"
+                        Size="Size.Small" Outlined="true" Delimiters="true" Color="Color.Primary">
+            <MudToggleItem T="bool" Value="false" Class="k8s-log-current">Current</MudToggleItem>
+            <MudToggleItem T="bool" Value="true" Class="k8s-log-previous" Disabled="@(!HasPrevious)">Previous (crashed)</MudToggleItem>
+        </MudToggleGroup>
+        <MudSwitch T="bool" Class="k8s-log-follow" Label="Follow" Color="Color.Primary" Value="_follow" ValueChanged="OnFollowChangedAsync"
+                   Disabled="_previous" />
+        <MudSwitch T="bool" Class="k8s-log-timestamps" Label="Timestamps" Color="Color.Primary" Value="_timestamps" ValueChanged="OnTimestampsChangedAsync" />
+        <MudSelect T="int" Class="k8s-log-tail" Label="Tail" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   Value="_tail" ValueChanged="OnTailChangedAsync">
+            @foreach (var t in Tails)
+            {
+                <MudSelectItem T="int" Value="t">@t</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string" Class="k8s-log-search" Placeholder="Search" Immediate="true" Clearable="true" Variant="Variant.Outlined"
+                      Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Value="_search" ValueChanged="OnSearchChanged" />
+        <span class="k8s-log-matches k8s-mono k8s-muted">@MatchText</span>
+        <MudIconButton Class="k8s-log-prev" Icon="@Icons.Material.Outlined.KeyboardArrowUp" Size="Size.Small" Disabled="@(_matchCount == 0)"
+                       OnClick="PreviousMatch" aria-label="Previous match" />
+        <MudIconButton Class="k8s-log-next" Icon="@Icons.Material.Outlined.KeyboardArrowDown" Size="Size.Small" Disabled="@(_matchCount == 0)"
+                       OnClick="NextMatch" aria-label="Next match" />
+    </div>
+
+    @if (_error is not null)
+    {
+        <K8sErrorAlert Info="_error" Title="@($"Can't read the log of {_container}.")" Class="k8s-log-failed" />
+    }
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Size="Size.Small" Class="k8s-log-loading" />
+    }
+
+    <pre class="k8s-log" id="@_preId">@RenderLines</pre>
+
+    @if (_loaded && !_loading && LineCount == 0)
+    {
+        <div class="k8s-log-empty k8s-muted">No log lines@(_previous ? " from the previous instance" : "").</div>
+    }
+
+    @if (_ended)
+    {
+        <div class="k8s-log-ended k8s-muted">The log stream ended — the container stopped.</div>
+    }
+
+    @if (_loaded && !_loading && !_follow && Termination is { } term)
+    {
+        <div class="k8s-log-exit">
+            <MudIcon Icon="@Icons.Material.Outlined.ReportProblem" Size="Size.Small" Color="@(term.ExitCode == 0 ? Color.Default : Color.Error)" />
+            <span>@ExitCodeInterpreter.Explain(term, Selected?.MemoryLimitBytes)</span>
+        </div>
+    }
+</div>
+
+@code {
+    internal static readonly int[] Tails = [100, 500, 2000];
+    internal const int DefaultTail = 500;
+    internal static readonly TimeSpan RepaintInterval = TimeSpan.FromMilliseconds(250);
+
+    [Parameter, EditorRequired] public Guid ConnectionId { get; set; }
+
+    [Parameter, EditorRequired] public string Namespace { get; set; } = "";
+
+    [Parameter, EditorRequired] public string Pod { get; set; } = "";
+
+    /// <summary>Init containers first, then app containers (the order of <see cref="K8sPodDetail.Containers"/>).</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<LogContainer> Containers { get; set; } = [];
+
+    /// <summary>Default: the first crash-looping app container, else the first app container.</summary>
+    [Parameter] public string? InitialContainer { get; set; }
+
+    /// <summary>Default: Previous when the selected container is crash-looping and has a previous instance.</summary>
+    [Parameter] public bool? InitialPrevious { get; set; }
+
+    private readonly string _preId = "k8s-log-" + Guid.NewGuid().ToString("N")[..8];
+    private readonly Lock _gate = new();
+    private readonly Queue<string> _lines = new();
+    private string? _key;
+    private string _container = "";
+    private bool _previous;
+    private bool _follow;
+    private bool _timestamps = true;
+    private int _tail = DefaultTail;
+    private string _search = "";
+    private int _currentMatch;
+    private int _matchCount;
+    private bool _loading;
+    private bool _loaded;
+    private bool _ended;
+    private K8sErrorInfo? _error;
+    private CancellationTokenSource? _run;
+    private ITimer? _repaint;
+    private int _dirty;
+    private int _generation;
+    private bool _scrollToBottom;
+    private bool _scrollToMatch;
+    private IJSObjectReference? _module;
+    private bool _moduleFailed;
+    private bool _disposed;
+
+    private LogContainer? Selected => Containers.FirstOrDefault(c => c.Name == _container);
+
+    private bool HasPrevious => Selected?.HasPrevious == true;
+
+    /// <summary>The exit the shown log ends with: the previous instance's, or the current one's when it has terminated.</summary>
+    private K8sTermination? Termination => _previous ? Selected?.LastTermination : Selected?.CurrentTermination;
+
+    private int LineCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lines.Count;
+            }
+        }
+    }
+
+    private string MatchText => _search.Length == 0 ? "" : $"{(_matchCount == 0 ? 0 : _currentMatch + 1)} / {_matchCount}";
+
+    private K8sLogRequest Request() => new(_container, _previous, _tail, _timestamps);
+
+    // ---- Rendering ----
+
+    private string[] Snapshot()
+    {
+        lock (_gate)
+        {
+            return _lines.ToArray();
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // Counted here so the toolbar shows the count of what was just painted; a change re-renders the toolbar once.
+        var count = Snapshot().Sum(l => LogText.CountMatches(l, _search));
+        if (count != _matchCount)
+        {
+            _matchCount = count;
+            _currentMatch = count == 0 ? 0 : Math.Min(_currentMatch, count - 1);
+            StateHasChanged();
+        }
+    }
+
+    // Built by hand rather than in markup: whitespace inside <pre> is content, and Razor's whitespace rules would add or drop it.
+    private void RenderLines(RenderTreeBuilder b)
+    {
+        var match = 0;
+        foreach (var line in Snapshot())
+        {
+            b.OpenElement(0, "div");
+            var level = LogText.LevelClass(line);
+            b.AddAttribute(1, "class", level is null ? "k8s-log-line" : "k8s-log-line " + level);
+            if (_search.Length == 0)
+            {
+                b.AddContent(2, line);
+            }
+            else
+            {
+                var at = 0;
+                int found;
+                while ((found = line.IndexOf(_search, at, StringComparison.OrdinalIgnoreCase)) >= 0)
+                {
+                    if (found > at)
+                    {
+                        b.AddContent(3, line[at..found]);
+                    }
+
+                    b.OpenElement(4, "mark");
+                    if (match == _currentMatch)
+                    {
+                        b.AddAttribute(5, "class", "k8s-log-mark-current");
+                        b.AddAttribute(6, "id", _preId + "-match");
+                    }
+
+                    b.AddContent(7, line.Substring(found, _search.Length));
+                    b.CloseElement();
+                    match++;
+                    at = found + _search.Length;
+                }
+
+                if (at < line.Length)
+                {
+                    b.AddContent(8, line[at..]);
+                }
+            }
+
+            b.CloseElement();
+        }
+    }
+
+    // ---- Lifecycle ----
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{ConnectionId}/{Namespace}/{Pod}";
+        if (key == _key)
+        {
+            // A poll refreshed the container facts (restarts, terminations): the log itself is left alone.
+            return;
+        }
+
+        _key = key;
+        var initial = Containers.FirstOrDefault(c => c.Name == InitialContainer)
+                      ?? Containers.FirstOrDefault(c => !c.IsInit && c.IsCrashLooping)
+                      ?? Containers.FirstOrDefault(c => !c.IsInit)
+                      ?? Containers.FirstOrDefault();
+        _container = initial?.Name ?? "";
+        _previous = (InitialPrevious ?? initial is { IsCrashLooping: true, HasPrevious: true }) && initial?.HasPrevious == true;
+        _follow = false;
+        if (_container.Length > 0)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed || (!_scrollToBottom && !_scrollToMatch))
+        {
+            return;
+        }
+
+        var toMatch = _scrollToMatch;
+        _scrollToBottom = false;
+        _scrollToMatch = false;
+        var module = await ModuleAsync();
+        if (module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (toMatch)
+            {
+                await module.InvokeVoidAsync("scrollIntoView", _preId + "-match");
+            }
+            else
+            {
+                await module.InvokeVoidAsync("scrollToBottom", _preId);
+            }
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException or ObjectDisposedException)
+        {
+            // Scrolling is a nicety; the lines are there either way.
+        }
+    }
+
+    private async Task<IJSObjectReference?> ModuleAsync()
+    {
+        if (_module is not null || _moduleFailed)
+        {
+            return _module;
+        }
+
+        try
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            _moduleFailed = true;
+        }
+
+        if (_module is null)
+        {
+            _moduleFailed = true;
+        }
+
+        return _module;
+    }
+
+    // ---- Loading and following ----
+
+    /// <summary>Cancels whatever is running (a load or the follow stream) and stops the repaint timer.</summary>
+    private void StopRun()
+    {
+        _generation++;
+        _repaint?.Dispose();
+        _repaint = null;
+        if (_run is not null)
+        {
+            _run.Cancel();
+            _run.Dispose();
+            _run = null;
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        StopRun();
+        _error = null;
+        _ended = false;
+        _loaded = false;
+        if (_follow && !_previous)
+        {
+            StartFollow();
+            return;
+        }
+
+        var cts = _run = new CancellationTokenSource();
+        var generation = _generation;
+        _loading = true;
+        StateHasChanged();
+
+        PluginResult<IReadOnlyList<string>> result;
+        try
+        {
+            result = await ReadLogs.HandleAsync(ConnectionId, Namespace, Pod, Request(), cts.Token);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
+
+        _loading = false;
+        if (result.IsSuccess)
+        {
+            lock (_gate)
+            {
+                _lines.Clear();
+                foreach (var line in result.Value ?? [])
+                {
+                    _lines.Enqueue(line);
+                }
+            }
+
+            _loaded = true;
+            _scrollToBottom = true;
+        }
+        else
+        {
+            lock (_gate)
+            {
+                _lines.Clear();
+            }
+
+            _error = new K8sErrorInfo(result.Error ?? "Reading the log failed.", null, null, false);
+        }
+
+        StateHasChanged();
+    }
+
+    private void StartFollow()
+    {
+        var cts = _run = new CancellationTokenSource();
+        var generation = _generation;
+        var request = Request();
+        lock (_gate)
+        {
+            _lines.Clear();
+        }
+
+        _loading = false;
+        _repaint = Clock.CreateTimer(_ => OnRepaintTick(), null, RepaintInterval, RepaintInterval);
+        _ = FollowAsync(request, generation, cts.Token);
+    }
+
+    private async Task FollowAsync(K8sLogRequest request, int generation, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var line in FollowLogs.StreamAsync(ConnectionId, Namespace, Pod, request, ct))
+            {
+                lock (_gate)
+                {
+                    _lines.Enqueue(line);
+                    while (_lines.Count > request.TailLines)
+                    {
+                        _lines.Dequeue();
+                    }
+                }
+
+                Interlocked.Exchange(ref _dirty, 1);
+            }
+
+            await FinishFollowAsync(generation, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Turned off, reconfigured or disposed.
+        }
+        catch (Exception ex)
+        {
+            await FinishFollowAsync(generation, FriendlyKubernetesError.Describe(ex));
+        }
+    }
+
+    /// <summary>The stream ended (container stopped) or failed: stop following and show what is buffered plus why.</summary>
+    private async Task FinishFollowAsync(int generation, K8sErrorInfo? error)
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_disposed || generation != _generation)
+                {
+                    return;
+                }
+
+                StopRun();
+                _follow = false;
+                _error = error;
+                _ended = error is null;
+                _scrollToBottom = true;
+                StateHasChanged();
+            });
+        }
+        catch (Exception)
+        {
+            // The circuit is gone; nothing left to show it on.
+        }
+    }
+
+    /// <summary>Timer callback (any thread): repaint only when new lines arrived since the last tick.</summary>
+    private void OnRepaintTick()
+    {
+        if (_disposed || Interlocked.Exchange(ref _dirty, 0) == 0)
+        {
+            return;
+        }
+
+        _ = RepaintAsync();
+    }
+
+    private async Task RepaintAsync()
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _scrollToBottom = true;
+                StateHasChanged();
+            });
+        }
+        catch (Exception)
+        {
+            // A timer tick must never throw: a disposed circuit just skips the repaint.
+        }
+    }
+
+    // ---- Toolbar ----
+
+    private async Task OnContainerChangedAsync(string name)
+    {
+        if (name == _container)
+        {
+            return;
+        }
+
+        _container = name;
+        _previous = Selected is { IsCrashLooping: true, HasPrevious: true };
+        if (_previous)
+        {
+            _follow = false;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task OnInstanceChangedAsync(bool previous)
+    {
+        if (previous == _previous || (previous && !HasPrevious))
+        {
+            return;
+        }
+
+        _previous = previous;
+        if (previous)
+        {
+            _follow = false;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task OnFollowChangedAsync(bool follow)
+    {
+        if (_previous || follow == _follow)
+        {
+            return;
+        }
+
+        _follow = follow;
+        if (follow)
+        {
+            await ReloadAsync();
+            return;
+        }
+
+        // Turning follow off freezes what is on screen.
+        StopRun();
+        _loaded = true;
+    }
+
+    private async Task OnTimestampsChangedAsync(bool timestamps)
+    {
+        _timestamps = timestamps;
+        await ReloadAsync();
+    }
+
+    private async Task OnTailChangedAsync(int tail)
+    {
+        if (tail == _tail)
+        {
+            return;
+        }
+
+        _tail = tail;
+        await ReloadAsync();
+    }
+
+    private void OnSearchChanged(string? search)
+    {
+        _search = search ?? "";
+        _currentMatch = 0;
+        _matchCount = Snapshot().Sum(l => LogText.CountMatches(l, _search));
+        _scrollToMatch = _matchCount > 0;
+    }
+
+    private void NextMatch()
+    {
+        if (_matchCount > 0)
+        {
+            _currentMatch = (_currentMatch + 1) % _matchCount;
+            _scrollToMatch = true;
+        }
+    }
+
+    private void PreviousMatch()
+    {
+        if (_matchCount > 0)
+        {
+            _currentMatch = (_currentMatch - 1 + _matchCount) % _matchCount;
+            _scrollToMatch = true;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        StopRun();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException or TaskCanceledException)
+            {
+                // Circuit already gone.
+            }
+        }
+    }
+}

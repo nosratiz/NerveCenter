@@ -276,4 +276,47 @@ internal static class TestData
             ],
             $"apiVersion: v1\nkind: Pod\nmetadata:\n  name: {name}\n  namespace: {ns}\n");
     }
+
+    /// <summary>
+    /// Mockup 3d in full, captured at <see cref="T0"/>: the crash-looping payment-gateway pod with init container
+    /// <c>migrate</c> (Completed, exit 0), <c>gateway</c> (Waiting CrashLoopBackOff, last exit 137 OOMKilled after 41 s,
+    /// 14 restarts, limit 512 Mi) and <c>otel-sidecar</c> (Running, no limits); Secret-sourced env rows included.
+    /// </summary>
+    public static K8sPodDetail CrashLoopPodDetail()
+    {
+        const string name = "payment-gateway-7d9f8-x2k4q";
+        var basis = PaymentGatewayPodDetail();
+        var oomAt = T0.AddMinutes(-2);
+        return basis with
+        {
+            Pod = basis.Pod with { TotalContainers = 2, ReadyContainers = 1 },
+            PodIp = "10.244.3.118",
+            HostIp = "10.240.0.7",
+            VolumeCount = 2,
+            Node = new K8sNodeHealth("aks-pool1-38211-vmss000004", "True", [], 0.91),
+            Containers =
+            [
+                new K8sContainer("migrate", true, "ghcr.io/nervecenter/payment-gateway:2.14.1", "Terminated", "Completed",
+                    new K8sTermination(0, "Completed", T0.AddMinutes(-38).AddSeconds(-5), T0.AddMinutes(-38)), null, 0, false, [],
+                    new K8sResources(null, null, null, null)),
+                new K8sContainer("gateway", false, "ghcr.io/nervecenter/payment-gateway:2.14.1", "Waiting", "CrashLoopBackOff",
+                    null, new K8sTermination(137, "OOMKilled", oomAt.AddSeconds(-41), oomAt), 14, false, ["8080/http", "9090/metrics"],
+                    new K8sResources(500, 512 * MiB, null, 512 * MiB)),
+                new K8sContainer("otel-sidecar", false, "otel/opentelemetry-collector-contrib:0.108.0", "Running", null,
+                    null, null, 0, true, ["4317/grpc"], new K8sResources(null, null, null, null)),
+            ],
+            Env =
+            [
+                new K8sEnvVar("gateway", "PORT", "8080", K8sEnvSource.Literal, null),
+                new K8sEnvVar("gateway", "LOG_LEVEL", "info", K8sEnvSource.Literal, null),
+                new K8sEnvVar("gateway", "REDIS_URL", "redis://cart-redis:6379/0", K8sEnvSource.ConfigMap, "gateway-config"),
+                new K8sEnvVar("gateway", "MERCHANT_CACHE_SIZE", "50000", K8sEnvSource.ConfigMap, "gateway-config"),
+                new K8sEnvVar("gateway", "STRIPE_SECRET_KEY", null, K8sEnvSource.Secret, "stripe-live"),
+                new K8sEnvVar("gateway", "DB_PASSWORD", null, K8sEnvSource.Secret, "pg-app-rw"),
+                new K8sEnvVar("gateway", "POD_NAME", name, K8sEnvSource.FieldRef, "metadata.name"),
+                new K8sEnvVar("gateway", "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317", K8sEnvSource.Literal, null),
+                new K8sEnvVar("otel-sidecar", "OTEL_LOG_LEVEL", "warn", K8sEnvSource.Literal, null),
+            ],
+        };
+    }
 }
