@@ -5,6 +5,7 @@
     <Project Path="src/Plugins/SbConsole.Plugins.Kafka/SbConsole.Plugins.Kafka.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.RabbitMq/SbConsole.Plugins.RabbitMq.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.Redis/SbConsole.Plugins.Redis.csproj" />
+    <Project Path="src/Plugins/SbConsole.Plugins.Postgres/SbConsole.Plugins.Postgres.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.Sqlite/SbConsole.Plugins.Sqlite.csproj" />
     <Project Path="src/Plugins/SbConsole.Plugins.ServiceBus/SbConsole.Plugins.ServiceBus.csproj" />
     <Project Path="src/SbConsole.Sdk/SbConsole.Sdk.csproj" />
@@ -16,6 +17,7 @@
     <Project Path="tests/SbConsole.Plugins.Kafka.Tests/SbConsole.Plugins.Kafka.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.RabbitMq.Tests/SbConsole.Plugins.RabbitMq.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.Redis.Tests/SbConsole.Plugins.Redis.Tests.csproj" />
+    <Project Path="tests/SbConsole.Plugins.Postgres.Tests/SbConsole.Plugins.Postgres.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.Sqlite.Tests/SbConsole.Plugins.Sqlite.Tests.csproj" />
     <Project Path="tests/SbConsole.Plugins.ServiceBus.Tests/SbConsole.Plugins.ServiceBus.Tests.csproj" />
     <Project Path="tests/SbConsole.Web.Tests/SbConsole.Web.Tests.csproj" />
