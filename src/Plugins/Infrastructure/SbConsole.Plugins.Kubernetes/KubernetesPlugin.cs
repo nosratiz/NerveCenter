@@ -70,9 +70,7 @@ public sealed class KubernetesPlugin : IPlugin
 
     public void Initialize(IServiceProvider services)
     {
-        // GetService, not GetRequiredService: the operations implementation lands in a later task, and a
-        // missing one must leave the plugin failing closed rather than stopping the host at startup.
-        _operations = services.GetService<IKubernetesOperations>();
+        _operations = services.GetRequiredService<IKubernetesOperations>();
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
     }
 

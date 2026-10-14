@@ -1,0 +1,139 @@
+using k8s;
+using Microsoft.Extensions.Logging;
+using SbConsole.Sdk;
+
+namespace SbConsole.Plugins.Kubernetes.Client;
+
+/// <summary>
+/// KubernetesClient implementation of <see cref="IKubernetesOperations"/>. Clients come from
+/// <see cref="KubernetesClientFactory"/> (one per secret). Exceptions propagate to the handlers, which turn them
+/// into <see cref="FriendlyKubernetesError"/> sentences; only <see cref="TestConnectionAsync"/> catches its own.
+/// </summary>
+public sealed partial class KubernetesOperations(KubernetesClientFactory clients, TimeProvider clock, ILogger<KubernetesOperations> logger)
+    : IKubernetesOperations, ISingletonService
+{
+    // Used by later partials (overview capture time, events window).
+    private readonly TimeProvider _clock = clock;
+
+    private IKubernetes Client(string secret) => clients.Get(secret);
+
+    public async Task<ConnectionTestResult> TestConnectionAsync(string secret, CancellationToken ct = default)
+    {
+        try
+        {
+            var client = Client(secret);
+            var version = await client.Version.GetCodeAsync(cancellationToken: ct);
+            var identity = await GetIdentityAsync(client, secret, ct);
+            return new ConnectionTestResult(true, null, $"{version.GitVersion} · as {identity}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogError(ex, "Kubernetes connection test failed");
+            return new ConnectionTestResult(false, FriendlyKubernetesError.From(ex));
+        }
+    }
+
+    public async Task<IReadOnlyList<K8sNamespace>> ListNamespacesAsync(string secret, CancellationToken ct = default)
+    {
+        var client = Client(secret);
+        var namespacesTask = client.CoreV1.ListNamespaceAsync(cancellationToken: ct);
+        var countsTask = CountPodsByNamespaceAsync(client, ct);
+        var namespaces = await namespacesTask;
+        var counts = await countsTask;
+        return namespaces.Items
+            .Select(n => n.Metadata.Name)
+            .Order(StringComparer.Ordinal)
+            .Select(name => new K8sNamespace(name, counts.GetValueOrDefault(name)))
+            .ToList();
+    }
+
+    private async Task<IReadOnlyDictionary<string, int>> CountPodsByNamespaceAsync(IKubernetes client, CancellationToken ct)
+    {
+        try
+        {
+            var pods = await client.CoreV1.ListPodForAllNamespacesAsync(cancellationToken: ct);
+            return pods.Items
+                .GroupBy(p => p.Metadata.NamespaceProperty ?? string.Empty, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        }
+        catch (k8s.Autorest.HttpOperationException ex) when ((int?)ex.Response?.StatusCode == 403)
+        {
+            logger.LogDebug("Listing pods in all namespaces is forbidden; namespace pod counts are 0");
+            return new Dictionary<string, int>();
+        }
+    }
+
+    // ---- Not implemented yet: each later task replaces its own. ----
+
+    public Task<K8sOverview> GetOverviewAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<K8sWorkload>> ListWorkloadsAsync(string secret, K8sWorkloadKind kind, IReadOnlyList<string> namespaces, string? labelSelector, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyDictionary<K8sWorkloadKind, K8sKindCount>> CountWorkloadsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sScaleInfo> GetScaleInfoAsync(string secret, K8sWorkloadKind kind, string ns, string name, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<int> ScaleAsync(string secret, K8sWorkloadKind kind, string ns, string name, int replicas, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task RestartAsync(string secret, K8sWorkloadKind kind, string ns, string name, DateTimeOffset at, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task DeleteWorkloadAsync(string secret, K8sWorkloadKind kind, string ns, string name, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<string?> GetYamlAsync(string secret, K8sResourceKind kind, string? ns, string name, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sDeploymentDetail?> GetDeploymentDetailAsync(string secret, string ns, string name, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<long> RollbackDeploymentAsync(string secret, string ns, string name, long toRevision, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sPodDetail?> GetPodDetailAsync(string secret, string ns, string name, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<string>> ReadLogsAsync(string secret, string ns, string pod, K8sLogRequest request, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public IAsyncEnumerable<string> FollowLogsAsync(string secret, string ns, string pod, K8sLogRequest request, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<byte[]> DownloadAllLogsAsync(string secret, string ns, string pod, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task DeletePodAsync(string secret, string ns, string name, int? gracePeriodSeconds, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<K8sNodeInfo>> ListNodesAsync(string secret, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<K8sPodSummary>> ListPodsOnNodeAsync(string secret, string node, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task SetUnschedulableAsync(string secret, string node, bool unschedulable, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sDrainInputs> GetDrainInputsAsync(string secret, string node, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sEvictionOutcome> EvictPodAsync(string secret, string ns, string name, int gracePeriodSeconds, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<K8sConfigData> ListConfigMapsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task UpdateConfigMapAsync(string secret, string ns, string name, IReadOnlyDictionary<string, string> data, string resourceVersion, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<SecretSummary>> ListSecretsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+
+    public Task<IReadOnlyList<K8sEvent>> ListEventsAsync(string secret, IReadOnlyList<string> namespaces, TimeSpan window, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+}

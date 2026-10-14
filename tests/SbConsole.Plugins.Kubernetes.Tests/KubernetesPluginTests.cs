@@ -1,4 +1,9 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using SbConsole.Sdk;
 using SbConsole.Plugins.Kubernetes.Client;
 
 namespace SbConsole.Plugins.Kubernetes.Tests;
@@ -73,5 +78,35 @@ public class KubernetesPluginTests
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("Kubernetes plugin is not initialized.");
+    }
+
+    [Fact]
+    public void ConfigureServices_registers_the_operations_and_the_factory_as_singletons()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
+        new KubernetesPlugin().ConfigureServices(services);
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        provider.GetRequiredService<IKubernetesOperations>().Should().BeOfType<KubernetesOperations>()
+            .And.BeSameAs(provider.GetRequiredService<IKubernetesOperations>());
+        provider.GetRequiredService<KubernetesClientFactory>().Should().BeSameAs(provider.GetRequiredService<KubernetesClientFactory>());
+        var plugin = new KubernetesPlugin();
+        plugin.Invoking(p => p.Initialize(provider)).Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task TestConnection_delegates_to_the_operations()
+    {
+        var ops = Substitute.For<IKubernetesOperations>();
+        ops.TestConnectionAsync("s", Arg.Any<CancellationToken>()).Returns(new ConnectionTestResult(true, null, "v1 · as me"));
+        var plugin = new KubernetesPlugin();
+        plugin.InitializeForTesting(ops);
+
+        var result = await plugin.TestConnectionAsync("s");
+
+        result.Identity.Should().Be("v1 · as me");
     }
 }
