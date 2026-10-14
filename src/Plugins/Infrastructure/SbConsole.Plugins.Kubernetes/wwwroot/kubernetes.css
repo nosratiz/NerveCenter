@@ -35,10 +35,15 @@
 
 /* Namespace picker */
 .k8s-ns { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.k8s-ns-picker { min-width: 180px; max-width: 260px; }
+.k8s-ns-anchor { position: relative; display: inline-block; }
+.k8s-ns-picker { min-width: 180px; max-width: 260px; justify-content: space-between; text-transform: none; font-weight: 400; }
 .k8s-ns-trigger { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.k8s-ns-popover { min-width: 240px; }
+.k8s-ns-panel { padding: 4px 0; }
 .k8s-ns-search-row { padding: 4px 12px; }
-.k8s-ns-option .mud-list-item-text, .k8s-ns-option .mud-list-item-text p { display: flex; align-items: baseline; gap: 12px; width: 100%; }
+.k8s-ns-row { display: flex; align-items: center; gap: 10px; padding: 6px 16px; cursor: pointer; user-select: none; }
+.k8s-ns-row:hover, .k8s-ns-row:focus-visible { background: var(--mud-palette-action-default-hover); outline: none; }
+.k8s-ns-row[aria-selected="true"] .k8s-ns-check { color: var(--mud-palette-primary); }
 .k8s-ns-count { margin-left: auto; font-size: 0.75rem; }
 .k8s-ns-caption { padding: 6px 16px; font-size: 0.72rem; border-top: 1px solid var(--mud-palette-divider); }
 

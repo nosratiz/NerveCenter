@@ -9,26 +9,49 @@
 @* Namespace axis for every page (spec §4). Empty selection = all namespaces. ?ns= (comma list) keeps links
    shareable; otherwise the user's last choice on this cluster (NamespaceSelectionStore) applies. *@
 <div class="k8s-ns">
-    <MudSelect T="string" Class="k8s-ns-picker" MultiSelection="true" Dense="true" Variant="Variant.Outlined"
-               Margin="Margin.Dense" Placeholder="All namespaces" Disabled="@(!_loaded)"
-               SelectedValues="_selected" SelectedValuesChanged="OnSelectedValuesChanged"
-               MultiSelectionTextFunc="SelectionText" OpenChanged="OnOpenChanged">
-        <div class="k8s-ns-search-row" @onclick:stopPropagation="true">
-            <MudTextField T="string" Class="k8s-ns-search" Value="_search" ValueChanged="v => _search = v ?? string.Empty"
-                          Immediate="true" Placeholder="Search namespaces" Variant="Variant.Text" Margin="Margin.Dense"
-                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search" />
-        </div>
-        <MudSelectItem T="string" Value="@AllValue" Class="k8s-ns-all">All namespaces (@_namespaces.Count)</MudSelectItem>
-        <MudDivider />
-        @foreach (var ns in Visible)
-        {
-            <MudSelectItem T="string" Value="@ns.Name" Class="k8s-ns-option">
-                <span class="k8s-ns-name k8s-mono">@ns.Name</span>
-                <span class="k8s-ns-count k8s-muted k8s-num">@ns.PodCount</span>
-            </MudSelectItem>
-        }
-        <div class="k8s-ns-caption k8s-muted">Selection is kept per cluster.</div>
-    </MudSelect>
+    @* A trigger button + MudPopover rather than MudSelect: MudSelect renders non-item children (search box, caption)
+       inline outside its popover too, and keeps pulling focus back to itself, so a search field inside it can't be typed in. *@
+    <div class="k8s-ns-anchor">
+        <MudButton Class="k8s-ns-picker" Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_loaded)"
+                   EndIcon="@(_open ? Icons.Material.Filled.ArrowDropUp : Icons.Material.Filled.ArrowDropDown)"
+                   OnClick="Toggle" aria-haspopup="listbox" aria-expanded="@(_open ? "true" : "false")">
+            @SelectionText(_selected)
+        </MudButton>
+        <MudPopover Open="_open" Class="k8s-ns-popover" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
+                    MaxHeight="420" Elevation="8">
+            @if (_open)
+            {
+                <div class="k8s-ns-panel" role="listbox" aria-multiselectable="true" @onkeydown="OnPanelKeyDown">
+                    <div class="k8s-ns-search-row">
+                        <MudTextField T="string" Class="k8s-ns-search" Value="_search" ValueChanged="v => _search = v ?? string.Empty"
+                                      Immediate="true" AutoFocus="true" Placeholder="Search namespaces" Variant="Variant.Text"
+                                      Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search" />
+                    </div>
+                    <div class="k8s-ns-row k8s-ns-all" role="option" tabindex="0" aria-selected="@(_selected.Count == 0 ? "true" : "false")"
+                         @onclick="SelectAllAsync" @onkeydown="e => OnRowKeyDown(e, SelectAllAsync)">
+                        <MudIcon Size="Size.Small" Class="k8s-ns-check"
+                                 Icon="@(_selected.Count == 0 ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBoxOutlineBlank)" />
+                        <span>All namespaces (@_namespaces.Count)</span>
+                    </div>
+                    <MudDivider />
+                    @foreach (var ns in Visible)
+                    {
+                        var name = ns.Name;
+                        var on = _selected.Contains(name);
+                        <div class="k8s-ns-row k8s-ns-option" role="option" tabindex="0" aria-selected="@(on ? "true" : "false")"
+                             @onclick="() => ToggleAsync(name)" @onkeydown="e => OnRowKeyDown(e, () => ToggleAsync(name))">
+                            <MudIcon Size="Size.Small" Class="k8s-ns-check"
+                                     Icon="@(on ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBoxOutlineBlank)" />
+                            <span class="k8s-ns-name k8s-mono">@name</span>
+                            <span class="k8s-ns-count k8s-muted k8s-num">@ns.PodCount</span>
+                        </div>
+                    }
+                    <div class="k8s-ns-caption k8s-muted">Selection is kept per cluster.</div>
+                </div>
+            }
+        </MudPopover>
+    </div>
+    <MudOverlay Visible="_open" VisibleChanged="OnOverlayVisibleChanged" AutoClose="true" LockScroll="false" />
 
     <span class="k8s-ns-trigger">
         @if (_selected.Count == 0)
@@ -54,9 +77,6 @@
 </div>
 
 @code {
-    /// <summary>Sentinel value of the "All namespaces" row (never a valid namespace name); choosing it clears the selection.</summary>
-    private const string AllValue = "*";
-
     [Parameter] public Guid? ConnectionId { get; set; }
 
     /// <summary>Raised once after the initial selection resolves for a connection, then on every change. Empty = all namespaces.</summary>
@@ -82,11 +102,8 @@
         ? _namespaces
         : _namespaces.Where(n => n.Name.Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase));
 
-    private string SelectionText(IReadOnlyList<string> values)
-    {
-        var count = values.Count(v => v != AllValue);
-        return count switch { 0 => "All namespaces", 1 => "1 namespace", _ => $"{count} namespaces" };
-    }
+    private static string SelectionText(IReadOnlyList<string> values) =>
+        values.Count switch { 0 => "All namespaces", 1 => "1 namespace", _ => $"{values.Count} namespaces" };
 
     protected override async Task OnParametersSetAsync()
     {
@@ -107,6 +124,7 @@
         var ct = _cts.Token;
         var generation = ++_generation;
         _loaded = false;
+        _open = false;
         _error = null;
         _namespaces = [];
         _selected = [];
@@ -181,25 +199,53 @@
         return state.User.Identity?.Name ?? "anonymous";
     }
 
-    private void OnOpenChanged(bool open)
+    private bool _open;
+
+    private void Toggle()
     {
-        if (!open)
+        _open = !_open;
+        _search = "";
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _search = "";
+    }
+
+    private void OnOverlayVisibleChanged(bool visible)
+    {
+        if (!visible)
         {
-            _search = "";
+            Close();
         }
     }
 
-    private async Task OnSelectedValuesChanged(IEnumerable<string?>? values)
+    private void OnPanelKeyDown(KeyboardEventArgs e)
     {
-        var chosen = (values ?? []).Where(v => v is not null).Select(v => v!).ToList();
-        // Picking "All namespaces" clears; otherwise keep the list's order (stable, matches what the user sees).
-        IReadOnlyList<string> next = chosen.Contains(AllValue)
-            ? []
-            : _namespaces.Select(n => n.Name).Where(chosen.Contains).ToList();
-        if (ConnectionId is { } connectionId)
+        if (e.Key == "Escape")
         {
-            await ApplyAsync(next, connectionId, persist: true);
+            Close();
         }
+    }
+
+    private static async Task OnRowKeyDown(KeyboardEventArgs e, Func<Task> action)
+    {
+        if (e.Key is "Enter" or " ")
+        {
+            await action();
+        }
+    }
+
+    private Task SelectAllAsync() =>
+        ConnectionId is { } connectionId ? ApplyAsync([], connectionId, persist: true) : Task.CompletedTask;
+
+    private Task ToggleAsync(string name)
+    {
+        var chosen = _selected.Contains(name) ? _selected.Where(n => n != name).ToHashSet() : _selected.Append(name).ToHashSet();
+        // Keep the list's order (stable, matches what the user sees), whatever order the clicks came in.
+        IReadOnlyList<string> next = _namespaces.Select(n => n.Name).Where(chosen.Contains).ToList();
+        return ConnectionId is { } connectionId ? ApplyAsync(next, connectionId, persist: true) : Task.CompletedTask;
     }
 
     private Task RemoveAsync(string name) =>

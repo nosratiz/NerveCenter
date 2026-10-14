@@ -36,6 +36,20 @@ public class K8sFormatTests
     public void Cpu_formats(long milli, string expected) => K8sFormat.Cpu(milli).Should().Be(expected);
 
     [Theory]
+    [InlineData(0, "0")]
+    [InlineData(5, "0.01")]
+    [InlineData(50, "0.05")]
+    [InlineData(99, "0.1")]
+    [InlineData(100, "0.1")]
+    [InlineData(250, "0.3")]
+    [InlineData(1000, "1")]
+    [InlineData(1500, "1.5")]
+    [InlineData(2000, "2")]
+    [InlineData(58600, "58.6")]
+    [InlineData(96000, "96")]
+    public void Cores_formats_in_cores_at_every_size(long milli, string expected) => K8sFormat.Cores(milli).Should().Be(expected);
+
+    [Theory]
     [InlineData(12L, "12 B")]
     [InlineData(900L * 1024, "900 Ki")]
     [InlineData(512L * 1024 * 1024, "512 Mi")]

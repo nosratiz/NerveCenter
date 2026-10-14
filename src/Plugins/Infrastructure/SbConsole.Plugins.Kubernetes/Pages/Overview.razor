@@ -94,7 +94,7 @@
                 </K8sStatTile>
                 <K8sStatTile Class="k8s-tile-cpu" Label="CPU requests" Value="@(cpuFraction is { } cf ? K8sFormat.Percent(cf) : "—")"
                              Meter="cpuFraction" MeterColor="@MeterColor(cpuFraction)" Stale="@stale"
-                             Caption="@($"{K8sFormat.Cpu(cpuReq)} / {K8sFormat.Cpu(cpuAlloc)} cores · limits {K8sFormat.Cpu(o.CpuLimitsMilli)}"
+                             Caption="@($"{K8sFormat.Cores(cpuReq)} / {K8sFormat.Cores(cpuAlloc)} cores · limits {K8sFormat.Cores(o.CpuLimitsMilli)}"
                                        + (o.CpuUsageFraction is { } cpuUse ? $" · usage {K8sFormat.Percent(cpuUse)}" : ""))" />
                 <K8sStatTile Class="k8s-tile-memory" Label="Memory requests" Value="@(memFraction is { } mf ? K8sFormat.Percent(mf) : "—")"
                              Meter="memFraction" MeterColor="@MeterColor(memFraction)" Stale="@stale"
@@ -274,14 +274,32 @@
 
         try
         {
-            _module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
-            if (_module is null || _disposed)
+            var module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
+            if (module is null)
             {
                 return;
             }
 
+            if (_disposed)
+            {
+                await module.DisposeAsync();
+                return;
+            }
+
+            _module = module;
+
             _self = DotNetObjectReference.Create(this);
-            _visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
+            var visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
+            if (_disposed)
+            {
+                // DisposeAsync already ran while the hook was being installed: release it here or the browser keeps a
+                // listener that calls a disposed DotNetObjectReference.
+                await visibility.InvokeVoidAsync("dispose");
+                await visibility.DisposeAsync();
+                return;
+            }
+
+            _visibility = visibility;
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
         {

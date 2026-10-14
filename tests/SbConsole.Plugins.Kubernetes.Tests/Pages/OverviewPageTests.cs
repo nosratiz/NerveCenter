@@ -1,6 +1,7 @@
 using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
 using NSubstitute;
 using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
@@ -350,6 +351,39 @@ public class OverviewPageTests : K8sPageTestBase
         await Task.Delay(100);
 
         OverviewCalls().Should().Be(1);
+    }
+
+    [Fact]
+    public void The_cpu_caption_reads_in_cores_below_one_core()
+    {
+        Arrange(TestData.OverviewWith(nodes: [TestData.Node() with { CpuAllocatableMilli = 2000, CpuRequestedMilli = 250 }]));
+        var cut = RenderPage();
+
+        cut.Find(".k8s-tile-cpu").TextContent.Should().Contain("0.3 / 2 cores · limits 0");
+    }
+
+    [Fact]
+    public async Task A_visibility_hook_resolving_after_dispose_is_released_at_once()
+    {
+        // bUnit's module interop completes module calls synchronously, so a substitute runtime holds watchVisibility open.
+        Arrange(TestData.Overview());
+        var watch = new TaskCompletionSource<IJSObjectReference>();
+        var module = Substitute.For<IJSObjectReference>();
+        module.InvokeAsync<IJSObjectReference>("watchVisibility", Arg.Any<object?[]?>()).Returns(_ => new ValueTask<IJSObjectReference>(watch.Task));
+        var js = Substitute.For<IJSRuntime>();
+        js.InvokeAsync<IJSObjectReference>("import", Arg.Any<object?[]?>()).Returns(new ValueTask<IJSObjectReference>(module));
+        Services.AddSingleton(js);
+        var handle = Substitute.For<IJSObjectReference>();
+        RenderPage();
+        await Task.Delay(50);
+        module.ReceivedCalls().Should().Contain(c => Equals(c.GetArguments()[0], "watchVisibility"));
+
+        await DisposeComponentsAsync();
+        watch.SetResult(handle);
+        await Task.Delay(100);
+
+        handle.ReceivedCalls().Should().Contain(c => Equals(c.GetArguments().FirstOrDefault(), "dispose"));
+        await handle.Received(1).DisposeAsync();
     }
 
     [Fact]

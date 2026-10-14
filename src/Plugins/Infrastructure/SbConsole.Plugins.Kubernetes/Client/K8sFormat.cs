@@ -26,6 +26,12 @@ public static partial class K8sFormat
     public static string Cpu(long milli) =>
         milli < 1000 ? $"{milli}m" : (Math.Round(milli / 1000.0, 1, MidpointRounding.AwayFromZero)).ToString("0.#", Inv);
 
+    /// <summary>Millicores as cores, always in cores (unlike <see cref="Cpu"/>): two decimals under 0.1, else one; no trailing zeros.</summary>
+    public static string Cores(long milli) =>
+        milli < 100
+            ? Math.Round(milli / 1000.0, 2, MidpointRounding.AwayFromZero).ToString("0.##", Inv)
+            : Math.Round(milli / 1000.0, 1, MidpointRounding.AwayFromZero).ToString("0.#", Inv);
+
     public static string Bytes(long b)
     {
         if (b < 1024) return $"{b} B";
