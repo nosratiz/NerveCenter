@@ -6,4 +6,5 @@ public sealed record PgTableHealth(uint Oid, string Schema, string Name, long To
     long? BloatBytes, DateTimeOffset? LastVacuum, DateTimeOffset? LastAutovacuum, DateTimeOffset? LastAnalyze,
     DateTimeOffset? LastAutoanalyze, bool AutovacuumRunning);
 public sealed record PgMaintenance(bool AutovacuumOn, int MaxWorkers, IReadOnlyList<PgVacuumProgress> Running,
-    long OldestXidAge, long FreezeMaxAge, bool PgstattupleAvailable, IReadOnlyList<PgTableHealth> Tables);
+    long OldestXidAge, long FreezeMaxAge, bool PgstattupleAvailable, IReadOnlyList<PgTableHealth> Tables,
+    DateTimeOffset CapturedAt = default);

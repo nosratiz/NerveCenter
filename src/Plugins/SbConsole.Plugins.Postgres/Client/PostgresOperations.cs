@@ -82,8 +82,4 @@ public sealed partial class PostgresOperations(ILogger<PostgresOperations> logge
 
             return names;
         }, ct);
-
-    // Stubs: later tasks move each of these into its own partial file (Schema, Rows, Query, Activity, Maintenance, Export).
-    public Task<PgMaintenance> GetMaintenanceAsync(string secret, string? database, CancellationToken ct = default) => throw new NotImplementedException("Task 11");
-    public Task<string> RunMaintenanceAsync(string secret, string? database, uint tableOid, PgMaintenanceKind kind, CancellationToken ct = default) => throw new NotImplementedException("Task 11");
 }
