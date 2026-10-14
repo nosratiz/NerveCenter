@@ -32,8 +32,7 @@ public sealed class KubernetesPlugin : IPlugin
     public string ConnectionKind => Kind;
     public string ConnectionKindDisplayName => "Kubernetes";
 
-    // Wired to KubernetesConnectionFields in Task 2.
-    public Type? ConnectionFormComponentType => null;
+    public Type? ConnectionFormComponentType => typeof(KubernetesConnectionFields);
 
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [

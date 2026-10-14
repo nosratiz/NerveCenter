@@ -1,0 +1,104 @@
+@* Kubernetes connection form: a pasted kubeconfig (static credential only) plus the context to use. *@
+@using MudBlazor
+
+<MudTextField T="string" Class="k8s-conn-kubeconfig k8s-mono" Label="Kubeconfig" Lines="12" Immediate="true" DebounceInterval="300"
+              Value="_yaml" ValueChanged="OnKubeconfigChanged"
+              HelperText="Paste a kubeconfig with a static credential (ServiceAccount token, client certificate data, or username/password). exec and auth-provider sign-in are not supported." />
+
+<MudSelect T="string" Class="mt-3 k8s-conn-context" Label="Context" Value="_context" ValueChanged="OnContextChanged">
+    @foreach (var c in _validation?.Contexts ?? [])
+    {
+        <MudSelectItem T="string" Value="@c">@c</MudSelectItem>
+    }
+</MudSelect>
+
+@if (_touched && _validation is not null)
+{
+    foreach (var error in _validation.Errors)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2 k8s-conn-error">@error</MudAlert>
+    }
+}
+
+@if (_validation is { Errors.Count: 0, Summary: { } summary })
+{
+    <MudText Typo="Typo.caption" Class="mt-2 k8s-conn-summary">@summary.Server · user @summary.User · @summary.CredentialKind</MudText>
+    @if (!summary.TlsVerified)
+    {
+        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="k8s-conn-tls-off">TLS not verified</MudChip>
+    }
+}
+
+@code {
+    [Parameter] public string? InitialSecret { get; set; }
+    [Parameter] public EventCallback<string> SecretChanged { get; set; }
+    // Part of the host contract for connection forms; unused here.
+    [Parameter] public bool IsProd { get; set; }
+
+    private string _yaml = "";
+    private string? _context;
+    private bool _touched;
+    private KubeconfigValidation? _validation;
+
+    // Read once -- see IPlugin.ConnectionFormComponentType's doc comment: the host round-trips whatever
+    // this component last emitted back into InitialSecret, and re-parsing would fight in-progress typing.
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(InitialSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var s = KubeconfigSettings.Parse(InitialSecret);
+            _yaml = s.Kubeconfig;
+            _validation = KubeconfigValidator.Validate(_yaml, s.Context);
+            _context = s.Context;
+        }
+        catch (FormatException)
+        {
+            // Unparsable initial secret: render an empty form.
+        }
+    }
+
+    private Task OnKubeconfigChanged(string? v)
+    {
+        _touched = true;
+        _yaml = v ?? "";
+        var previous = _context;
+        _validation = KubeconfigValidator.Validate(_yaml, previous);
+        var contexts = _validation.Contexts;
+        // Keep the current selection if the new file still has it, else the file's current-context, else the first.
+        _context = previous is not null && contexts.Contains(previous) ? previous
+            : _validation.CurrentContext is { } cur && contexts.Contains(cur) ? cur
+            : contexts.FirstOrDefault();
+        _validation = KubeconfigValidator.Validate(_yaml, _context);
+        return RaiseChangedAsync();
+    }
+
+    private Task OnContextChanged(string? v)
+    {
+        _context = v;
+        _validation = KubeconfigValidator.Validate(_yaml, _context);
+        return RaiseChangedAsync();
+    }
+
+    private Task RaiseChangedAsync()
+    {
+        // Only emit a secret the validator accepts; never throw out of an event handler.
+        if (_validation is not { Errors.Count: 0 } || string.IsNullOrEmpty(_context))
+        {
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            return SecretChanged.InvokeAsync(new KubeconfigSettings(_yaml, _context).ToSecretString());
+        }
+        catch (ArgumentException)
+        {
+            return Task.CompletedTask;
+        }
+    }
+}
