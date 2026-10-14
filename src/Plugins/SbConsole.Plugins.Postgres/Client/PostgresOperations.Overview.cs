@@ -160,13 +160,7 @@ public sealed partial class PostgresOperations
         {
             topBlocker = blocked.SelectMany(b => b.Blockers).GroupBy(p => p).OrderByDescending(g => g.Count()).First().Key;
             var victim = blocked.First(b => b.Blockers.Contains(topBlocker.Value)).Pid;
-            // A row-lock wait queues on the blocker's transactionid, so the victim has no ungranted relation lock;
-            // its granted 'tuple' lock names the table. Ungranted relation waits sort first.
-            await using var cmd = new NpgsqlCommand(
-                "SELECT l.relation::regclass::text FROM pg_locks l WHERE l.pid = @victim AND l.relation IS NOT NULL " +
-                "AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()) " +
-                "AND (NOT l.granted OR l.locktype = 'tuple') ORDER BY l.granted LIMIT 1",
-                conn, tx);
+            await using var cmd = new NpgsqlCommand($"SELECT {WaitingRelationSql("@victim")}", conn, tx);
             cmd.Parameters.AddWithValue("victim", victim);
             topRelation = await cmd.ExecuteScalarAsync(ct) as string;
         }

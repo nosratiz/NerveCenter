@@ -86,10 +86,6 @@ public sealed partial class PostgresOperations(ILogger<PostgresOperations> logge
     // Stubs: later tasks move each of these into its own partial file (Schema, Rows, Query, Activity, Maintenance, Export).
     public Task<string> ReindexIndexAsync(string secret, string? database, uint indexOid, CancellationToken ct = default) => throw new NotImplementedException("Task 7");
     public Task<string> DropIndexAsync(string secret, string? database, uint indexOid, CancellationToken ct = default) => throw new NotImplementedException("Task 7");
-    public Task<PgActivity> GetActivityAsync(string secret, CancellationToken ct = default) => throw new NotImplementedException("Task 10");
-    public Task<PgBackend?> GetBackendAsync(string secret, int pid, CancellationToken ct = default) => throw new NotImplementedException("Task 10");
-    public Task<bool> CancelBackendAsync(string secret, int pid, CancellationToken ct = default) => throw new NotImplementedException("Task 10");
-    public Task<bool> TerminateBackendAsync(string secret, int pid, CancellationToken ct = default) => throw new NotImplementedException("Task 10");
     public Task<PgMaintenance> GetMaintenanceAsync(string secret, string? database, CancellationToken ct = default) => throw new NotImplementedException("Task 11");
     public Task<string> RunMaintenanceAsync(string secret, string? database, uint tableOid, PgMaintenanceKind kind, CancellationToken ct = default) => throw new NotImplementedException("Task 11");
 }
