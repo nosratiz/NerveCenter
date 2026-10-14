@@ -10,6 +10,7 @@ using NSubstitute;
 using SbConsole.Plugins.Kubernetes.Access;
 using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Namespaces;
+using SbConsole.Plugins.Kubernetes.Overview;
 using SbConsole.Sdk;
 
 namespace SbConsole.Plugins.Kubernetes.Tests.Pages;
@@ -74,6 +75,8 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, AccessCache, NullLogger<GetPermissionsQueryHandler>.Instance));
         Services.AddSingleton(new ListNamespacesQueryHandler(
             Operations, Connections, NullLogger<ListNamespacesQueryHandler>.Instance));
+        Services.AddSingleton(new GetOverviewQueryHandler(
+            Operations, Connections, Store, Time, NullLogger<GetOverviewQueryHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

@@ -59,7 +59,7 @@ internal static class TestData
         [new("checkout", 18), new("payments", 11), new("payments-canary", 2)];
 
     /// <summary>A minimal healthy overview: enough for snapshot-store round trips.</summary>
-    public static K8sOverview Overview(DateTimeOffset? at = null) =>
+    public static K8sOverview MinimalOverview(DateTimeOffset? at = null) =>
         new(at ?? new DateTimeOffset(2026, 10, 14, 12, 0, 0, TimeSpan.Zero),
             new K8sClusterInfo("https://aks-prod-eu.example:443", "aks-prod-eu-admin", "v1.30.4", "AKS", "admin", 3),
             [], new K8sPodCounts(31, 0, 0, 0), [], [], [], 0, 0, 0, null, null);
@@ -94,7 +94,7 @@ internal static class TestData
     public static K8sOverview OverviewWith(
         IReadOnlyList<K8sNodeInfo>? nodes = null, IReadOnlyList<K8sPodSummary>? problemPods = null,
         IReadOnlyList<K8sWorkload>? problemWorkloads = null, IReadOnlyList<K8sEvent>? warnings = null) =>
-        Overview(T0) with
+        MinimalOverview(T0) with
         {
             Nodes = nodes ?? [Node()],
             ProblemPods = problemPods ?? [],
@@ -102,4 +102,82 @@ internal static class TestData
             RecentWarnings = warnings ?? [],
             WarningCount = warnings?.Count ?? 0,
         };
+
+    private const long GiB = 1024L * 1024 * 1024;
+
+    /// <summary>
+    /// The cluster from mockup 3a, captured at <see cref="T0"/>: 12 nodes in 2 pools (one NotReady for 6 minutes),
+    /// 412/6/3/41 pods, two crash loops, an unavailable Deployment, a failed Job, 6 unschedulable pods,
+    /// CPU requests 58.6 / 96 cores (limits 142, usage 38%), memory 299 / 384 Gi with exactly one node over 8 Gi free,
+    /// and 7 recent warnings (38 in the last hour).
+    /// </summary>
+    public static K8sOverview Overview()
+    {
+        var nodes = new List<K8sNodeInfo>();
+        for (var i = 0; i < 12; i++)
+        {
+            var pool = i < 3 ? "system" : "pool1";
+            var name = i == 3 ? "aks-pool1-38211-vmss00000a" : $"aks-{pool}-38211-vmss{i:x6}";
+            // Memory: one node with 13 Gi free, one with 2 Gi, the rest 7 Gi → 299 Gi requested of 384 Gi.
+            var memRequested = i switch { 0 => 19 * GiB, 1 => 30 * GiB, _ => 25 * GiB };
+            var cpuRequested = i == 0 ? 3600 : 5000;
+            nodes.Add(new K8sNodeInfo(name, pool, "Standard_D8s_v5", $"10.0.0.{10 + i}", i == 3 ? "False" : "True",
+                i == 3 ? T0.AddMinutes(-6) : T0.AddDays(-3), [], ["agent"], [], "v1.30.4", false,
+                8000, 32 * GiB, cpuRequested, memRequested, i == 3 ? 34 : 30, T0.AddDays(-40), $"azure:///vm-{i}",
+                new Dictionary<string, string>()));
+        }
+
+        K8sPodSummary Problem(string ns, string name, string status, int restarts, K8sRef owner, string? reason = null, int? exit = null,
+            string? unschedulable = null) =>
+            new(ns, name, status == "CrashLoopBackOff" ? "Running" : "Pending", status, restarts, 0, 1,
+                unschedulable is null ? "aks-pool1-38211-vmss000004" : null, owner, null, reason, exit,
+                reason is null ? null : T0.AddMinutes(-2), unschedulable, T0.AddHours(-3), 250, 512L * 1024 * 1024, false,
+                new Dictionary<string, string>(), owner.Kind == "DaemonSet", false);
+
+        const string insufficient = "0/12 nodes are available: 1 node(s) had untolerated taint, 11 Insufficient memory.";
+        var problemPods = new List<K8sPodSummary>
+        {
+            Problem("platform", "log-shipper-mq8zl", "CrashLoopBackOff", 6, new K8sRef("DaemonSet", "platform", "log-shipper"), "Error", 1),
+            Problem("checkout", "payment-gateway-7d9f8-x2k4q", "CrashLoopBackOff", 14,
+                new K8sRef("Deployment", "checkout", "payment-gateway"), "OOMKilled", 137),
+        };
+        for (var i = 0; i < 6; i++)
+        {
+            problemPods.Add(Problem("monitoring", $"prometheus-{i}", "Pending", 0, new K8sRef("StatefulSet", "monitoring", "prometheus"),
+                unschedulable: insufficient));
+        }
+
+        K8sEvent Event(int minutesAgo, string reason, string kind, string ns, string name, string message, int count) =>
+            new(kind == "Node" ? null : ns, "Warning", reason, message, new K8sRef(kind, kind == "Node" ? null : ns, name), count,
+                T0.AddMinutes(-minutesAgo), "kubelet");
+
+        return new K8sOverview(
+            T0,
+            new K8sClusterInfo("https://aks-prod-eu-dns-8f2a1c.hcp.westeurope.azmk8s.io:443", "aks-prod-eu-admin", "v1.30.4", "AKS",
+                "sbconsole-admin", 14),
+            nodes,
+            new K8sPodCounts(412, 6, 3, 41),
+            problemPods,
+            [
+                Deployment("checkout", "payment-gateway", 4, 2,
+                    [new K8sCondition("Progressing", "False", "ProgressDeadlineExceeded", null, T0.AddMinutes(-30))]),
+                Job("payments", "settlement-20261014-0200", "Failed", "BackoffLimitExceeded"),
+            ],
+            [
+                Event(2, "BackOff", "Pod", "checkout", "payment-gateway-7d9f8-x2k4q",
+                    "Back-off restarting failed container gateway in pod payment-gateway-7d9f8-x2k4q_checkout", 14),
+                Event(4, "FailedScheduling", "Pod", "monitoring", "prometheus-1", insufficient, 22),
+                Event(6, "NodeNotReady", "Node", "", "aks-pool1-38211-vmss00000a",
+                    "Node aks-pool1-38211-vmss00000a status is now: NodeNotReady", 1),
+                Event(9, "Unhealthy", "Pod", "checkout", "checkout-api-6c8d7-r9p2m",
+                    "Readiness probe failed: HTTP probe failed with statuscode: 503", 3),
+                Event(12, "OOMKilling", "Node", "", "aks-pool1-38211-vmss000004",
+                    "Memory cgroup out of memory: Killed process 48213 (gateway)", 2),
+                Event(41, "FailedMount", "Pod", "reports", "report-builder-2x8ql",
+                    "MountVolume.SetUp failed for volume \"reports-cfg\": configmap \"reports-config\" not found", 6),
+                Event(55, "BackOff", "Pod", "platform", "log-shipper-mq8zl", "Back-off restarting failed container shipper", 9),
+            ],
+            38,
+            142_000, 512 * GiB, 0.38, 0.52);
+    }
 }

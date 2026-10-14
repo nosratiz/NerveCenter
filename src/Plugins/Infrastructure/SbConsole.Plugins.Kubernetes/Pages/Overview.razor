@@ -1,0 +1,546 @@
+@* Mockup 3a (overview), with the Postgres Overview's unreachable/stale behaviour. Stock MudBlazor in the Nocturne theme. *@
+@page "/p/kubernetes/overview"
+@using System.Globalization
+@using SbConsole.Plugins.Kubernetes.Access
+@using SbConsole.Plugins.Kubernetes.Overview
+@inject GetOverviewQueryHandler GetOverview
+@inject AccessCache AccessCache
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Kubernetes overview</PageTitle>
+
+<div class="k8s-page">
+    <K8sPageHeader Title="Overview">
+        <Chips>
+            <K8sConnectionPicker @ref="_picker" Loading="_loading" SelectionChanged="OnConnectionChangedAsync" />
+            @if (_connection is not null)
+            {
+                <K8sNamespacePicker ConnectionId="_connection.Id" SelectionChanged="OnNamespacesChangedAsync" />
+            }
+        </Chips>
+        <Actions>
+            @if (_view is { Error: null } && _loadedAt is { } at)
+            {
+                <span class="k8s-meta k8s-overview-refreshed">refreshed @K8sFormat.Ago(Clock.GetUtcNow() - at)</span>
+            }
+            else if (_view?.StaleSince is { } okAt)
+            {
+                <span class="k8s-meta k8s-overview-last-ok">last ok @okAt.ToString("HH:mm", Inv)</span>
+            }
+            @if (_connection is not null)
+            {
+                <span class="k8s-meta k8s-live">@(IsLive ? "watch · live" : "watch · paused")</span>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-overview-refresh" Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_connection is not null)
+    {
+    <div class="k8s-body k8s-overview-body">
+        @if (_view?.Error is { } error)
+        {
+            <K8sErrorAlert Info="error" Title="@($"Can't reach {_connection.Name}.")" Class="k8s-overview-error">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-overview-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Class="k8s-overview-edit" Href="/connections">Edit connection</MudButton>
+                @if (_retryTimer is not null)
+                {
+                    <span class="k8s-meta k8s-overview-retry-in">retrying in @_retryIn s</span>
+                }
+            </K8sErrorAlert>
+        }
+
+        @if (_view?.Overview is { } o)
+        {
+            var stale = _view.IsStale ? $"stale · {_view.StaleSince?.ToString("HH:mm", Inv)}" : null;
+            var c = o.Cluster;
+            var ready = o.Nodes.Count(n => n.ReadyStatus == "True");
+            var notReady = o.Nodes.FirstOrDefault(n => n.ReadyStatus != "True");
+            var crashLoops = CrashLoops(o);
+            var cpuAlloc = o.Nodes.Sum(n => n.CpuAllocatableMilli);
+            var cpuReq = o.Nodes.Sum(n => n.CpuRequestedMilli);
+            var memAlloc = o.Nodes.Sum(n => n.MemAllocatableBytes);
+            var memReq = o.Nodes.Sum(n => n.MemRequestedBytes);
+            double? cpuFraction = cpuAlloc > 0 ? (double)cpuReq / cpuAlloc : null;
+            double? memFraction = memAlloc > 0 ? (double)memReq / memAlloc : null;
+            var roomy = o.Nodes.Count(n => n.MemAllocatableBytes - n.MemRequestedBytes > RoomyBytes);
+
+            <MudPaper Outlined="true" Class="@("k8s-cluster-header" + (stale is null ? "" : " k8s-stale"))">
+                <div class="k8s-cluster-line">
+                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Class="k8s-provider-chip">@c.Provider</MudChip>
+                    <span class="k8s-mono k8s-cluster-server">@c.ServerUrl · context @c.Context</span>
+                </div>
+                <div class="k8s-meta k8s-cluster-facts">@ClusterFacts(o)</div>
+                <div class="k8s-muted k8s-cluster-identity">connected as <span class="k8s-mono">@c.Identity</span></div>
+            </MudPaper>
+
+            <div class="k8s-tiles">
+                <K8sStatTile Class="k8s-tile-nodes" Label="Nodes ready" Value="@ready.ToString(Inv)" Unit="@($"/ {o.Nodes.Count}")"
+                             Meter="@(o.Nodes.Count > 0 ? (double)ready / o.Nodes.Count : null)"
+                             MeterColor="@(ready < o.Nodes.Count ? Color.Warning : Color.Success)"
+                             Warning="@(ready < o.Nodes.Count)" Stale="@stale"
+                             Caption="@(notReady is null ? "all ready" : NotReadyCaption(notReady))" />
+                <K8sStatTile Class="k8s-tile-pods" Label="Pods" Value="@o.Pods.Running.ToString(Inv)" Unit="running" Stale="@stale"
+                             Caption="@($"{o.Pods.Pending} pending · {o.Pods.Failed} failed · {o.Pods.Succeeded} succeeded")" />
+                <K8sStatTile Class="@("k8s-tile-crashloop" + (crashLoops.Count > 0 ? " k8s-error-outline" : ""))" Label="CrashLoopBackOff"
+                             Value="@crashLoops.Count.ToString(Inv)" Warning="@(crashLoops.Count > 0)" Stale="@stale"
+                             Caption="@(crashLoops.Count == 0 ? "none" : string.Join(" · ", crashLoops.Take(2).Select(p => $"{p.Namespace}/{p.Owner?.Name ?? p.Name}")))">
+                    @if (crashLoops.Count > 0 && stale is null)
+                    {
+                        <MudLink Class="k8s-crashloop-link" Href="@Link(KubernetesPlugin.PodHref(crashLoops[0].Namespace, crashLoops[0].Name))" Typo="Typo.caption">Open pod →</MudLink>
+                    }
+                </K8sStatTile>
+                <K8sStatTile Class="k8s-tile-cpu" Label="CPU requests" Value="@(cpuFraction is { } cf ? K8sFormat.Percent(cf) : "—")"
+                             Meter="cpuFraction" MeterColor="@MeterColor(cpuFraction)" Stale="@stale"
+                             Caption="@($"{K8sFormat.Cpu(cpuReq)} / {K8sFormat.Cpu(cpuAlloc)} cores · limits {K8sFormat.Cpu(o.CpuLimitsMilli)}"
+                                       + (o.CpuUsageFraction is { } cpuUse ? $" · usage {K8sFormat.Percent(cpuUse)}" : ""))" />
+                <K8sStatTile Class="k8s-tile-memory" Label="Memory requests" Value="@(memFraction is { } mf ? K8sFormat.Percent(mf) : "—")"
+                             Meter="memFraction" MeterColor="@MeterColor(memFraction)" Stale="@stale"
+                             Caption="@($"{K8sFormat.Bytes(memReq)} / {K8sFormat.Bytes(memAlloc)} · {roomy} {(roomy == 1 ? "node" : "nodes")} with > 8 Gi free")" />
+            </div>
+        }
+        else
+        {
+            <div class="@("k8s-tiles " + (_view is null ? "k8s-overview-skeleton" : "k8s-tiles-skeleton"))">
+                @for (var i = 0; i < 5; i++)
+                {
+                    <MudPaper Outlined="true" Class="@("k8s-tile" + (_view is null ? "" : " k8s-stale"))">
+                        <MudSkeleton Width="60%" />
+                        <MudSkeleton Height="34px" Width="45%" />
+                        <MudSkeleton Width="80%" />
+                    </MudPaper>
+                }
+            </div>
+        }
+
+        <div class="k8s-overview-lower">
+            <MudPaper Outlined="true" Class="k8s-attention">
+                <div class="k8s-card-head">
+                    <span>Needs attention</span>
+                    @if (Fresh is { } head)
+                    {
+                        var total = AttentionTotal(head);
+                        <MudChip T="string" Size="Size.Small" Color="@(total > 0 ? Color.Error : Color.Default)" Class="k8s-attention-count">@total</MudChip>
+                        <span class="k8s-card-note">worst first</span>
+                    }
+                    else
+                    {
+                        <span class="k8s-card-note">@WaitingText</span>
+                    }
+                </div>
+                @if (Fresh is { } fresh)
+                {
+                    var items = AttentionRules.Build(fresh, Clock.GetUtcNow(), AttentionRules.WithConnection(_connection.Id));
+                    var more = AttentionTotal(fresh) - items.Count;
+                    @if (items.Count == 0)
+                    {
+                        <div class="k8s-attention-empty k8s-muted">Nothing needs attention.</div>
+                    }
+                    else
+                    {
+                        @foreach (var item in items)
+                        {
+                            <div class="k8s-attention-item">
+                                <MudChip T="string" Size="Size.Small" Color="@(item.Severity == "Error" ? Color.Error : Color.Warning)" Class="k8s-attention-chip">@item.Chip</MudChip>
+                                <div class="k8s-attention-text">
+                                    <div>
+                                        @if (item.Namespace is not null)
+                                        {
+                                            <span class="k8s-attention-ns">@item.Namespace</span>
+                                        }
+                                        <span class="k8s-mono k8s-attention-title">@item.Title</span>
+                                    </div>
+                                    <div class="k8s-attention-sub k8s-mono">@item.Detail</div>
+                                </div>
+                                <MudLink Href="@item.Href" Typo="Typo.caption">@($"{item.LinkKind} →")</MudLink>
+                            </div>
+                        }
+                        @if (more > 0)
+                        {
+                            <div class="k8s-attention-more k8s-muted">@more more</div>
+                        }
+                    }
+                }
+                else
+                {
+                    @for (var i = 0; i < 3; i++)
+                    {
+                        <div class="k8s-attention-item">
+                            <MudSkeleton Height="22px" SkeletonType="SkeletonType.Rectangle" />
+                            <div>
+                                <MudSkeleton Width="60%" />
+                                <MudSkeleton Width="85%" Height="14px" />
+                            </div>
+                            <MudSkeleton Width="50px" />
+                        </div>
+                    }
+                }
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="k8s-recent-events">
+                <div class="k8s-card-head">
+                    <span>Recent Warning events</span>
+                    @if (Fresh is { } evHead)
+                    {
+                        <span class="k8s-meta">last 1h · @evHead.WarningCount</span>
+                        <MudLink Class="k8s-events-all k8s-card-note" Href="@Link(KubernetesPlugin.EventsHref)" Typo="Typo.caption">All events</MudLink>
+                    }
+                    else
+                    {
+                        <span class="k8s-card-note">@WaitingText</span>
+                    }
+                </div>
+                @if (Fresh is { } ev)
+                {
+                    @if (ev.RecentWarnings.Count == 0)
+                    {
+                        <div class="k8s-events-empty k8s-muted">No Warning events in the last hour.</div>
+                    }
+                    @foreach (var e in ev.RecentWarnings.Take(EventRows))
+                    {
+                        <div class="k8s-event-row">
+                            <span class="k8s-mono k8s-muted k8s-event-age">@K8sFormat.Age(Clock.GetUtcNow() - e.LastSeen)</span>
+                            <div class="k8s-event-text">
+                                <div><span class="k8s-mono k8s-event-reason">@e.Reason</span> <span class="k8s-muted">@e.Regarding.Kind</span> <span class="k8s-mono">@e.Regarding.Name</span></div>
+                                <div class="k8s-event-message k8s-muted" title="@e.Message">@e.Message</div>
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-event-count">×@e.Count</MudChip>
+                        </div>
+                    }
+                }
+                else
+                {
+                    @for (var i = 0; i < 3; i++)
+                    {
+                        <div class="k8s-event-row">
+                            <MudSkeleton Width="30px" />
+                            <div>
+                                <MudSkeleton Width="60%" />
+                                <MudSkeleton Width="85%" Height="14px" />
+                            </div>
+                            <MudSkeleton Width="30px" />
+                        </div>
+                    }
+                }
+            </MudPaper>
+        </div>
+        <div class="k8s-footnote k8s-overview-footnote">Metrics are reads and are not audited.</div>
+    </div>
+    }
+</div>
+
+@code {
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private const long RoomyBytes = 8L * 1024 * 1024 * 1024;
+    private const int RetrySeconds = 30;
+    private const int EventRows = 6;
+    private const string WaitingText = "waiting for connection";
+
+    private readonly CancellationTokenSource _cts = new();
+    private K8sPoller? _poller;
+    private K8sConnectionPicker? _picker;
+    private ConnectionInfo? _connection;
+    private IReadOnlyList<string>? _namespaces;
+    private OverviewView? _view;
+    private DateTimeOffset? _loadedAt;
+    private bool _loading;
+    private int _generation;
+    private int _retryIn = RetrySeconds;
+    private ITimer? _retryTimer;
+    private bool _disposed;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _visibility;
+    private DotNetObjectReference<Overview>? _self;
+
+    /// <summary>The overview when it is current (not stale, no error): the cards that need live data render only from this.</summary>
+    private K8sOverview? Fresh => _view is { Error: null, IsStale: false, Overview: { } o } ? o : null;
+
+    private bool IsLive => _poller is { Hidden: false } && _view?.Error is null;
+
+    private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
+
+    protected override void OnInitialized() =>
+        _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", K8sJs.ModulePath);
+            if (_module is null || _disposed)
+            {
+                return;
+            }
+
+            _self = DotNetObjectReference.Create(this);
+            _visibility = await _module.InvokeAsync<IJSObjectReference>("watchVisibility", _self);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Without the visibility hook the poller simply keeps running while the tab is hidden.
+        }
+    }
+
+    /// <summary>Called by kubernetes.js <c>watchVisibility</c>: no polling while the browser tab is hidden.</summary>
+    [JSInvokable]
+    public Task SetHidden(bool hidden)
+    {
+        if (_disposed || _poller is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        _poller.Hidden = hidden;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_connection?.Id != connection.Id)
+        {
+            // Another cluster's numbers must never sit under this connection's name while it loads. The namespace
+            // picker re-resolves its selection for the new connection and raises it, which starts the load.
+            _generation++;
+            StopRetry();
+            _connection = connection;
+            _namespaces = null;
+            _view = null;
+            _loadedAt = null;
+            _loading = false;
+            _poller?.Start();
+            return;
+        }
+
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private async Task OnNamespacesChangedAsync(IReadOnlyList<string> namespaces)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _namespaces = namespaces;
+        await LoadAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_connection is { } connection)
+        {
+            AccessCache.Invalidate(connection.Id);
+        }
+
+        await LoadAsync();
+    }
+
+    private Task LoadAsync() => LoadAsync(background: false);
+
+    private async Task LoadAsync(bool background)
+    {
+        if (_connection is not { } connection || _namespaces is not { } namespaces || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        StopRetry();
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            var result = await GetOverview.HandleAsync(connection.Id, namespaces, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            _view = result.IsSuccess
+                ? result.Value
+                : new OverviewView(null, false, null, new K8sErrorInfo(result.Error ?? "Connection not found.", null, null, false));
+            _loadedAt = Clock.GetUtcNow();
+            // Only an unreachable cluster (success carrying an error) is worth retrying; a plain Fail such as "connection not found" is not.
+            if (result.IsSuccess && _view?.Error is not null)
+            {
+                StartRetry();
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        // Runs on the renderer's context (event handler, or InvokeAsync from a timer), so this repaints timer-driven reloads too.
+        StateHasChanged();
+        if (_picker is not null)
+        {
+            await _picker.RefreshReachabilityAsync();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                // The error countdown owns retries; the poller only refreshes a reachable cluster.
+                if (_disposed || _loading || _retryTimer is not null || _view?.Error is not null)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    private void StartRetry()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        StopRetry();
+        _retryIn = RetrySeconds;
+        _retryTimer = Clock.CreateTimer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void StopRetry()
+    {
+        _retryTimer?.Dispose();
+        _retryTimer = null;
+    }
+
+    private async Task TickAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _retryTimer is null)
+                {
+                    return;
+                }
+
+                _retryIn--;
+                if (_retryIn <= 0)
+                {
+                    await LoadAsync();
+                }
+                else
+                {
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just ends the countdown.
+        }
+    }
+
+    private static IReadOnlyList<K8sPodSummary> CrashLoops(K8sOverview o) =>
+        o.ProblemPods.Where(p => p.Status == "CrashLoopBackOff")
+            .OrderByDescending(p => p.Restarts)
+            .ThenBy(p => p.Namespace, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal)
+            .ToList();
+
+    private int AttentionTotal(K8sOverview o) =>
+        AttentionRules.BuildAll(o, Clock.GetUtcNow(), href => href).Count;
+
+    private static string ClusterFacts(K8sOverview o)
+    {
+        var pools = o.Nodes.Select(n => n.Pool).Where(p => p is not null).Distinct(StringComparer.Ordinal).Count();
+        var nodes = $"{o.Nodes.Count} {(o.Nodes.Count == 1 ? "node" : "nodes")}" + (pools > 0 ? $" in {pools} {(pools == 1 ? "pool" : "pools")}" : "");
+        var namespaces = $"{o.Cluster.NamespaceCount} {(o.Cluster.NamespaceCount == 1 ? "namespace" : "namespaces")}";
+        return $"server {o.Cluster.ServerVersion} · {nodes} · {namespaces}";
+    }
+
+    private string NotReadyCaption(K8sNodeInfo node) =>
+        $"{ShortName(node.Name)} NotReady" + (node.ReadySince is { } since ? $" {K8sFormat.Age(Clock.GetUtcNow() - since)}" : "");
+
+    /// <summary>Long VMSS-style node names keep their pool prefix and instance suffix: "aks-pool1-…0000a".</summary>
+    private static string ShortName(string name) => name.Length > 20 ? $"{name[..10]}…{name[^5..]}" : name;
+
+    private static Color MeterColor(double? fraction) => fraction switch
+    {
+        >= 0.9 => Color.Error,
+        >= 0.75 => Color.Warning,
+        _ => Color.Primary,
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        StopRetry();
+        _cts.Cancel();
+        _cts.Dispose();
+        try
+        {
+            if (_visibility is not null)
+            {
+                await _visibility.InvokeVoidAsync("dispose");
+                await _visibility.DisposeAsync();
+            }
+
+            if (_module is not null)
+            {
+                await _module.DisposeAsync();
+            }
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException or TaskCanceledException)
+        {
+            // The circuit is already gone; nothing to release.
+        }
+
+        _self?.Dispose();
+    }
+}
