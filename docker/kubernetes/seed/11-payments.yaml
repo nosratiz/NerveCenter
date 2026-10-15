@@ -22,6 +22,11 @@ spec:
           image: nginx:1.27-alpine
           ports:
             - containerPort: 80
+          env:
+            - name: LEDGER_URL
+              value: "http://ledger.payments:80"
+            - name: GATEWAY_URL
+              value: "http://payment-gateway.checkout"
           resources:
             requests:
               cpu: 10m
@@ -142,6 +147,9 @@ spec:
       containers:
         - name: webhooks
           image: nginx:1.27-alpine
+          env:
+            - name: HOOK_TARGET
+              value: "https://hooks.example.com/in"
           resources:
             requests:
               cpu: 10m

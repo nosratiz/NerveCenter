@@ -13,6 +13,7 @@ public sealed class KubernetesPlugin : IPlugin
     public const string PluginId = "kubernetes";
     public const string Kind = "kubernetes";
     public const string OverviewHref = "/p/kubernetes/overview";
+    public const string ArchitectureHref = "/p/kubernetes/architecture";
     public const string WorkloadsHref = "/p/kubernetes/workloads";
     public const string NodesHref = "/p/kubernetes/nodes";
     public const string ConfigHref = "/p/kubernetes/config";
@@ -45,13 +46,14 @@ public sealed class KubernetesPlugin : IPlugin
     public IReadOnlyList<PluginNavItem> NavItems { get; } =
     [
         new PluginNavItem("Overview", OverviewHref),
+        new PluginNavItem("Architecture", ArchitectureHref),
         new PluginNavItem("Workloads", WorkloadsHref),
         new PluginNavItem("Nodes", NodesHref),
         new PluginNavItem("Config", ConfigHref),
         new PluginNavItem("Events", EventsHref),
     ];
 
-    public PluginContribution Contribution => new(PageCount: 7, ActionCount: 9);
+    public PluginContribution Contribution => new(PageCount: 8, ActionCount: 13);
 
     internal static ConnectionTestResult NotInitialized => new(false, "Kubernetes plugin is not initialized.");
 

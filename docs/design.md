@@ -1944,3 +1944,38 @@ that ran DDL, and skips the load during static prerender. A finished word that e
 (`orders`, `OR`) offers nothing, so Enter stays a newline rather than accepting the next prefix match.
 Suggestions: keywords, built-in functions, schemas, tables/views/matviews, columns, aliases;
 user-defined functions, types and enum labels are out of scope.
+
+## 22. Kubernetes Architecture page (2026-10-15)
+
+Mockup 4a (`SbConsole Kubernetes.dc.html`, turn 4): a dependency map at `/p/kubernetes/architecture`,
+second in the drawer. Detection, layout and the overlay are pure C# in `Architecture/`
+(`ArchitectureBuilder`, `ArchitectureLayout`); the page only renders them.
+
+- **Detection.** One operations call (`GetArchitectureInputsAsync`) lists Deployments,
+  StatefulSets, DaemonSets and Services **cluster-wide** (falling back to the selection on 403) so
+  a dependency in another namespace resolves; Ingresses and ConfigMaps for the selection only (403
+  = none). Edges come from env values (literal or ConfigMap-resolved; a Secret ref is never read)
+  that name a Service — `svc`, `svc.ns`, `svc.ns.svc[.cluster.local]`, StatefulSet pod DNS,
+  `host:port`, URLs, ADO-style `Host=…;Port=…` — and from Ingress backends. An unresolvable short
+  name is ignored; an http(s) URL to a dotted host outside the cluster becomes an **external**
+  node. Edge kind (thin HTTP, dashed queue, thick store) comes from the scheme, then the target's
+  store type, then the port. A workload is a **store** when its *first* image is a known
+  database/cache/broker (a redis sidecar doesn't make `cart` a store).
+- **Values never leave the builder.** Env values are read only to extract host and port; edges
+  carry the env var's *name* as their source ("env REDIS_URL"), never the value, because
+  connection strings hold passwords.
+- **NetworkPolicy detection, drag-to-arrange, zoom, Fit, Export and the "mirror to annotation"
+  option from the mockup are out of scope.** Positions are computed every load (depth columns
+  shared by all lanes, cycle back edges ignored); Team grouping uses the `team` /
+  `app.kubernetes.io/team` / `owner` label.
+- **Overlay is console data** in the plugin store, per connection: `arch:overlay:{id}` (manual
+  edges, dismissed detected edge ids) and `arch:desc:{id}` (node id → description). Descriptions
+  are versioned: a save names the version it opened and is refused if someone saved since. Every
+  edit is audited `k8s.arch.edit` (Mutating) with a detail that never includes the text; refusals
+  (conflict, duplicate, nothing changed) are not audited. Read-modify-write runs under one
+  process-wide gate because `IPluginStore` has no compare-and-set — fine for the single-process
+  console, revisit if it ever scales out. The description is shown as plain text (Markdown source);
+  no Markdown renderer was added.
+- **Demo data.** The k3s seed gained `14-architecture.yaml` (`cart-redis`, Services `cart` /
+  `pricing`, Ingress `shop`) and env URLs on the checkout/payments Deployments so the map has edges.
+

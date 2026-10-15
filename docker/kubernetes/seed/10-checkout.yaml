@@ -122,6 +122,14 @@ spec:
           image: nginx:1.27-alpine
           ports:
             - containerPort: 80
+          # Read by the Architecture page's dependency detection (Service DNS names in env).
+          env:
+            - name: PAYMENTS_URL
+              value: "http://payment-gateway"
+            - name: CART_URL
+              value: "http://cart.checkout.svc.cluster.local:80"
+            - name: PRICING_URL
+              value: "http://pricing:80"
           readinessProbe:
             httpGet:
               path: /
@@ -228,6 +236,9 @@ spec:
           image: nginx:1.27-alpine
           ports:
             - containerPort: 80
+          env:
+            - name: CACHE_HOST
+              value: "cart-redis:6379"
           resources:
             requests:
               cpu: 10m

@@ -21,8 +21,8 @@ public class KubernetesPluginTests
         plugin.ConnectionKindDisplayName.Should().Be("Kubernetes");
         plugin.Monogram.Should().Be("K8");
         plugin.Version.Should().Be("0.1.0");
-        plugin.Contribution.PageCount.Should().Be(7);
-        plugin.Contribution.ActionCount.Should().Be(9);
+        plugin.Contribution.PageCount.Should().Be(8);
+        plugin.Contribution.ActionCount.Should().Be(13);
     }
 
     [Fact]
@@ -30,9 +30,9 @@ public class KubernetesPluginTests
     {
         var nav = new KubernetesPlugin().NavItems;
 
-        nav.Select(n => n.Title).Should().Equal("Overview", "Workloads", "Nodes", "Config", "Events");
+        nav.Select(n => n.Title).Should().Equal("Overview", "Architecture", "Workloads", "Nodes", "Config", "Events");
         nav.Select(n => n.Href).Should().Equal(
-            "/p/kubernetes/overview", "/p/kubernetes/workloads", "/p/kubernetes/nodes",
+            "/p/kubernetes/overview", "/p/kubernetes/architecture", "/p/kubernetes/workloads", "/p/kubernetes/nodes",
             "/p/kubernetes/config", "/p/kubernetes/events");
     }
 

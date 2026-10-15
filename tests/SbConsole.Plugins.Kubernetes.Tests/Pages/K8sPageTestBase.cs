@@ -8,6 +8,7 @@ using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
 using NSubstitute;
 using SbConsole.Plugins.Kubernetes.Access;
+using SbConsole.Plugins.Kubernetes.Architecture;
 using SbConsole.Plugins.Kubernetes.Client;
 using SbConsole.Plugins.Kubernetes.Config;
 using SbConsole.Plugins.Kubernetes.Deployments;
@@ -129,6 +130,16 @@ public abstract class K8sPageTestBase : BunitContext, IAsyncLifetime
             Operations, Connections, Audit, NullLogger<UpdateConfigMapCommandHandler>.Instance));
         Services.AddSingleton(new ListEventsQueryHandler(
             Operations, Connections, NullLogger<ListEventsQueryHandler>.Instance));
+        Services.AddSingleton(new GetArchitectureQueryHandler(
+            Operations, Connections, Store, NullLogger<GetArchitectureQueryHandler>.Instance));
+        Services.AddSingleton(new SaveDescriptionCommandHandler(
+            Connections, Audit, Store, Time, NullLogger<SaveDescriptionCommandHandler>.Instance));
+        Services.AddSingleton(new AddDependencyCommandHandler(
+            Connections, Audit, Store, Time, NullLogger<AddDependencyCommandHandler>.Instance));
+        Services.AddSingleton(new RemoveDependencyCommandHandler(
+            Connections, Audit, Store, NullLogger<RemoveDependencyCommandHandler>.Instance));
+        Services.AddSingleton(new RestoreDismissedCommandHandler(
+            Connections, Audit, Store, NullLogger<RestoreDismissedCommandHandler>.Instance));
     }
 
     private sealed class FakeAuthStateProvider : AuthenticationStateProvider

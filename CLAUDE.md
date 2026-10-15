@@ -11,7 +11,7 @@ encrypted secrets, settings, audit log, plugin storage. Plugins provide domain f
 `SbConsole.Plugins.Aws` (AWS SQS/SNS), `SbConsole.Plugins.RabbitMq` (RabbitMQ), `SbConsole.Plugins.Redis` (Redis) and
 `SbConsole.Plugins.Sqlite` (SQLite files: read-only browsing and queries, opt-in write mode, backups and restore) and
 `SbConsole.Plugins.Postgres` (PostgreSQL servers: overview, browse, query, live activity and blocking chains, maintenance) and
-`SbConsole.Plugins.Kubernetes` (Kubernetes clusters: overview, workloads, pods and logs, nodes with cordon/drain, config, events).
+`SbConsole.Plugins.Kubernetes` (Kubernetes clusters: overview, architecture map, workloads, pods and logs, nodes with cordon/drain, config, events).
 Full architecture and decision history: [docs/design.md](docs/design.md) — read it before making
 any non-trivial change; it documents *why* things are shaped the way they are, not just what
 exists.

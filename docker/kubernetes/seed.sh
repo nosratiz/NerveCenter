@@ -18,7 +18,8 @@ done
 $K apply -f /work/seed/00-namespaces.yaml
 # 01-rbac.yaml is not applied here: k3s owns it (auto-deploy manifest).
 $K apply -f /work/seed/10-checkout.yaml -f /work/seed/11-payments.yaml \
-  -f /work/seed/12-platform.yaml -f /work/seed/13-monitoring.yaml -f /work/seed/20-config.yaml
+  -f /work/seed/12-platform.yaml -f /work/seed/13-monitoring.yaml -f /work/seed/14-architecture.yaml \
+  -f /work/seed/20-config.yaml
 
 # alpine/k8s ships kubectl but not openssl; install it on first use (needs network once per run).
 command -v openssl >/dev/null 2>&1 || apk add --no-cache -q openssl

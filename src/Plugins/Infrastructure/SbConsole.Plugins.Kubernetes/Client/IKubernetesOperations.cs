@@ -46,4 +46,7 @@ public interface IKubernetesOperations
 
     // Events (Task 18)
     Task<IReadOnlyList<K8sEvent>> ListEventsAsync(string secret, IReadOnlyList<string> namespaces, TimeSpan window, CancellationToken ct = default);
+
+    // Architecture
+    Task<K8sArchitectureInputs> GetArchitectureInputsAsync(string secret, IReadOnlyList<string> namespaces, CancellationToken ct = default);
 }
