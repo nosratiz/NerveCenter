@@ -374,7 +374,16 @@ aliases. User-defined functions, types and enum labels stay out of scope.
   (Keyword, Function, Schema, Table, View, Column, Alias), `Detail` (column type + table,
   function signature, object kind). `PgCompletionSchema.Empty` (not loaded yet / load failed)
   offers keywords and functions only. Tokenizing follows `PgSqlLexer`'s quoting rules (single quotes, `E''` with
-  backslash escapes, `$tag$…$tag$`, `"…"` identifiers, `--` and nested `/* */` comments); the
+  backslash escapes, `$tag$…$tagYou are an advanced AI programming assistant specialized in resolving Git merge conflicts. You will be given:
+
+1. 1 conflict blocks in diff3 format.
+2. Context information as hunks in a special format, containing lines added in the HEAD branch and in the incoming branch.
+
+Your goal is to accurately resolve each conflict while maintaining code quality and consistency.
+
+Conflict Input:
+<~~conflicts~~>
+, `"…"` identifiers, `--` and nested `/* */` comments); the
   current statement is the one containing the caret, split on top-level `;`. Context rules:
   - caret inside a string, dollar-quoted body, quoted identifier or comment (an unterminated one
     runs to the end) → nothing;

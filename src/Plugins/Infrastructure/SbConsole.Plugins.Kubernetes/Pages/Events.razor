@@ -1,0 +1,515 @@
+@* Mockup 3i: the cluster's own events, Warning filter on, grouped by involved object with repeat counts. Read-only, never
+   audited. Filters re-run the handler (one fetch of the window per change); Live polls every 5 s. Stock MudBlazor. *@
+@page "/p/kubernetes/events"
+@using System.Globalization
+@using SbConsole.Plugins.Kubernetes.Events
+@using SbConsole.Plugins.Kubernetes.Overview
+@inject ListEventsQueryHandler ListEvents
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Kubernetes events</PageTitle>
+
+<div class="k8s-page">
+    <K8sPageHeader Title="Events">
+        <Chips>
+            <K8sConnectionPicker @ref="_picker" Loading="_loading" SelectionChanged="OnConnectionChangedAsync" />
+            @if (_connection is not null)
+            {
+                <K8sNamespacePicker ConnectionId="_connection.Id" SelectionChanged="OnNamespacesChangedAsync" />
+            }
+        </Chips>
+        <Actions>
+            @if (_connection is not null)
+            {
+                <MudToggleGroup T="string" Class="k8s-ev-type" Value="_type" ValueChanged="OnTypeChangedAsync"
+                                Size="Size.Small" Outlined="true" Delimiters="true" Color="Color.Primary">
+                    <MudToggleItem T="string" Value="@AllTypes" Class="k8s-ev-type-all">All <span class="k8s-mono k8s-ev-type-count">@Count(_list?.Total)</span></MudToggleItem>
+                    <MudToggleItem T="string" Value="@("Warning")" Class="k8s-ev-type-warning">Warning <span class="k8s-mono k8s-ev-type-count">@Count(_list?.Warnings)</span></MudToggleItem>
+                    <MudToggleItem T="string" Value="@("Normal")" Class="k8s-ev-type-normal">Normal <span class="k8s-mono k8s-ev-type-count">@Count(_list?.Normals)</span></MudToggleItem>
+                </MudToggleGroup>
+                <MudSelect T="string" Class="k8s-ev-kind" Label="Kind" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Value="_kind" ValueChanged="OnKindChangedAsync" ToStringFunc="@(k => string.IsNullOrEmpty(k) ? "Any" : k)">
+                    <MudSelectItem T="string" Value="@AnyKind">Any</MudSelectItem>
+                    @foreach (var kind in Kinds)
+                    {
+                        <MudSelectItem T="string" Value="kind">@kind</MudSelectItem>
+                    }
+                </MudSelect>
+                <div class="k8s-ev-window">
+                    <MudSelect T="int" Class="k8s-ev-window-select" Label="Last" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Value="_windowHours" ValueChanged="OnWindowChangedAsync" ToStringFunc="@(h => $"{h.ToString(Inv)}h")">
+                        @foreach (var hours in WindowHours)
+                        {
+                            <MudSelectItem T="int" Value="hours">@($"{hours.ToString(Inv)}h")</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <span class="k8s-meta k8s-ev-window-caption">events usually expire after 1 h</span>
+                </div>
+                <MudTextField T="string" Class="k8s-ev-search" Placeholder="reason or message…" Immediate="true" DebounceInterval="300"
+                              Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
+                              Value="_search" ValueChanged="OnSearchChangedAsync" />
+                <MudSwitch T="bool" Class="k8s-ev-live" Label="Live" Color="Color.Primary" Value="_live" ValueChanged="OnLiveChangedAsync" />
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_connection is not null)
+    {
+        <div class="k8s-ev-groupbar">
+            <span class="k8s-muted">Group by</span>
+            <MudToggleGroup T="EventGroupBy" Class="k8s-ev-groupby" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                            Size="Size.Small" Outlined="true" Delimiters="true" Color="Color.Primary">
+                <MudToggleItem T="EventGroupBy" Value="EventGroupBy.InvolvedObject" Class="k8s-ev-groupby-object">Involved object</MudToggleItem>
+                <MudToggleItem T="EventGroupBy" Value="EventGroupBy.Reason" Class="k8s-ev-groupby-reason">Reason</MudToggleItem>
+                <MudToggleItem T="EventGroupBy" Value="EventGroupBy.None" Class="k8s-ev-groupby-none">None</MudToggleItem>
+            </MudToggleGroup>
+            @if (_list is not null)
+            {
+                <span class="k8s-meta k8s-ev-summary">@Summary</span>
+            }
+        </div>
+
+        <div class="k8s-body k8s-ev-body">
+            @if (_error is not null)
+            {
+                <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Title="Can't list events." Class="k8s-ev-error" />
+            }
+
+            @if (_list is { } list)
+            {
+                @if (list.Events.Count == 0)
+                {
+                    <MudPaper Outlined="true" Class="k8s-ev-empty k8s-muted">@EmptyText</MudPaper>
+                }
+                else if (_groupBy == EventGroupBy.None)
+                {
+                    @FlatTable(list.Events)
+                }
+                else
+                {
+                    <MudExpansionPanels Class="k8s-ev-groups" MultiExpansion="true" Outlined="true" Elevation="0" Dense="true">
+                        @for (var i = 0; i < Groups.Count; i++)
+                        {
+                            var group = Groups[i];
+                            var key = group.Key;
+                            <MudExpansionPanel @key="key" Class="k8s-ev-group" Expanded="IsExpanded(key, i)"
+                                               ExpandedChanged="@(open => _expanded[key] = open)">
+                                <TitleContent>@GroupHeader(group)</TitleContent>
+                                <ChildContent>@GroupRows(group)</ChildContent>
+                            </MudExpansionPanel>
+                        }
+                    </MudExpansionPanels>
+                }
+            }
+            else if (_error is null)
+            {
+                <MudPaper Outlined="true" Class="k8s-ev-loading">
+                    @for (var i = 0; i < 4; i++)
+                    {
+                        <div class="k8s-ev-row">
+                            <MudSkeleton Width="30px" />
+                            <MudSkeleton Width="80px" />
+                            <MudSkeleton Width="85%" />
+                        </div>
+                    }
+                </MudPaper>
+            }
+        </div>
+
+        <div class="k8s-footnote k8s-ev-footnote">
+            <span>Events are the cluster's own, retained ~1h by the API server. The console doesn't store them; the audit log is for console actions.</span>
+            <span class="k8s-ev-readonly">Read-only page · nothing here is audited</span>
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private static readonly int[] WindowHours = [1, 6, 24];
+    private const int ExpandedByDefault = 3;
+    private const int RowCap = 50;
+    private const string AllTypes = "All";
+    private const string AnyKind = "";
+
+    private readonly CancellationTokenSource _cts = new();
+    private readonly Dictionary<string, bool> _expanded = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _showAll = new(StringComparer.Ordinal);
+    private K8sPoller? _poller;
+    private K8sVisibilityHook? _visibility;
+    private K8sConnectionPicker? _picker;
+    private ConnectionInfo? _connection;
+    private IReadOnlyList<string>? _namespaces;
+    private EventList? _list;
+    private IReadOnlyList<EventGroup> _groups = [];
+    private string? _error;
+    private string _type = "Warning";
+    private string _kind = AnyKind;
+    private int _windowHours = 1;
+    private string _search = "";
+    private bool _live = true;
+    private EventGroupBy _groupBy = EventGroupBy.InvolvedObject;
+    private bool _loading;
+    private int _generation;
+    private bool _disposed;
+
+    private IReadOnlyList<EventGroup> Groups => _groups;
+
+    /// <summary>Kinds seen in the window, plus the selected one so the select never loses it when it ages out.</summary>
+    private IReadOnlyList<string> Kinds =>
+        (_list?.Kinds ?? []).Concat(_kind.Length > 0 ? [_kind] : []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+    private static string Count(int? n) => n?.ToString(Inv) ?? "–";
+
+    private static string Plural(int n, string one) => $"{n.ToString(Inv)} {one}{(n == 1 ? "" : "s")}";
+
+    private string Summary
+    {
+        get
+        {
+            var events = _list?.Events ?? [];
+            var warnings = events.Count(e => e.Type == "Warning");
+            var head = _groupBy switch
+            {
+                EventGroupBy.Reason => $"{Plural(warnings, "warning")} with {Plural(_groups.Count, "reason")}",
+                EventGroupBy.None => $"{Plural(warnings, "warning")} on {Plural(events.Select(e => e.Regarding).Distinct().Count(), "object")}",
+                _ => $"{Plural(warnings, "warning")} on {Plural(_groups.Count, "object")}",
+            };
+            return $"{head} · newest first · counts are count / series over the window";
+        }
+    }
+
+    private string EmptyText =>
+        _kind.Length > 0 || _search.Trim().Length > 0
+            ? "Nothing matches the filters."
+            : $"No {(_type == AllTypes ? "" : _type + " ")}events in the last {_windowHours.ToString(Inv)}h.";
+
+    private bool IsExpanded(string key, int index) => _expanded.TryGetValue(key, out var open) ? open : index < ExpandedByDefault;
+
+    private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
+
+    /// <summary>Pods and Deployments open their pages, Nodes the Nodes page; other kinds have no page here.</summary>
+    private string? ObjectHref(K8sRef o) => o switch
+    {
+        { Kind: "Pod", Namespace: { } ns } => Link(KubernetesPlugin.PodHref(ns, o.Name)),
+        { Kind: "Deployment", Namespace: { } ns } => Link(KubernetesPlugin.DeploymentHref(ns, o.Name)),
+        { Kind: "Node" } => Link(KubernetesPlugin.NodesHref),
+        _ => null,
+    };
+
+    private string Age(DateTimeOffset at) => K8sFormat.Age(Clock.GetUtcNow() - at);
+
+    private RenderFragment GroupHeader(EventGroup group) => __builder =>
+    {
+        <div class="k8s-ev-group-head">
+            @if (group.Object is { } o)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-ev-kind-chip">@o.Kind</MudChip>
+                @if (!string.IsNullOrEmpty(o.Namespace))
+                {
+                    <span class="k8s-ev-group-ns k8s-muted">@o.Namespace</span>
+                }
+                @if (ObjectHref(o) is { } href)
+                {
+                    <a class="k8s-mono k8s-ev-group-name" href="@href" @onclick:stopPropagation="true">@o.Name</a>
+                }
+                else
+                {
+                    <span class="k8s-mono k8s-ev-group-name">@o.Name</span>
+                }
+                <span class="k8s-mono k8s-muted k8s-ev-top-reasons">@string.Join(" · ", group.TopReasons)</span>
+            }
+            else
+            {
+                <span class="k8s-mono k8s-ev-group-name">@group.Reason</span>
+            }
+            <span class="k8s-spacer"></span>
+            @if (group.WarningCount > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" Class="k8s-ev-warning-count">@Plural(group.WarningCount, "warning")</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-ev-event-count">@Plural(group.Events.Count, "event")</MudChip>
+            }
+            <span class="k8s-mono k8s-muted k8s-ev-last">last @Age(group.Newest)</span>
+        </div>
+    };
+
+    private RenderFragment GroupRows(EventGroup group) => __builder =>
+    {
+        var showAll = _showAll.Contains(group.Key);
+        var rows = showAll ? group.Events : group.Events.Take(RowCap).ToList();
+        <div class="k8s-ev-rows">
+            @foreach (var e in rows)
+            {
+                @Row(e, group.Object is null)
+            }
+            @if (rows.Count < group.Events.Count)
+            {
+                <div class="k8s-ev-more k8s-muted">
+                    @((group.Events.Count - rows.Count).ToString(Inv)) more · <button type="button" class="k8s-link k8s-ev-show-all" @onclick="() => _showAll.Add(group.Key)">show all</button>
+                </div>
+            }
+        </div>
+    };
+
+    private RenderFragment FlatTable(IReadOnlyList<K8sEvent> events) => __builder =>
+    {
+        var showAll = _showAll.Contains("");
+        var rows = showAll ? events : events.Take(RowCap).ToList();
+        <MudPaper Outlined="true" Class="k8s-ev-table">
+            @foreach (var e in rows)
+            {
+                @Row(e, true)
+            }
+            @if (rows.Count < events.Count)
+            {
+                <div class="k8s-ev-more k8s-muted">
+                    @((events.Count - rows.Count).ToString(Inv)) more · <button type="button" class="k8s-link k8s-ev-show-all" @onclick="() => _showAll.Add(string.Empty)">show all</button>
+                </div>
+            }
+        </MudPaper>
+    };
+
+    private RenderFragment Row(K8sEvent e, bool showObject) => __builder =>
+    {
+        <div class="k8s-ev-row">
+            <span class="k8s-mono k8s-muted k8s-ev-age">@Age(e.LastSeen)</span>
+            <span class="@("k8s-mono k8s-ev-reason" + (e.Type == "Warning" ? " k8s-ev-reason-warning" : ""))">@e.Reason</span>
+            <div class="k8s-ev-text">
+                @if (showObject)
+                {
+                    <span class="k8s-mono k8s-muted k8s-ev-object">@(e.Regarding.Namespace is { Length: > 0 } ns ? $"{e.Regarding.Kind} {ns}/{e.Regarding.Name}" : $"{e.Regarding.Kind} {e.Regarding.Name}")</span>
+                }
+                <span class="k8s-ev-message" title="@e.Message">@e.Message</span>
+            </div>
+            <span class="k8s-ev-count-cell">
+                @if (e.Count > 1)
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-mono k8s-ev-count">×@e.Count.ToString(Inv)</MudChip>
+                }
+            </span>
+            <span class="k8s-mono k8s-muted k8s-ev-reporter">@e.Reporter</span>
+        </div>
+    };
+
+    protected override void OnInitialized()
+    {
+        _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _visibility = new K8sVisibilityHook(SetHidden);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _visibility is not null)
+        {
+            await _visibility.StartAsync(JS);
+        }
+    }
+
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
+    public Task SetHidden(bool hidden)
+    {
+        if (_disposed || _poller is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        _poller.Hidden = hidden;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_connection?.Id != connection.Id)
+        {
+            // Another cluster's events must never sit under this connection's name. The namespace picker re-resolves its
+            // selection for the new connection and raises it, which starts the load.
+            _generation++;
+            _connection = connection;
+            _namespaces = null;
+            _list = null;
+            _groups = [];
+            _error = null;
+            _kind = AnyKind;
+            _expanded.Clear();
+            _showAll.Clear();
+            _loading = false;
+            if (_live)
+            {
+                _poller?.Start();
+            }
+
+            return;
+        }
+
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private async Task OnNamespacesChangedAsync(IReadOnlyList<string> namespaces)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _namespaces = namespaces;
+        await LoadAsync();
+    }
+
+    private async Task OnTypeChangedAsync(string type)
+    {
+        _type = type;
+        await LoadAsync();
+    }
+
+    private async Task OnKindChangedAsync(string? kind)
+    {
+        _kind = kind ?? AnyKind;
+        await LoadAsync();
+    }
+
+    private async Task OnWindowChangedAsync(int hours)
+    {
+        _windowHours = hours;
+        await LoadAsync();
+    }
+
+    private async Task OnSearchChangedAsync(string? search)
+    {
+        _search = search ?? "";
+        await LoadAsync();
+    }
+
+    private async Task OnLiveChangedAsync(bool live)
+    {
+        _live = live;
+        if (!live)
+        {
+            _poller?.Stop();
+            return;
+        }
+
+        _poller?.Start();
+        await LoadAsync(background: true);
+    }
+
+    private void OnGroupByChanged(EventGroupBy by)
+    {
+        _groupBy = by;
+        _expanded.Clear();
+        _showAll.Clear();
+        Regroup();
+    }
+
+    private void Regroup() => _groups = _list is { } list && _groupBy != EventGroupBy.None ? EventGrouping.Group(list.Events, _groupBy) : [];
+
+    private Task LoadAsync() => LoadAsync(background: false);
+
+    private async Task LoadAsync(bool background)
+    {
+        if (_connection is not { } connection || _namespaces is not { } namespaces || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        var query = new EventQuery(namespaces, TimeSpan.FromHours(_windowHours), _type == AllTypes ? null : _type,
+            _kind.Length == 0 ? null : _kind, _search);
+        try
+        {
+            var result = await ListEvents.HandleAsync(connection.Id, query, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (result is { IsSuccess: true, Value: { } list })
+            {
+                _list = list;
+                _error = null;
+                Regroup();
+            }
+            else
+            {
+                // Keep the last events on screen and say why they are not fresh.
+                _error = result.Error ?? "Listing failed.";
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        StateHasChanged();
+        if (_picker is not null)
+        {
+            await _picker.RefreshReachabilityAsync();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || !_live)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+        if (_visibility is not null)
+        {
+            await _visibility.DisposeAsync();
+        }
+    }
+}

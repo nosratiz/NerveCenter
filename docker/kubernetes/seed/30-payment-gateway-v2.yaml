@@ -1,0 +1,87 @@
+# Applied by seed.sh only after v1 has fully rolled out. The new pod is OOMKilled on every start
+# and its readiness probe (nothing listens on :80) never passes, so with maxUnavailable: 0 the two
+# v1 pods keep serving and the Deployment reports ProgressDeadlineExceeded after 60 s.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-gateway
+  namespace: checkout
+  labels:
+    app: payment-gateway
+  annotations:
+    kubernetes.io/change-cause: "bump sdk"
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 60
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: payment-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app: payment-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: busybox:1.36
+          # Allocates far past the 64Mi limit: OOMKilled -> CrashLoopBackOff, never Ready.
+          command: ["sh", "-c", "echo gateway starting · version 2.14.1; head -c 400m /dev/zero | tail"]
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: gateway-config
+                  key: REDIS_URL
+            - name: MERCHANT_CACHE_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: gateway-config
+                  key: MERCHANT_CACHE_SIZE
+            - name: CACHE_TTL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: gateway-config
+                  key: CACHE_TTL_SECONDS
+            - name: FEATURE_FLAGS
+              valueFrom:
+                configMapKeyRef:
+                  name: gateway-config
+                  key: FEATURE_FLAGS
+            - name: PROVIDERS_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: gateway-config
+                  key: PROVIDERS_JSON
+            - name: STRIPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stripe-live
+                  key: api-key
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gateway
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: gateway-config

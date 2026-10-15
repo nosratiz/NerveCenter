@@ -1,0 +1,529 @@
+@* Mockup 3e (nodes: conditions, roles, requests vs allocatable, cordon). Spec §6, §11. Stock MudBlazor in the Nocturne theme.
+   Nodes are cluster-scoped: no namespace picker. *@
+@page "/p/kubernetes/nodes"
+@using System.Globalization
+@using SbConsole.Plugins.Kubernetes.Access
+@using SbConsole.Plugins.Kubernetes.Nodes
+@using SbConsole.Plugins.Kubernetes.Overview
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject ListNodesQueryHandler ListNodes
+@inject ListNodePodsQueryHandler ListNodePods
+@inject GetPermissionsQueryHandler GetPermissions
+@inject GetResourceYamlQueryHandler GetResourceYaml
+@inject SetNodeSchedulableCommandHandler SetSchedulable
+@inject IConfirmationService Confirmation
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject AccessCache AccessCache
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Kubernetes nodes</PageTitle>
+
+<div class="k8s-page">
+    <K8sPageHeader Title="Nodes">
+        <Chips>
+            <K8sConnectionPicker Loading="_loading" SelectionChanged="OnConnectionChangedAsync" />
+            <RbacChip Permissions="_permissions" ClusterNeeds="K8sPermissions.NodeClusterActions" />
+        </Chips>
+        <Meta>
+            @if (_nodes is not null)
+            {
+                <span class="k8s-nodes-summary">@Summary(_nodes)</span>
+            }
+        </Meta>
+        <Actions>
+            @if (_connection is not null)
+            {
+                <MudSelect T="string" Class="k8s-pool-filter" Label="Pool" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Value="_pool" ValueChanged="OnPoolChanged">
+                    <MudSelectItem T="string" Value="@AllPools">All</MudSelectItem>
+                    @foreach (var pool in Pools)
+                    {
+                        <MudSelectItem T="string" Value="@pool">@pool</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-nodes-refresh" Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_connection is not null)
+    {
+        <div class="k8s-body k8s-nodes-body">
+            @if (_error is not null)
+            {
+                <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Title="Can't list nodes." Class="k8s-nodes-error">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-nodes-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                </K8sErrorAlert>
+            }
+
+            @Table()
+        </div>
+
+        <div class="k8s-footnote k8s-nodes-footnote">
+            Cordon/Uncordon flip one field and are Mutating. Drain evicts every pod and is Destructive — it previews the eviction list first.
+            <span class="k8s-nodes-audited">Audited as <span class="k8s-mono">k8s.node.cordon</span> / <span class="k8s-mono">.drain</span></span>
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(10);
+    private const int RowCap = 50;
+    private const string AllPools = "";
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    private readonly CancellationTokenSource _cts = new();
+    private K8sPoller? _poller;
+    private ConnectionInfo? _connection;
+    private K8sPermissions? _permissions;
+    private IReadOnlyList<K8sNodeInfo>? _nodes;
+    private string? _error;
+    private string _pool = AllPools;
+    private bool _showAll;
+    private bool _loading;
+    private int _generation;
+    private K8sDialogGate _dialogs = null!; // OnInitialized; no event can reach the page before it runs
+    private bool _disposed;
+    private K8sVisibilityHook? _visibility;
+
+    private IReadOnlyList<string> Pools =>
+        (_nodes ?? []).Select(n => n.Pool).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+    private RenderFragment Table() => __builder =>
+    {
+        if (_nodes is not { } all)
+        {
+            if (_error is not null)
+            {
+                // The error alert above says why; a skeleton here would promise data that is not coming.
+                return;
+            }
+
+            <div class="k8s-nodes-loading">
+                @for (var i = 0; i < 4; i++)
+                {
+                    <MudSkeleton Height="28px" />
+                }
+            </div>
+            return;
+        }
+
+        var filtered = _pool == AllPools ? all : all.Where(n => n.Pool == _pool).ToList();
+        var shown = _showAll ? filtered : filtered.Take(RowCap).ToList();
+        <div class="k8s-table-wrap">
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="k8s-nodes-table">
+                <thead>
+                    <tr>
+                        <th>Node</th><th>Conditions</th><th>Roles</th><th>Kubelet</th><th>CPU req / alloc</th><th>Mem req / alloc</th>
+                        <th class="k8s-num">Pods</th><th>Schedulable</th><th class="k8s-num">Age</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (filtered.Count == 0)
+                    {
+                        <tr class="k8s-nodes-empty"><td colspan="10" class="k8s-muted">@(all.Count == 0 ? "No nodes." : "No nodes in this pool.")</td></tr>
+                    }
+                    @foreach (var node in shown)
+                    {
+                        var ready = node.ReadyStatus == "True";
+                        <tr class="@("k8s-node-row" + (ready ? "" : " k8s-node-notready"))" @key="node.Name">
+                            <td>
+                                <div class="k8s-mono k8s-node-name">@node.Name</div>
+                                <div class="k8s-mono k8s-muted k8s-node-caption">@Caption(node)</div>
+                            </td>
+                            <td>
+                                <div class="k8s-node-conditions">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(ready ? Color.Success : Color.Error)"
+                                         Class="k8s-node-ready">@(ready ? "Ready" : "NotReady")</MudChip>
+                                @if (!ready)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-node-ready-age">@NotReadyAge(node)</MudChip>
+                                }
+                                @foreach (var pressure in node.Pressures)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" Class="k8s-pressure">@pressure</MudChip>
+                                }
+                                </div>
+                            </td>
+                            <td class="k8s-mono k8s-node-roles">@string.Join(" · ", node.Roles.Concat(node.Taints))</td>
+                            <td class="k8s-mono k8s-node-kubelet">@node.KubeletVersion</td>
+                            <td>@Bar(node.CpuRequestedMilli, node.CpuAllocatableMilli, ready, "k8s-node-cpu",
+                                    $"{K8sFormat.Cores(node.CpuRequestedMilli)} / {K8sFormat.Cores(node.CpuAllocatableMilli)}")</td>
+                            <td>@Bar(node.MemRequestedBytes, node.MemAllocatableBytes, ready, "k8s-node-mem",
+                                    $"{K8sFormat.Bytes(node.MemRequestedBytes)} / {K8sFormat.Bytes(node.MemAllocatableBytes)}")</td>
+                            <td class="k8s-num k8s-mono k8s-node-pods">@node.PodCount</td>
+                            <td class="k8s-node-schedulable">
+                                @if (node.Unschedulable)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                             Icon="@Icons.Material.Outlined.Block" Class="k8s-cordoned">cordoned</MudChip>
+                                }
+                                else
+                                {
+                                    <span>yes</span>
+                                }
+                            </td>
+                            <td class="k8s-num k8s-mono k8s-muted k8s-node-age">@K8sFormat.Age(Clock.GetUtcNow() - node.CreatedAt)</td>
+                            <td class="k8s-node-actions">@Actions(node)</td>
+                        </tr>
+                    }
+                    @if (filtered.Count > shown.Count)
+                    {
+                        <tr class="k8s-nodes-more">
+                            <td colspan="10" class="k8s-muted">
+                                @(filtered.Count - shown.Count) more nodes · <button type="button" class="k8s-link k8s-nodes-show-all" @onclick="() => _showAll = true">show all</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </div>
+    };
+
+    /// <summary>Requests over allocatable; a not-ready node's bars are its last known values, so they are dimmed.</summary>
+    private static RenderFragment Bar(long requested, long allocatable, bool ready, string textClass, string text) => __builder =>
+    {
+        var fraction = allocatable > 0 ? Math.Clamp((double)requested / allocatable, 0, 1) : 0;
+        <div class="k8s-node-usage">
+            <MudProgressLinear Class="@("k8s-node-bar" + (ready ? "" : " k8s-stale"))" Size="Size.Small" Min="0" Max="1" Value="fraction"
+                               Color="@(fraction >= 0.9 ? Color.Warning : Color.Primary)" />
+            <span class="k8s-mono k8s-node-usage-text @textClass">@text</span>
+        </div>
+    };
+
+    private RenderFragment Actions(K8sNodeInfo node) => __builder =>
+    {
+        <div class="k8s-node-action-row">
+            @if (CanPatchNodes)
+            {
+                if (node.Unschedulable)
+                {
+                    <MudButton Class="k8s-uncordon" Variant="Variant.Outlined" Size="Size.Small" OnClick="() => SetSchedulableAsync(node, false)">Uncordon</MudButton>
+                }
+                else
+                {
+                    <MudButton Class="k8s-cordon" Variant="Variant.Outlined" Size="Size.Small" OnClick="() => SetSchedulableAsync(node, true)">Cordon</MudButton>
+                }
+            }
+            <MudMenu Class="k8s-node-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" Dense="true"
+                     AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"Actions for {node.Name}")">
+                <MudMenuItem Class="k8s-view-yaml" Icon="@Icons.Material.Outlined.Code" OnClick="() => ViewYamlAsync(node)">View YAML</MudMenuItem>
+                <MudMenuItem Class="k8s-node-pods-item" Icon="@Icons.Material.Outlined.List" OnClick="() => ShowPodsAsync(node)">
+                    Show @node.PodCount.ToString(Inv) @(node.PodCount == 1 ? "pod" : "pods") on this node
+                </MudMenuItem>
+                <MudMenuItem Class="k8s-copy-kubectl" Icon="@Icons.Material.Outlined.ContentCopy" OnClick="() => CopyKubectlAsync(node)">Copy kubectl command</MudMenuItem>
+                @if (CanDrain)
+                {
+                    <MudDivider />
+                    <MudMenuItem Class="k8s-drain" Icon="@Icons.Material.Outlined.Logout" IconColor="Color.Error" OnClick="() => DrainAsync(node)">Drain node…</MudMenuItem>
+                }
+            </MudMenu>
+        </div>
+    };
+
+    private static string Caption(K8sNodeInfo node) =>
+        string.Join(" · ", new[] { node.InstanceType, node.InternalIp }.Where(s => !string.IsNullOrEmpty(s)));
+
+    private string NotReadyAge(K8sNodeInfo node)
+    {
+        var label = node.ReadyStatus == "Unknown" ? "Unknown" : "for";
+        return node.ReadySince is { } since ? $"{label} {K8sFormat.Age(Clock.GetUtcNow() - since)}" : label;
+    }
+
+    private static string Summary(IReadOnlyList<K8sNodeInfo> nodes)
+    {
+        static string Count(int n, string one) => $"{n.ToString(Inv)} {(n == 1 ? one : one + "s")}";
+        var pools = nodes.Select(n => n.Pool).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+        var parts = new List<string> { Count(nodes.Count, "node") };
+        if (pools > 0)
+        {
+            parts.Add(Count(pools, "pool"));
+        }
+
+        parts.Add($"{nodes.Count(n => n.ReadyStatus == "True").ToString(Inv)} ready");
+        parts.Add($"{nodes.Count(n => n.Unschedulable).ToString(Inv)} cordoned");
+        return string.Join(" · ", parts);
+    }
+
+    // RBAC (spec §11): cordon/uncordon is a cluster-scoped nodes patch, answered by the cluster check (not a namespaced
+    // rules review). Until the probe answers nothing mutating renders; the server's 403 stays the backstop.
+    private bool CanPatchNodes => _permissions is { } p && p.CanCluster(K8sPermissions.NodesPatch);
+
+    // Drain cordons (nodes patch) and then evicts (pods/eviction create, cluster-wide check).
+    private bool CanDrain => CanPatchNodes && _permissions!.CanCluster(K8sPermissions.PodsEvictionCreate);
+
+    private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
+
+    protected override void OnInitialized()
+    {
+        _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _dialogs = new K8sDialogGate(_poller);
+        _visibility = new K8sVisibilityHook(SetHidden);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _visibility is not null)
+        {
+            await _visibility.StartAsync(JS);
+        }
+    }
+
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
+    public Task SetHidden(bool hidden)
+    {
+        if (!_disposed && _poller is not null)
+        {
+            _poller.Hidden = hidden;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_connection?.Id != connection.Id)
+        {
+            // Another cluster's nodes must never sit under this connection's name.
+            _generation++;
+            _permissions = null;
+            _nodes = null;
+            _error = null;
+            _pool = AllPools;
+            _showAll = false;
+            _loading = false;
+            _poller?.Start();
+        }
+
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private void OnPoolChanged(string pool)
+    {
+        _pool = pool ?? AllPools;
+        _showAll = false;
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_connection is { } connection)
+        {
+            AccessCache.Invalidate(connection.Id);
+        }
+
+        await LoadAsync();
+    }
+
+    private Task LoadAsync() => LoadAsync(background: false);
+
+    private async Task LoadAsync(bool background)
+    {
+        if (_connection is not { } connection || _disposed)
+        {
+            return;
+        }
+
+        var generation = ++_generation;
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            // Sequential on purpose: the handlers share the circuit's scoped services.
+            var permissions = await GetPermissions.HandleAsync(connection.Id, [], false, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            // A failed lookup (connection gone) leaves the server's 403 as the backstop rather than hiding everything.
+            _permissions = permissions.Value ?? K8sPermissions.All;
+
+            var nodes = await ListNodes.HandleAsync(connection.Id, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (nodes is { IsSuccess: true, Value: { } list })
+            {
+                _nodes = K8sMappers.InNodeDisplayOrder(list);
+                _error = null;
+                if (_pool != AllPools && !list.Any(n => n.Pool == _pool))
+                {
+                    _pool = AllPools;
+                }
+            }
+            else
+            {
+                // Keep the last rows and say why they are not fresh (403 → "Your account can't list nodes.").
+                _error = nodes.Error ?? "Listing failed.";
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _dialogs.IsOpen)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    private async Task SetSchedulableAsync(K8sNodeInfo node, bool unschedulable)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var verb = unschedulable ? "Cordon" : "Uncordon";
+        // Mutating: a plain two-button confirmation, never typed.
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync(verb, node.Name, isProd: false)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await SetSchedulable.HandleAsync(
+            new SetSchedulableCommand(new K8sTarget(connection.Id, connection.Name, null, node.Name), unschedulable), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? $"{verb} failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add(unschedulable ? $"Cordoned {node.Name}." : $"Uncordoned {node.Name}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task ShowPodsAsync(K8sNodeInfo node)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var ct = _cts.Token;
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await NodePodsDialog.ShowAsync(Dialogs, node.Name,
+                () => ListNodePods.HandleAsync(connection.Id, node.Name, ct), Link);
+            return await reference.Result;
+        });
+    }
+
+    /// <summary>The drain dialog does its own preview, typed confirmation and progress; the page reloads once it closes.</summary>
+    private async Task DrainAsync(K8sNodeInfo node)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await DrainDialog.ShowAsync(Dialogs, connection, node);
+            return await reference.Result;
+        });
+        if (!_disposed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task ViewYamlAsync(K8sNodeInfo node)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var ct = _cts.Token;
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await YamlDialog.ShowAsync(Dialogs, $"node/{node.Name}",
+                () => GetResourceYaml.HandleAsync(connection.Id, K8sResourceKind.Node, null, node.Name, ct));
+            return await reference.Result;
+        });
+    }
+
+    private async Task CopyKubectlAsync(K8sNodeInfo node)
+    {
+        try
+        {
+            if (_visibility?.Module is not { } module || _disposed)
+            {
+                return;
+            }
+
+            await module.InvokeVoidAsync("copyText", $"kubectl describe node {node.Name}");
+            Snackbar.Add("Copied the kubectl command.", Severity.Info);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Clipboard access can be refused by the browser; copying is a convenience.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+        if (_visibility is not null)
+        {
+            await _visibility.DisposeAsync();
+        }
+    }
+}

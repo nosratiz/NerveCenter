@@ -395,16 +395,16 @@ the host publishes the right ports, the container does not.
 Every published port can be moved through `.env` (see [`.env.example`](../.env.example)):
 `KAFKA_HOST_PORT`, `KAFKA_UI_PORT`, `SERVICEBUS_AMQP_PORT`, `SERVICEBUS_HTTP_PORT`,
 `SBC_HOST_PORT`, `LOCALSTACK_PORT`, `RABBITMQ_AMQP_PORT`, `RABBITMQ_MANAGEMENT_PORT`,
-`REDIS_PORT`, `REDIS_PASSWORD`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`. Note that changing `KAFKA_HOST_PORT` also changes what the
+`REDIS_PORT`, `REDIS_PASSWORD`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, `K3S_PORT`. Note that changing `KAFKA_HOST_PORT` also changes what the
 broker advertises to host clients, so the secret you paste into the app must use the same port.
 
 ## Reset
 
 ```bash
-docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile postgres --profile sqlite --profile app down -v
+docker compose --profile servicebus --profile aws --profile rabbitmq --profile redis --profile postgres --profile kubernetes --profile sqlite --profile app down -v
 ```
 
-`-v` drops the named volumes (Kafka log segments, SQL Server data, PostgreSQL data, the containerised app's
+`-v` drops the named volumes (Kafka log segments, SQL Server data, PostgreSQL data, k3s cluster state, the containerised app's
 SQLite db). Re-running `docker compose up -d` re-seeds the sample topics.
 
 ## SQLite
@@ -588,3 +588,102 @@ Reset only this data: `docker compose --profile postgres down` then
 The `sbconsole` user is a superuser, so every page works in the demo. The plugin also works as a
 plain role, with less visibility: without `pg_monitor`, other users' queries and `pg_stat_activity`
 rows are hidden and Activity says so.
+
+## Kubernetes (opt-in)
+
+```bash
+docker compose --profile kubernetes up -d
+```
+
+| Service    | Host address             | What it is                                                         |
+|------------|--------------------------|--------------------------------------------------------------------|
+| `k3s`      | `https://localhost:6443` | Single-node k3s v1.30 (Traefik off), static-token auth, privileged |
+| `k3s-seed` | (one-shot)               | `alpine/k8s` image; applies `docker/kubernetes/seed/*.yaml`; its log ends with `done` |
+
+The API server is also `https://k3s:6443` on the compose network; both names are in its
+certificate, but the demo kubeconfigs use `insecure-skip-tls-verify: true` anyway because the CA
+is regenerated with the volume. The host port is `K3S_PORT`. First start takes about a minute
+(k3s boot plus image pulls). The seed is idempotent (`kubectl apply`); re-run it with
+`docker compose --profile kubernetes up -d k3s-seed`. Re-running the seed resets the demo state
+(workloads, ConfigMaps and the regenerated TLS secret go back to their seeded form).
+
+Auth is two static bearer tokens from `docker/kubernetes/tokens.csv`. **They are local-only demo
+values, checked in on purpose; never reuse them anywhere.**
+
+| User               | Token                              | Bound to (ClusterRoleBinding)             |
+|--------------------|------------------------------------|-------------------------------------------|
+| `sbconsole-admin`  | `sbc-demo-admin-token-local-only`  | `cluster-admin`                           |
+| `sbconsole-viewer` | `sbc-demo-viewer-token-local-only` | `view` (read-only; no Secrets, no Nodes)  |
+
+The bindings (`seed/01-rbac.yaml`) are mounted into k3s's auto-deploy manifests directory rather
+than applied by the seed: the tokens carry no groups, so the admin user couldn't grant itself
+anything. The `k3s` container has a fixed `hostname` so the node keeps its name when the
+container is recreated (`k3s-node-1`).
+
+What each namespace demonstrates:
+
+| Namespace    | Contents | Demonstrates |
+|--------------|----------|--------------|
+| `checkout`   | `payment-gateway` (2 replicas, `maxUnavailable: 0`, `progressDeadlineSeconds: 60`), `checkout-api` (3, with HPA 3–6 at 70 % CPU), `cart` (nginx + redis sidecar), `pricing`, StatefulSet `cart-redis`, Ingress `shop` (no controller; it only feeds the Architecture map), and env URLs between them; ConfigMaps `gateway-config` (env + volume of payment-gateway, a 1.7 KB `PROVIDERS_JSON`, a 14-line `logging.yaml`) and `reports-config` (used by nothing); Secrets `stripe-live`, `ghcr-pull` (dockerconfigjson) and `checkout-tls` | The seed rolls out v1 (nginx, revision `initial`), then applies v2 (`bump sdk`): its pod is OOMKilled on every start (CrashLoopBackOff) and never ready, so the two v1 pods keep serving and the Deployment shows `ProgressDeadlineExceeded` after 60 s; rollback to revision 1 fixes it. Scale on `checkout-api` shows "managed by HPA". Config page: the unused ConfigMap, collapsed long values, and `checkout-tls`, regenerated on every seed run so it always expires ~9 days out (the < 30 d warning). Architecture page (`checkout` + `payments`): shop → checkout-api → cart / payment-gateway / pricing, both reaching `cart-redis`, settlement-api → ledger and → payment-gateway across lanes, webhooks → an external host |
+| `payments`   | `settlement-api`, StatefulSet `ledger` (3, headless Service) with PDB `minAvailable: 3`, Job `settlement-20261014-0200` (fails, `backoffLimit: 1`), CronJob `nightly-settlement` (`0 2 * * *`), `webhooks` (scaled to 0) | A failed Job, a zero-replica Deployment, and a PDB with 0 allowed disruptions, which blocks a node drain |
+| `platform`   | DaemonSet `log-shipper` | CrashLoopBackOff with a readable last log line (`config error: missing SHIPPER_TOKEN`) |
+| `monitoring` | Deployment `prometheus` requesting `999Gi` memory | Pending / `FailedScheduling` (Insufficient memory) |
+| `reporting`  | Deployment `report-builder` mounting ConfigMap `reports-config-missing` | Stuck in ContainerCreating with `FailedMount` warning events |
+
+What single-node k3s can't show: a NotReady node, and draining one node of several while the
+workload moves elsewhere (here a drain just leaves pods Pending, and the `ledger` PDB blocks it).
+The handler and page tests cover those states with substituted operations.
+
+Demo connections: `docker/sqlite/demo-connections.json` holds `k3s-local` (admin token, tag
+`prod`, so destructive actions ask for the typed name) and `k3s-local-viewer` (viewer token, tag
+`demo`; read-only, and it can't list nodes, Secrets or `events.k8s.io` events, so the plugin shows
+those as not permitted or falls back to core events). Both use `server: https://k3s:6443`, which is how the containerised
+app (`--profile app`, same compose network) reaches the cluster. For `dotnet run` on the host,
+copy the demo file outside the repo, replace `https://k3s:6443` with `https://localhost:6443` in
+the two `kubernetes` entries, and point `SBC_DEMO_CONNECTIONS` at the copy.
+
+Quick check from the host:
+
+```bash
+kubectl --server=https://localhost:6443 --token=sbc-demo-viewer-token-local-only --insecure-skip-tls-verify get pods -A
+kubectl --server=https://localhost:6443 --token=sbc-demo-viewer-token-local-only --insecure-skip-tls-verify auth can-i patch deployments -n checkout   # no
+```
+
+Reset only this cluster: `docker compose --profile kubernetes rm -sf k3s k3s-seed` then
+`docker volume rm nervecenter_k3s-data`.
+
+### How to mint a ServiceAccount token for a real cluster
+
+The plugin accepts only static credentials (no `exec` or `auth-provider` plugins, no file paths),
+so for a real cluster create a ServiceAccount and a long-lived token for it:
+
+```bash
+kubectl -n kube-system create serviceaccount sbconsole
+# Read-only. For scale/restart/rollback/cordon/drain, bind a custom operator role instead.
+kubectl create clusterrolebinding sbconsole-view --clusterrole=view --serviceaccount=kube-system:sbconsole
+kubectl -n kube-system create token sbconsole --duration=8760h
+```
+
+Paste a kubeconfig like this into the connection form (the CA is the cluster's, base64):
+
+```yaml
+apiVersion: v1
+kind: Config
+clusters:
+  - name: prod
+    cluster:
+      server: https://api.prod.example.com:6443
+      certificate-authority-data: <base64 CA>
+users:
+  - name: sbconsole
+    user:
+      token: <token from `kubectl create token`>
+contexts:
+  - name: prod
+    context:
+      cluster: prod
+      user: sbconsole
+current-context: prod
+```
+
+The API server may cap `--duration`; check the token's expiry and rotate it before then.

@@ -1,0 +1,714 @@
+@* Mockups 3b (workloads, scale dialog) and 3g (read-only RBAC). Spec §6, §10, §11. Stock MudBlazor in the Nocturne theme. *@
+@page "/p/kubernetes/workloads"
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Kubernetes.Access
+@using SbConsole.Plugins.Kubernetes.Overview
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject ListWorkloadsQueryHandler ListWorkloads
+@inject CountWorkloadsQueryHandler CountWorkloads
+@inject GetPermissionsQueryHandler GetPermissions
+@inject GetResourceYamlQueryHandler GetResourceYaml
+@inject RestartWorkloadCommandHandler RestartHandler
+@inject DeleteWorkloadCommandHandler DeleteHandler
+@inject IConfirmationService Confirmation
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject AccessCache AccessCache
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Kubernetes workloads</PageTitle>
+
+<div class="k8s-page">
+    <K8sPageHeader Title="Workloads">
+        <Chips>
+            <K8sConnectionPicker @ref="_picker" Loading="_loading" SelectionChanged="OnConnectionChangedAsync" />
+            <RbacChip Permissions="_permissions" Needs="K8sPermissions.WorkloadActions" />
+            @if (_connection is not null)
+            {
+                <K8sNamespacePicker ConnectionId="_connection.Id" SelectionChanged="OnNamespacesChangedAsync" />
+            }
+        </Chips>
+        <Actions>
+            @if (_connection is not null)
+            {
+                <MudTextField T="string" Class="k8s-wl-filter" Value="_filter" ValueChanged="@(v => _filter = v ?? "")" Immediate="true"
+                              Placeholder="Filter by name or image…" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search" />
+                <MudTextField T="string" Class="k8s-wl-labels" Value="_labelsInput" ValueChanged="@(v => _labelsInput = v ?? "")" Immediate="true"
+                              Placeholder="Labels" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Sell"
+                              OnKeyDown="OnLabelsKeyDownAsync" OnBlur="@(_ => ApplyLabelsAsync())" />
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-wl-refresh" Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
+            }
+        </Actions>
+    </K8sPageHeader>
+
+    @if (_connection is not null)
+    {
+        <div class="k8s-body k8s-wl-body">
+            @if (ShowRbacAlert(out var missing))
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="k8s-rbac-alert">@RbacText(missing)</MudAlert>
+            }
+
+            @if (_error is not null)
+            {
+                <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" Title="@($"Can't list {Plural(_tab)}.")" Class="k8s-wl-error">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="k8s-wl-retry" Disabled="_loading" OnClick="LoadAsync">Retry now</MudButton>
+                </K8sErrorAlert>
+            }
+
+            <MudTabs Class="k8s-wl-tabs" Elevation="0" Rounded="false" KeepPanelsAlive="false"
+                     ActivePanelIndex="@Array.IndexOf(TabKinds, _tab)" ActivePanelIndexChanged="OnTabChangedAsync">
+                @foreach (var kind in TabKinds)
+                {
+                    <MudTabPanel>
+                        <TabContent>@Plural(kind)@if (_counts?.GetValueOrDefault(kind) is { } count)
+                            {
+                                <span class="k8s-mono k8s-tab-count">@(" " + count.Count)</span>@if (count.HasFailure)
+                                {
+                                    <span class="k8s-tab-failure" title="Something here is failing"></span>
+                                }
+                            }
+                        </TabContent>
+                        <ChildContent>
+                            @Table(kind)
+                        </ChildContent>
+                    </MudTabPanel>
+                }
+            </MudTabs>
+
+            <div class="k8s-footnote k8s-wl-footnote">
+                Scale and Restart are Mutating: a short dialog, no typing. Delete is Destructive and only in the menu.
+                <span class="k8s-wl-audited">All actions audited · <MudLink Href="/audit" Typo="Typo.caption">Audit log</MudLink></span>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(10);
+    private const int RowCap = 50;
+    private static readonly K8sWorkloadKind[] TabKinds =
+        [K8sWorkloadKind.Deployment, K8sWorkloadKind.StatefulSet, K8sWorkloadKind.DaemonSet, K8sWorkloadKind.Job, K8sWorkloadKind.CronJob];
+
+    private readonly CancellationTokenSource _cts = new();
+    private K8sPoller? _poller;
+    private K8sConnectionPicker? _picker;
+    private ConnectionInfo? _connection;
+    private IReadOnlyList<string>? _namespaces;
+    private K8sPermissions? _permissions;
+    private IReadOnlyDictionary<K8sWorkloadKind, K8sKindCount>? _counts;
+    private IReadOnlyList<K8sWorkload>? _rows;
+    private K8sWorkloadKind? _rowsKind;
+    private K8sWorkloadKind _tab = K8sWorkloadKind.Deployment;
+    private string? _error;
+    private string _filter = "";
+    private string _labelsInput = "";
+    private string? _labels;
+    private bool _showAll;
+    private bool _loading;
+    private int _generation;
+    private K8sDialogGate _dialogs = null!; // OnInitialized; no event can reach the page before it runs
+    private bool _disposed;
+    private K8sVisibilityHook? _visibility;
+
+    private RenderFragment Table(K8sWorkloadKind kind) => __builder =>
+    {
+        if (_rows is not { } all || _rowsKind != kind)
+        {
+            if (_error is not null)
+            {
+                // The error alert above says why; a skeleton here would promise data that is not coming.
+                return;
+            }
+
+            <div class="k8s-wl-loading">
+                @for (var i = 0; i < 4; i++)
+                {
+                    <MudSkeleton Height="28px" />
+                }
+            </div>
+            return;
+        }
+
+        var filtered = Filtered(all);
+        var shown = _showAll ? filtered : filtered.Take(RowCap).ToList();
+        var columns = Columns(kind);
+        <div class="k8s-table-wrap">
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="k8s-wl-table">
+                <thead>
+                    <tr>
+                        @foreach (var column in columns)
+                        {
+                            <th class="@(column.Numeric ? "k8s-num" : null)">@column.Title</th>
+                        }
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (filtered.Count == 0)
+                    {
+                        <tr class="k8s-wl-empty"><td colspan="@(columns.Count + 1)" class="k8s-muted">@EmptyText(kind, all.Count)</td></tr>
+                    }
+                    @foreach (var row in shown)
+                    {
+                        <tr class="@("k8s-wl-row" + (row.IsUnhealthy ? " k8s-wl-unhealthy" : ""))" @key="row.Namespace + '/' + row.Name">
+                            <td class="k8s-mono">@NameCell(row)</td>
+                            <td><span class="k8s-wl-ns">@row.Namespace</span></td>
+                            @Cells(row)
+                            <td class="k8s-wl-actions">@Actions(row)</td>
+                        </tr>
+                    }
+                    @if (filtered.Count > shown.Count)
+                    {
+                        <tr class="k8s-wl-more">
+                            <td colspan="@(columns.Count + 1)" class="k8s-muted">
+                                @(filtered.Count - shown.Count) more in these namespaces · <button type="button" class="k8s-link k8s-wl-show-all" @onclick="() => _showAll = true">show all</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </div>
+    };
+
+    private RenderFragment NameCell(K8sWorkload row) => __builder =>
+    {
+        if (row.Kind == K8sWorkloadKind.Deployment)
+        {
+            <a class="k8s-wl-name" href="@Link(KubernetesPlugin.DeploymentHref(row.Namespace, row.Name))">@row.Name</a>
+        }
+        else
+        {
+            <button type="button" class="k8s-link k8s-wl-name" title="View YAML" @onclick="() => ViewYamlAsync(row)">@row.Name</button>
+        }
+    };
+
+    private RenderFragment Cells(K8sWorkload row) => __builder =>
+    {
+        var age = K8sFormat.Age(Clock.GetUtcNow() - row.CreatedAt);
+        switch (row.Kind)
+        {
+            case K8sWorkloadKind.Deployment:
+                <td><ReadyBar Ready="row.Ready" Desired="row.Desired" /></td>
+                <td class="k8s-num k8s-mono">@row.UpToDate</td>
+                <td class="@("k8s-num k8s-mono" + (row.Available < row.Desired ? " k8s-wl-short" : ""))">@row.Available</td>
+                <td class="k8s-mono k8s-muted k8s-wl-images" title="@K8sFormat.Images(row.Images)">@K8sFormat.Images(row.Images)</td>
+                <td class="k8s-num k8s-mono k8s-muted">@age</td>
+                break;
+            case K8sWorkloadKind.StatefulSet:
+                <td><ReadyBar Ready="row.Ready" Desired="row.Desired" /></td>
+                <td class="k8s-mono k8s-muted k8s-wl-images" title="@K8sFormat.Images(row.Images)">@K8sFormat.Images(row.Images)</td>
+                <td class="k8s-num k8s-mono k8s-muted">@age</td>
+                break;
+            case K8sWorkloadKind.DaemonSet:
+                <td class="k8s-num k8s-mono">@row.Desired</td>
+                <td><ReadyBar Ready="row.Ready" Desired="row.Desired" /></td>
+                <td class="k8s-num k8s-mono">@row.UpToDate</td>
+                <td class="k8s-mono k8s-muted k8s-wl-images" title="@K8sFormat.Images(row.Images)">@K8sFormat.Images(row.Images)</td>
+                <td class="k8s-num k8s-mono k8s-muted">@age</td>
+                break;
+            case K8sWorkloadKind.Job:
+                <td class="k8s-num k8s-mono">@row.Succeeded/@(row.Completions ?? 1)</td>
+                <td class="k8s-job-status">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@JobColor(row.JobStatus)">@(row.JobStatus ?? "Unknown")</MudChip>
+                    @if (row.JobStatus == "Failed" && row.FailureReason is not null)
+                    {
+                        <span class="k8s-mono k8s-muted k8s-job-reason">@row.FailureReason</span>
+                    }
+                </td>
+                <td class="k8s-num k8s-mono">@(row.Duration is { } d ? K8sFormat.Age(d) : "—")</td>
+                <td class="k8s-num k8s-mono k8s-muted">@age</td>
+                break;
+            case K8sWorkloadKind.CronJob:
+                <td class="k8s-mono">@row.Schedule</td>
+                <td>@(row.Suspended ? "yes" : "no")</td>
+                <td class="k8s-num k8s-mono k8s-muted">@(row.LastSchedule is { } last ? K8sFormat.Ago(Clock.GetUtcNow() - last) : "—")</td>
+                <td class="k8s-num k8s-mono">@row.Active</td>
+                <td class="k8s-num k8s-mono k8s-muted">@age</td>
+                break;
+        }
+    };
+
+    private RenderFragment Actions(K8sWorkload row) => __builder =>
+    {
+        <div class="k8s-wl-action-row">
+            @if (row.Kind is not (K8sWorkloadKind.Job or K8sWorkloadKind.CronJob) && row.Desired == 0)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-scaled-zero">scaled to 0</MudChip>
+            }
+            @if (CanScale(row))
+            {
+                <MudButton Class="k8s-scale" Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary" OnClick="() => ScaleAsync(row)">Scale</MudButton>
+            }
+            @if (CanRestart(row))
+            {
+                <MudButton Class="k8s-restart" Variant="Variant.Outlined" Size="Size.Small" OnClick="() => RestartAsync(row)">Restart</MudButton>
+            }
+            <MudMenu Class="k8s-row-menu" Icon="@Icons.Material.Filled.MoreHoriz" Size="Size.Small" Dense="true"
+                     AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="@($"Actions for {row.Name}")">
+                @if (row.Kind == K8sWorkloadKind.Deployment)
+                {
+                    <MudMenuItem Class="k8s-open-detail" Icon="@Icons.Material.Outlined.OpenInNew"
+                                 Href="@Link(KubernetesPlugin.DeploymentHref(row.Namespace, row.Name))">Open detail</MudMenuItem>
+                }
+                <MudMenuItem Class="k8s-view-yaml" Icon="@Icons.Material.Outlined.Code" OnClick="() => ViewYamlAsync(row)">View YAML</MudMenuItem>
+                <MudMenuItem Class="k8s-copy-kubectl" Icon="@Icons.Material.Outlined.ContentCopy" OnClick="() => CopyKubectlAsync(row)">Copy kubectl command</MudMenuItem>
+                @if (CanDelete(row))
+                {
+                    <MudDivider />
+                    <MudMenuItem Class="k8s-delete" Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error" OnClick="() => DeleteAsync(row)">
+                        <span class="mud-error-text">Delete…</span>
+                    </MudMenuItem>
+                }
+                else
+                {
+                    <div class="k8s-menu-note k8s-muted">Scale, restart and delete need more permissions</div>
+                }
+            </MudMenu>
+        </div>
+    };
+
+    private sealed record Column(string Title, bool Numeric = false);
+
+    private static IReadOnlyList<Column> Columns(K8sWorkloadKind kind) => kind switch
+    {
+        K8sWorkloadKind.Deployment => [new("Name"), new("Namespace"), new("Ready"), new("Up-to-date", true), new("Available", true), new("Image(s)"), new("Age", true)],
+        K8sWorkloadKind.StatefulSet => [new("Name"), new("Namespace"), new("Ready"), new("Image(s)"), new("Age", true)],
+        K8sWorkloadKind.DaemonSet => [new("Name"), new("Namespace"), new("Desired", true), new("Ready"), new("Up-to-date", true), new("Image(s)"), new("Age", true)],
+        K8sWorkloadKind.Job => [new("Name"), new("Namespace"), new("Completions", true), new("Status"), new("Duration", true), new("Age", true)],
+        _ => [new("Name"), new("Namespace"), new("Schedule"), new("Suspended"), new("Last schedule", true), new("Active", true), new("Age", true)],
+    };
+
+    private static string Plural(K8sWorkloadKind kind) => kind + "s";
+
+    private static string Lower(K8sWorkloadKind kind) => kind.ToString().ToLowerInvariant();
+
+    private static string TabKey(K8sWorkloadKind kind) => Lower(kind) + "s";
+
+    private static Color JobColor(string? status) => status switch
+    {
+        "Failed" => Color.Error,
+        "Complete" => Color.Success,
+        "Running" => Color.Info,
+        _ => Color.Default,
+    };
+
+    private string EmptyText(K8sWorkloadKind kind, int total) =>
+        total > 0 ? "Nothing matches the filter."
+        : _labels is not null ? $"No {Plural(kind)} match {_labels} in these namespaces."
+        : $"No {Plural(kind)} in these namespaces.";
+
+    private IReadOnlyList<K8sWorkload> Filtered(IReadOnlyList<K8sWorkload> rows)
+    {
+        var term = _filter.Trim();
+        return term.Length == 0
+            ? rows
+            : rows.Where(r => r.Name.Contains(term, StringComparison.OrdinalIgnoreCase)
+                              || r.Images.Any(i => i.Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
+    }
+
+    private string Link(string href) => AttentionRules.WithConnection(_connection?.Id ?? Guid.Empty)(href);
+
+    // RBAC (spec §11): controls are not rendered when the verb is missing for the row's namespace. Until the probe
+    // answers nothing mutating renders; an incomplete review renders everything and leaves the 403 as the backstop.
+    private bool Allowed(string group, string resource, string verb, string ns) =>
+        _permissions is { } p && (p.Incomplete || p.Can(group, resource, verb, ns));
+
+    private bool CanScale(K8sWorkload row) =>
+        row.Kind is K8sWorkloadKind.Deployment or K8sWorkloadKind.StatefulSet
+        && Allowed("apps", $"{TabKey(row.Kind)}/scale", "patch", row.Namespace);
+
+    private bool CanRestart(K8sWorkload row) =>
+        row.Kind is K8sWorkloadKind.Deployment or K8sWorkloadKind.StatefulSet or K8sWorkloadKind.DaemonSet
+        && Allowed("apps", TabKey(row.Kind), "patch", row.Namespace);
+
+    private bool CanDelete(K8sWorkload row) =>
+        Allowed(row.Kind is K8sWorkloadKind.Job or K8sWorkloadKind.CronJob ? "batch" : "apps", TabKey(row.Kind), "delete", row.Namespace);
+
+    private string RbacText(IReadOnlyList<string> missing) =>
+        $"Connected as {_permissions?.Identity}. Missing for this page: {string.Join(", ", missing)}. Reads work normally. "
+        + "Ask a cluster admin for more permissions if you need to act from here.";
+
+    private bool ShowRbacAlert(out IReadOnlyList<string> missing)
+    {
+        missing = _permissions is { Incomplete: false } p ? p.Missing(K8sPermissions.WorkloadActions) : [];
+        return missing.Count > 0;
+    }
+
+    protected override void OnInitialized()
+    {
+        _poller = new K8sPoller(Clock, PollInterval, PollAsync);
+        _dialogs = new K8sDialogGate(_poller);
+        _visibility = new K8sVisibilityHook(SetHidden);
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        if (query.TryGetValue("tab", out var tab))
+        {
+            _tab = TabKinds.FirstOrDefault(k => TabKey(k).Equals(tab.ToString(), StringComparison.OrdinalIgnoreCase), K8sWorkloadKind.Deployment);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _visibility is not null)
+        {
+            await _visibility.StartAsync(JS);
+        }
+    }
+
+    /// <summary>Called through <see cref="K8sVisibilityHook"/>: no polling while the browser tab is hidden.</summary>
+    public Task SetHidden(bool hidden)
+    {
+        if (_disposed || _poller is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        _poller.Hidden = hidden;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnConnectionChangedAsync(ConnectionInfo connection)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_connection?.Id != connection.Id)
+        {
+            // Another cluster's rows must never sit under this connection's name. The namespace picker re-resolves
+            // its selection for the new connection and raises it, which starts the load.
+            _generation++;
+            _connection = connection;
+            _namespaces = null;
+            _permissions = null;
+            _counts = null;
+            _rows = null;
+            _rowsKind = null;
+            _error = null;
+            _showAll = false;
+            _loading = false;
+            _poller?.Start();
+            return;
+        }
+
+        _connection = connection;
+        await LoadAsync();
+    }
+
+    private async Task OnNamespacesChangedAsync(IReadOnlyList<string> namespaces)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _namespaces = namespaces;
+        _showAll = false;
+        await LoadAsync();
+    }
+
+    private async Task OnTabChangedAsync(int index)
+    {
+        if (_disposed || index < 0 || index >= TabKinds.Length || TabKinds[index] == _tab)
+        {
+            return;
+        }
+
+        _tab = TabKinds[index];
+        _showAll = false;
+        _error = null;
+        var uri = Navigation.GetUriWithQueryParameter("tab", TabKey(_tab));
+        if (uri != Navigation.Uri)
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+
+        await LoadAsync(background: false, listOnly: true);
+    }
+
+    private async Task OnLabelsKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ApplyLabelsAsync();
+        }
+    }
+
+    private async Task ApplyLabelsAsync()
+    {
+        var selector = string.IsNullOrWhiteSpace(_labelsInput) ? null : _labelsInput.Trim();
+        if (selector == _labels)
+        {
+            return;
+        }
+
+        _labels = selector;
+        _showAll = false;
+        await LoadAsync(background: false, listOnly: true);
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_connection is { } connection)
+        {
+            AccessCache.Invalidate(connection.Id);
+        }
+
+        await LoadAsync();
+    }
+
+    private Task LoadAsync() => LoadAsync(background: false, listOnly: false);
+
+    /// <summary>Permissions, tab counts and the active tab's rows; <paramref name="listOnly"/> skips the first two (tab or label change).</summary>
+    private async Task LoadAsync(bool background, bool listOnly)
+    {
+        if (_connection is not { } connection || _namespaces is not { } namespaces || _disposed)
+        {
+            return;
+        }
+
+        // A list-only load supersedes any in-flight full load (shared generation), so it must not leave the
+        // metadata unfetched: until permissions and counts exist, a "list-only" load is a full one.
+        if (listOnly && (_permissions is null || _counts is null))
+        {
+            listOnly = false;
+        }
+
+        var generation = ++_generation;
+        var kind = _tab;
+        var labels = _labels;
+        if (!background)
+        {
+            _loading = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            // Sequential on purpose: the handlers share the circuit's scoped services.
+            if (!listOnly)
+            {
+                var permissions = await GetPermissions.HandleAsync(connection.Id, namespaces, false, _cts.Token);
+                if (generation != _generation || _disposed)
+                {
+                    return;
+                }
+
+                // A failed lookup (connection gone) leaves the server's 403 as the backstop rather than hiding everything.
+                _permissions = permissions.Value ?? K8sPermissions.All;
+            }
+
+            var rows = await ListWorkloads.HandleAsync(connection.Id, kind, namespaces, labels, _cts.Token);
+            if (generation != _generation || _disposed)
+            {
+                return;
+            }
+
+            if (rows is { IsSuccess: true, Value: { } list })
+            {
+                _rows = list;
+                _rowsKind = kind;
+                _error = null;
+            }
+            else
+            {
+                // Keep the last rows (if they are this tab's) and say why they are not fresh.
+                _error = rows.Error ?? "Listing failed.";
+            }
+
+            if (!listOnly)
+            {
+                var counts = await CountWorkloads.HandleAsync(connection.Id, namespaces, _cts.Token);
+                if (generation != _generation || _disposed)
+                {
+                    return;
+                }
+
+                if (counts is { IsSuccess: true, Value: { } c })
+                {
+                    _counts = c;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (generation == _generation && !_disposed)
+            {
+                _loading = false;
+            }
+        }
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task PollAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed || _loading || _dialogs.IsOpen)
+                {
+                    return;
+                }
+
+                await LoadAsync(background: true, listOnly: false);
+            });
+        }
+        catch (Exception)
+        {
+            // A timer callback must never throw: a disposed circuit or a failed render just skips this tick.
+        }
+    }
+
+    private async Task ScaleAsync(K8sWorkload row)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var result = await _dialogs.RunAsync(async () =>
+        {
+            var reference = await ScaleDialog.ShowAsync(Dialogs, connection, row.Kind, row.Namespace, row.Name);
+            return await reference.Result;
+        });
+        if (_disposed || result is not { Canceled: false, Data: int replicas })
+        {
+            return;
+        }
+
+        Snackbar.Add($"Scaled {row.Name} to {replicas} {(replicas == 1 ? "replica" : "replicas")}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task RestartAsync(K8sWorkload row)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        // Mutating: a plain two-button confirmation, never typed.
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync("Restart", row.Name, isProd: false)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await RestartHandler.HandleAsync(
+            new WorkloadCommand(new K8sTarget(connection.Id, connection.Name, row.Namespace, row.Name), row.Kind), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Restart failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Restarting {row.Name}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(K8sWorkload row)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var kind = row.Kind.ToString();
+        // IsProd comes from the picker's server-side ConnectionInfo, never from the query string.
+        var request = WorkloadConfirmations.Delete(connection, row.Kind, row.Namespace, row.Name, row.Ready, row.Desired, row.Images);
+        if (!await _dialogs.RunAsync(() => Confirmation.ConfirmAsync(request)) || _disposed)
+        {
+            return;
+        }
+
+        var result = await DeleteHandler.HandleAsync(
+            new WorkloadCommand(new K8sTarget(connection.Id, connection.Name, row.Namespace, row.Name), row.Kind), _cts.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? "Delete failed.", Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Deleted {kind} {row.Name}.", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task ViewYamlAsync(K8sWorkload row)
+    {
+        if (_connection is not { } connection)
+        {
+            return;
+        }
+
+        var resourceKind = Enum.Parse<K8sResourceKind>(row.Kind.ToString());
+        var ct = _cts.Token;
+        await _dialogs.RunAsync(async () =>
+        {
+            var reference = await YamlDialog.ShowAsync(Dialogs, $"{Lower(row.Kind)}/{row.Name}",
+                () => GetResourceYaml.HandleAsync(connection.Id, resourceKind, row.Namespace, row.Name, ct));
+            return await reference.Result;
+        });
+    }
+
+    private async Task CopyKubectlAsync(K8sWorkload row)
+    {
+        var command = $"kubectl -n {row.Namespace} get {Lower(row.Kind)} {row.Name} -o yaml";
+        try
+        {
+            if (_visibility?.Module is not { } module || _disposed)
+            {
+                return;
+            }
+
+            await module.InvokeVoidAsync("copyText", command);
+            Snackbar.Add("Copied the kubectl command.", Severity.Info);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Clipboard access can be refused by the browser; copying is a convenience.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _poller?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+        if (_visibility is not null)
+        {
+            await _visibility.DisposeAsync();
+        }
+    }
+}

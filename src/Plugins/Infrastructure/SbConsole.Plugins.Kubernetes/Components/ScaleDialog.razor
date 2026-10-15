@@ -1,0 +1,164 @@
+@using System.Globalization
+@using SbConsole.Plugins.Kubernetes.Workloads
+@inject GetScaleInfoQueryHandler GetScaleInfo
+@inject ScaleWorkloadCommandHandler ScaleHandler
+
+@* Scale (mockup 3b, spec §6): current / ready replicas, HPA warning, a stepper and the per-pod request hint.
+   Mutating, so no typed confirmation: this dialog is the confirmation. Closes with the new count on success. *@
+<MudDialog Class="k8s-scale-dialog">
+    <TitleContent>Scale <span class="k8s-mono">@Name</span></TitleContent>
+    <DialogContent>
+        @if (_info is { } info)
+        {
+            <div class="k8s-scale-summary">
+                <span class="k8s-mono">@Namespace</span> · currently @info.Replicas replicas, @info.Ready ready.
+                @if (!info.HpaManaged)
+                {
+                    <span>HPA is not attached, so this sticks.</span>
+                }
+            </div>
+            @if (info.HpaManaged)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="k8s-scale-hpa">
+                    @HpaWarning(info.HpaName)
+                </MudAlert>
+            }
+            <div class="k8s-scale-field">
+                <MudButton Class="k8s-scale-minus" Variant="Variant.Outlined" Size="Size.Small" Disabled="@(_replicas <= 0 || _busy)"
+                           OnClick="@(() => SetReplicas(_replicas - 1))" aria-label="One fewer replica">−</MudButton>
+                <MudNumericField T="int" Class="k8s-scale-replicas" Label="Replicas" Value="_replicas" ValueChanged="SetReplicas"
+                                 Min="0" Max="@ScaleWorkloadCommandHandler.MaxReplicas" HideSpinButtons="true" Immediate="true"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="_busy" />
+                <MudButton Class="k8s-scale-plus" Variant="Variant.Outlined" Size="Size.Small"
+                           Disabled="@(_replicas >= ScaleWorkloadCommandHandler.MaxReplicas || _busy)"
+                           OnClick="@(() => SetReplicas(_replicas + 1))" aria-label="One more replica">+</MudButton>
+                @if (Hint(_replicas - info.Replicas, info.PerPodCpuMilli, info.PerPodMemBytes) is { } hint)
+                {
+                    <span class="k8s-meta k8s-scale-hint">@hint</span>
+                }
+            </div>
+            <div class="k8s-meta k8s-scale-audit">Audited as @WorkloadAudit.Action(Kind, "scale")</div>
+        }
+        else if (_error is null)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="k8s-scale-loading" />
+        }
+
+        @if (_error is not null)
+        {
+            <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Class="k8s-scale-cancel" Disabled="_busy" OnClick="@(() => MudDialog.Cancel())">Cancel</MudButton>
+        <MudButton Class="k8s-scale-confirm" Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_info is null || _busy || _replicas == _info.Replicas)" OnClick="ConfirmAsync">Scale to @_replicas</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public Guid ConnectionId { get; set; }
+
+    [Parameter, EditorRequired] public string ConnectionName { get; set; } = "";
+
+    [Parameter, EditorRequired] public K8sWorkloadKind Kind { get; set; }
+
+    [Parameter, EditorRequired] public string Namespace { get; set; } = "";
+
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    private K8sScaleInfo? _info;
+    private int _replicas;
+    private string? _error;
+    private bool _busy;
+
+    public static Task<IDialogReference> ShowAsync(IDialogService dialogs, ConnectionInfo connection, K8sWorkloadKind kind, string ns, string name) =>
+        dialogs.ShowAsync<ScaleDialog>($"Scale {name}",
+            new DialogParameters<ScaleDialog>
+            {
+                { d => d.ConnectionId, connection.Id }, { d => d.ConnectionName, connection.Name },
+                { d => d.Kind, kind }, { d => d.Namespace, ns }, { d => d.Name, name },
+            },
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseButton = true });
+
+    /// <summary>"+2 · needs 1 CPU, 1 Gi more requests" / "−1 · frees 0.5 CPU, 512 Mi requests"; null when unchanged.</summary>
+    internal static string? Hint(int delta, long perPodCpuMilli, long perPodMemBytes)
+    {
+        if (delta == 0)
+        {
+            return null;
+        }
+
+        var n = Math.Abs(delta);
+        var count = (delta > 0 ? "+" : "−") + n.ToString(CultureInfo.InvariantCulture);
+        if (perPodCpuMilli <= 0 && perPodMemBytes <= 0)
+        {
+            return $"{count} · no resource requests set";
+        }
+
+        var parts = new List<string>(2);
+        if (perPodCpuMilli > 0)
+        {
+            parts.Add($"{K8sFormat.Cores(n * perPodCpuMilli)} CPU");
+        }
+
+        if (perPodMemBytes > 0)
+        {
+            parts.Add(K8sFormat.Bytes(n * perPodMemBytes));
+        }
+
+        var amounts = string.Join(", ", parts);
+        return delta > 0 ? $"{count} · needs {amounts} more requests" : $"{count} · frees {amounts} requests";
+    }
+
+    private static string HpaWarning(string? hpaName) => hpaName is null
+        ? "An HPA manages replicas — this change will be overwritten."
+        : $"An HPA ({hpaName}) manages replicas — this change will be overwritten.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await GetScaleInfo.HandleAsync(ConnectionId, Kind, Namespace, Name);
+        if (result is { IsSuccess: true, Value: { } info })
+        {
+            _info = info;
+            _replicas = info.Replicas;
+        }
+        else
+        {
+            _error = result.Error ?? "Couldn't read the current replicas.";
+        }
+    }
+
+    private void SetReplicas(int value) =>
+        _replicas = Math.Clamp(value, 0, ScaleWorkloadCommandHandler.MaxReplicas);
+
+    private async Task ConfirmAsync()
+    {
+        if (_info is null || _busy || _replicas == _info.Replicas)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        var target = _replicas;
+        try
+        {
+            var result = await ScaleHandler.HandleAsync(
+                new ScaleCommand(new K8sTarget(ConnectionId, ConnectionName, Namespace, Name), Kind, target));
+            if (result.IsSuccess)
+            {
+                MudDialog.Close(DialogResult.Ok(target));
+                return;
+            }
+
+            _error = result.Error ?? "Scaling failed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

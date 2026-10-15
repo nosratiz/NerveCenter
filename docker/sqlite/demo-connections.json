@@ -52,5 +52,17 @@
     "kind": "postgres",
     "secret": "Host=pg-offline.invalid;Port=5432;Database=analytics;Username=sbconsole;Password=sbconsole;SSL Mode=Prefer;Timeout=5;Mode=ReadOnly;StatementTimeoutS=30",
     "tags": ["staging"]
+  },
+  {
+    "name": "k3s-local",
+    "kind": "kubernetes",
+    "secret": "{\"kubeconfig\":\"apiVersion: v1\\nkind: Config\\nclusters:\\n  - name: k3s\\n    cluster:\\n      server: https://k3s:6443\\n      insecure-skip-tls-verify: true\\nusers:\\n  - name: sbconsole-admin\\n    user:\\n      token: sbc-demo-admin-token-local-only\\ncontexts:\\n  - name: k3s-local\\n    context:\\n      cluster: k3s\\n      user: sbconsole-admin\\ncurrent-context: k3s-local\\n\",\"context\":\"k3s-local\"}",
+    "tags": ["prod"]
+  },
+  {
+    "name": "k3s-local-viewer",
+    "kind": "kubernetes",
+    "secret": "{\"kubeconfig\":\"apiVersion: v1\\nkind: Config\\nclusters:\\n  - name: k3s\\n    cluster:\\n      server: https://k3s:6443\\n      insecure-skip-tls-verify: true\\nusers:\\n  - name: sbconsole-viewer\\n    user:\\n      token: sbc-demo-viewer-token-local-only\\ncontexts:\\n  - name: k3s-local-viewer\\n    context:\\n      cluster: k3s\\n      user: sbconsole-viewer\\ncurrent-context: k3s-local-viewer\\n\",\"context\":\"k3s-local-viewer\"}",
+    "tags": ["demo"]
   }
 ]

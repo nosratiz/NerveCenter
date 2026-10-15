@@ -1,0 +1,33 @@
+@using SbConsole.Plugins.Kubernetes.Access
+@* Header chip (spec §11, mockup 3g): shown only when the account lacks something this page needs.
+   Controls needing a missing verb are not rendered; this chip says why. *@
+@if (_missing.Count > 0)
+{
+    <MudTooltip Text="@TooltipText">
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                 Icon="@Icons.Material.Outlined.Lock" Class="k8s-rbac-chip">@ChipText</MudChip>
+    </MudTooltip>
+}
+
+@code {
+    /// <summary>Null until the page's permission probe returns; nothing renders until then.</summary>
+    [Parameter] public K8sPermissions? Permissions { get; set; }
+
+    [Parameter] public IEnumerable<(string Group, string Resource, string Verb)> Needs { get; set; } = [];
+
+    /// <summary>Cluster checks (K8sPermissions.ClusterChecks keys) the page's controls are gated on, e.g. "nodes/patch".</summary>
+    [Parameter] public IEnumerable<string> ClusterNeeds { get; set; } = [];
+
+    /// <summary>The namespace the page is scoped to; null = every probed namespace must grant it.</summary>
+    [Parameter] public string? Namespace { get; set; }
+
+    private IReadOnlyList<string> _missing = [];
+
+    internal string ChipText => Permissions?.IsReadOnly == true ? "read-only (RBAC)" : "limited (RBAC)";
+
+    internal string TooltipText =>
+        $"Connected as {Permissions?.Identity}. Missing for this page: {string.Join(", ", _missing)}. Reads work normally.";
+
+    protected override void OnParametersSet() =>
+        _missing = Permissions is null ? [] : [.. Permissions.Missing(Needs, Namespace), .. Permissions.MissingCluster(ClusterNeeds)];
+}

@@ -1,0 +1,32 @@
+@* A pod as a small chip coloured by its display status; "↻n" when it has restarted. Links to the pod when Href is set. *@
+<MudChip T="string" Size="Size.Small" Color="@ChipColor" Variant="@ChipVariant" Href="@Href"
+         Class="@(("k8s-phase-chip k8s-mono " + Class).Trim())" title="@Status">@Text</MudChip>
+
+@code {
+    /// <summary>Display status (K8sPodSummary.Status): Running, Pending, CrashLoopBackOff, Completed, Terminating, …</summary>
+    [Parameter, EditorRequired] public string Status { get; set; } = "";
+
+    /// <summary>Usually the pod's short name.</summary>
+    [Parameter] public string Label { get; set; } = "";
+
+    [Parameter] public int Restarts { get; set; }
+
+    [Parameter] public string? Href { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    private string Text => Restarts > 0 ? $"{Label} ↻{Restarts}" : Label;
+
+    private Variant ChipVariant => Status == "Terminating" ? Variant.Outlined : Variant.Text;
+
+    internal static Color ColorFor(string status) => status switch
+    {
+        "Running" => Color.Success,
+        "Pending" or "ContainerCreating" => Color.Warning,
+        "CrashLoopBackOff" or "Error" or "OOMKilled" or "ImagePullBackOff" or "ErrImagePull" or "Failed" => Color.Error,
+        "Completed" or "Succeeded" => Color.Info,
+        _ => Color.Default,
+    };
+
+    private Color ChipColor => ColorFor(Status);
+}

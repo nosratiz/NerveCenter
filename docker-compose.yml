@@ -6,6 +6,7 @@
 #   docker compose --profile aws up -d         # ...plus LocalStack (SQS/SNS)
 #   docker compose --profile redis up -d       # ...plus Redis, seeded with sample keys
 #   docker compose --profile postgres up -d    # ...plus PostgreSQL 16, seeded, with a live lock-contention demo
+#   docker compose --profile kubernetes up -d  # ...plus single-node k3s, seeded with broken-on-purpose workloads
 #   docker compose --profile app up -d --build # ...plus SbConsole itself, built from source
 #
 # The app itself normally runs on the host via `dotnet run` (see .claude/launch.json); this
@@ -350,6 +351,58 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------------------
+  # Kubernetes (profile: kubernetes): single-node k3s, seeded with the Kubernetes plugin's demo
+  # states (docker/kubernetes/seed). Static-token users from docker/kubernetes/tokens.csv --
+  # local-only demo tokens, never reuse them. The API server answers on localhost:6443 from the
+  # host and k3s:6443 on the compose network (both are in the serving cert's SANs). Privileged
+  # because k3s runs its own containerd and cgroups inside the container.
+  # ---------------------------------------------------------------------------------------
+  k3s:
+    image: rancher/k3s:v1.30.6-k3s1
+    container_name: nervecenter-k3s
+    profiles: ["kubernetes"]
+    # Fixed so the node name survives container re-creation; otherwise k3s-data keeps the old
+    # node, which goes NotReady and strands its pods in Terminating.
+    hostname: k3s-node-1
+    privileged: true
+    command: ["server", "--disable=traefik", "--tls-san=k3s", "--tls-san=localhost", "--kube-apiserver-arg=token-auth-file=/seed/tokens.csv"]
+    ports:
+      - "${K3S_PORT:-6443}:6443"
+    volumes:
+      - ./docker/kubernetes/tokens.csv:/seed/tokens.csv:ro
+      - k3s-data:/var/lib/rancher/k3s
+      # k3s auto-applies this directory at startup. The RBAC has to come from here: the static
+      # tokens carry no groups, so sbconsole-admin can't grant itself cluster-admin.
+      - ./docker/kubernetes/seed/01-rbac.yaml:/var/lib/rancher/k3s/server/manifests/sbconsole-rbac.yaml:ro
+    tmpfs:
+      - /run
+      - /var/run
+    healthcheck:
+      test: ["CMD", "kubectl", "get", "--raw=/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  # One-shot: applies docker/kubernetes/seed/*.yaml (OOM crash loop + stuck rollout, failed Job,
+  # unschedulable pod, blocking PDB, unused ConfigMap, a TLS secret ~9 days from expiry, the
+  # read-only viewer binding). Idempotent (kubectl apply). alpine/k8s rather than bitnami/kubectl:
+  # bitnami's 1.30 tag no longer pulls, and alpine/k8s can `apk add openssl` for the TLS secret.
+  k3s-seed:
+    image: alpine/k8s:1.30.6
+    container_name: nervecenter-k3s-seed
+    profiles: ["kubernetes"]
+    depends_on:
+      k3s:
+        condition: service_healthy
+    entrypoint: ["sh", "/work/seed.sh"]
+    environment:
+      KUBE_SERVER: https://k3s:6443
+      KUBE_TOKEN: sbc-demo-admin-token-local-only
+    volumes:
+      - ./docker/kubernetes:/work:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------
   # SbConsole itself (profile: app), built from source. For when you want the "one shared
   # instance per team" deployment shape locally rather than `dotnet run`.
   # ---------------------------------------------------------------------------------------
@@ -394,3 +447,4 @@ volumes:
   sbconsole-data:
   sqlite-demo:
   postgres-data:
+  k3s-data:

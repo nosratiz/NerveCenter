@@ -1,0 +1,288 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+@using SbConsole.Plugins.Kubernetes.Namespaces
+@inject ListNamespacesQueryHandler ListNamespaces
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@* Namespace axis for every page (spec §4). Empty selection = all namespaces. ?ns= (comma list) keeps links
+   shareable; otherwise the user's last choice on this cluster (NamespaceSelectionStore) applies. *@
+<div class="k8s-ns">
+    @* A trigger button + MudPopover rather than MudSelect: MudSelect renders non-item children (search box, caption)
+       inline outside its popover too, and keeps pulling focus back to itself, so a search field inside it can't be typed in. *@
+    <div class="k8s-ns-anchor">
+        <MudButton Class="k8s-ns-picker" Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_loaded)"
+                   EndIcon="@(_open ? Icons.Material.Filled.ArrowDropUp : Icons.Material.Filled.ArrowDropDown)"
+                   OnClick="Toggle" aria-haspopup="listbox" aria-expanded="@(_open ? "true" : "false")">
+            @SelectionText(_selected)
+        </MudButton>
+        <MudPopover Open="_open" Class="k8s-ns-popover" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
+                    MaxHeight="420" Elevation="8">
+            @if (_open)
+            {
+                <div class="k8s-ns-panel" role="listbox" aria-multiselectable="true" @onkeydown="OnPanelKeyDown">
+                    <div class="k8s-ns-search-row">
+                        <MudTextField T="string" Class="k8s-ns-search" Value="_search" ValueChanged="v => _search = v ?? string.Empty"
+                                      Immediate="true" AutoFocus="true" Placeholder="Search namespaces" Variant="Variant.Text"
+                                      Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search" />
+                    </div>
+                    <div class="k8s-ns-row k8s-ns-all" role="option" tabindex="0" aria-selected="@(_selected.Count == 0 ? "true" : "false")"
+                         @onclick="SelectAllAsync" @onkeydown="e => OnRowKeyDown(e, SelectAllAsync)">
+                        <MudIcon Size="Size.Small" Class="k8s-ns-check"
+                                 Icon="@(_selected.Count == 0 ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBoxOutlineBlank)" />
+                        <span>All namespaces (@_namespaces.Count)</span>
+                    </div>
+                    <MudDivider />
+                    @foreach (var ns in Visible)
+                    {
+                        var name = ns.Name;
+                        var on = _selected.Contains(name);
+                        <div class="k8s-ns-row k8s-ns-option" role="option" tabindex="0" aria-selected="@(on ? "true" : "false")"
+                             @onclick="() => ToggleAsync(name)" @onkeydown="e => OnRowKeyDown(e, () => ToggleAsync(name))">
+                            <MudIcon Size="Size.Small" Class="k8s-ns-check"
+                                     Icon="@(on ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBoxOutlineBlank)" />
+                            <span class="k8s-ns-name k8s-mono">@name</span>
+                            <span class="k8s-ns-count k8s-muted k8s-num">@ns.PodCount</span>
+                        </div>
+                    }
+                    <div class="k8s-ns-caption k8s-muted">Selection is kept per cluster.</div>
+                </div>
+            }
+        </MudPopover>
+    </div>
+    <MudOverlay Visible="_open" VisibleChanged="OnOverlayVisibleChanged" AutoClose="true" LockScroll="false" />
+
+    <span class="k8s-ns-trigger">
+        @if (_selected.Count == 0)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-ns-chip-all">All namespaces</MudChip>
+        }
+        else
+        {
+            @foreach (var name in _selected)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="k8s-ns-chip"
+                         OnClose="@(_ => RemoveAsync(name))">@name</MudChip>
+            }
+        }
+    </span>
+
+    @if (_error is not null)
+    {
+        <MudTooltip Text="@_error">
+            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Class="k8s-ns-error">namespaces unavailable</MudChip>
+        </MudTooltip>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid? ConnectionId { get; set; }
+
+    /// <summary>Raised once after the initial selection resolves for a connection, then on every change. Empty = all namespaces.</summary>
+    [Parameter] public EventCallback<IReadOnlyList<string>> SelectionChanged { get; set; }
+
+    /// <summary>True (default): the picker keeps ?ns= in sync itself. False: the host page owns the URL.</summary>
+    [Parameter] public bool ManageUrl { get; set; } = true;
+
+    [Inject(Key = KubernetesPlugin.PluginId)]
+    private IPluginStore Store { get; set; } = default!;
+
+    private IReadOnlyList<K8sNamespace> _namespaces = [];
+    private IReadOnlyList<string> _selected = [];
+    private string _search = "";
+    private string? _error;
+    private bool _loaded;
+    private Guid? _loadedFor;
+    private int _generation;
+    private bool _queryRead;
+    private CancellationTokenSource _cts = new();
+
+    private IEnumerable<K8sNamespace> Visible => _search.Length == 0
+        ? _namespaces
+        : _namespaces.Where(n => n.Name.Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static string SelectionText(IReadOnlyList<string> values) =>
+        values.Count switch { 0 => "All namespaces", 1 => "1 namespace", _ => $"{values.Count} namespaces" };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ConnectionId == _loadedFor)
+        {
+            return;
+        }
+
+        _loadedFor = ConnectionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        var generation = ++_generation;
+        _loaded = false;
+        _open = false;
+        _error = null;
+        _namespaces = [];
+        _selected = [];
+
+        if (ConnectionId is not { } connectionId || connectionId == Guid.Empty)
+        {
+            return;
+        }
+
+        PluginResult<IReadOnlyList<K8sNamespace>> result;
+        IReadOnlyList<string> stored;
+        try
+        {
+            result = await ListNamespaces.HandleAsync(connectionId, ct);
+            stored = result.IsSuccess ? await ReadStoredAsync(connectionId, ct) : [];
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (generation != _generation)
+        {
+            return;
+        }
+
+        _loaded = true;
+        if (!result.IsSuccess)
+        {
+            // Without the list nothing can be validated: fall back to all namespaces and say so.
+            _error = result.Error;
+            await ApplyAsync([], connectionId, persist: false);
+            return;
+        }
+
+        _namespaces = result.Value ?? [];
+        var known = _namespaces.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+        // ?ns= only seeds the first load: after a connection switch it still holds the previous cluster's choice.
+        var fromQuery = _queryRead ? null : ReadQuery();
+        _queryRead = true;
+        var initial = (fromQuery ?? stored).Where(known.Contains).Distinct().ToList();
+        await ApplyAsync(initial, connectionId, persist: false);
+    }
+
+    private IReadOnlyList<string>? ReadQuery()
+    {
+        var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+        if (!query.TryGetValue("ns", out var value))
+        {
+            return null;
+        }
+
+        return value.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private async Task<IReadOnlyList<string>> ReadStoredAsync(Guid connectionId, CancellationToken ct)
+    {
+        try
+        {
+            return await NamespaceSelectionStore.GetAsync(Store, connectionId, await UserAsync(), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The remembered choice is a convenience; an unreadable store means "all namespaces".
+            return [];
+        }
+    }
+
+    private async Task<string> UserAsync()
+    {
+        var state = await Auth.GetAuthenticationStateAsync();
+        return state.User.Identity?.Name ?? "anonymous";
+    }
+
+    private bool _open;
+
+    private void Toggle()
+    {
+        _open = !_open;
+        _search = "";
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _search = "";
+    }
+
+    private void OnOverlayVisibleChanged(bool visible)
+    {
+        if (!visible)
+        {
+            Close();
+        }
+    }
+
+    private void OnPanelKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            Close();
+        }
+    }
+
+    private static async Task OnRowKeyDown(KeyboardEventArgs e, Func<Task> action)
+    {
+        if (e.Key is "Enter" or " ")
+        {
+            await action();
+        }
+    }
+
+    private Task SelectAllAsync() =>
+        ConnectionId is { } connectionId ? ApplyAsync([], connectionId, persist: true) : Task.CompletedTask;
+
+    private Task ToggleAsync(string name)
+    {
+        var chosen = _selected.Contains(name) ? _selected.Where(n => n != name).ToHashSet() : _selected.Append(name).ToHashSet();
+        // Keep the list's order (stable, matches what the user sees), whatever order the clicks came in.
+        IReadOnlyList<string> next = _namespaces.Select(n => n.Name).Where(chosen.Contains).ToList();
+        return ConnectionId is { } connectionId ? ApplyAsync(next, connectionId, persist: true) : Task.CompletedTask;
+    }
+
+    private Task RemoveAsync(string name) =>
+        ConnectionId is { } connectionId
+            ? ApplyAsync(_selected.Where(n => n != name).ToList(), connectionId, persist: true)
+            : Task.CompletedTask;
+
+    private async Task ApplyAsync(IReadOnlyList<string> selection, Guid connectionId, bool persist)
+    {
+        _selected = selection;
+        if (persist)
+        {
+            try
+            {
+                await NamespaceSelectionStore.SetAsync(Store, connectionId, await UserAsync(), selection, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Not remembering the choice must not break the page; ?ns= still carries it.
+            }
+        }
+
+        if (ManageUrl)
+        {
+            var uri = Navigation.GetUriWithQueryParameter("ns", selection.Count == 0 ? null : string.Join(',', selection));
+            if (uri != Navigation.Uri)
+            {
+                Navigation.NavigateTo(uri, replace: true);
+            }
+        }
+
+        await SelectionChanged.InvokeAsync(selection);
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

@@ -1,0 +1,80 @@
+@inject TimeProvider Clock
+@* "Show {n} pods on this node" (mockup 3e row menu): the node's pods, each linking to its pod page. Takes a loader,
+   like YamlDialog, so the page passes () => ListNodePods.HandleAsync(...). *@
+<MudDialog Class="k8s-node-pods-dialog">
+    <TitleContent><span class="k8s-mono">Pods on @Node</span></TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="k8s-node-pods-loading" />
+        }
+        else if (_error is not null)
+        {
+            <K8sErrorAlert Info="@(new K8sErrorInfo(_error, null, null, false))" />
+        }
+        else if (_pods is { Count: 0 })
+        {
+            <div class="k8s-node-pods-empty k8s-muted">No pods on this node.</div>
+        }
+        else if (_pods is not null)
+        {
+            <div class="k8s-table-wrap">
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="k8s-node-pods-table">
+                    <thead>
+                        <tr><th>Namespace</th><th>Pod</th><th>Status</th><th class="k8s-num">Restarts</th><th class="k8s-num">Age</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var pod in _pods)
+                        {
+                            <tr class="k8s-node-pod-row" @key="pod.Namespace + '/' + pod.Name">
+                                <td class="k8s-mono k8s-muted">@pod.Namespace</td>
+                                <td><PhaseChip Status="@pod.Status" Label="@pod.Name" Href="@Link(KubernetesPlugin.PodHref(pod.Namespace, pod.Name))" /></td>
+                                <td>@pod.Status</td>
+                                <td class="k8s-num k8s-mono">@pod.Restarts</td>
+                                <td class="k8s-num k8s-mono k8s-muted">@K8sFormat.Age(Clock.GetUtcNow() - pod.CreatedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Class="k8s-node-pods-close" OnClick="@(() => MudDialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public string Node { get; set; } = "";
+
+    [Parameter, EditorRequired] public Func<Task<PluginResult<IReadOnlyList<K8sPodSummary>>>> Load { get; set; } = default!;
+
+    /// <summary>Adds ?connectionId= to the pod links.</summary>
+    [Parameter, EditorRequired] public Func<string, string> Link { get; set; } = default!;
+
+    private bool _loading = true;
+    private IReadOnlyList<K8sPodSummary>? _pods;
+    private string? _error;
+
+    public static Task<IDialogReference> ShowAsync(IDialogService dialogs, string node,
+        Func<Task<PluginResult<IReadOnlyList<K8sPodSummary>>>> load, Func<string, string> link) =>
+        dialogs.ShowAsync<NodePodsDialog>($"Pods on {node}",
+            new DialogParameters<NodePodsDialog> { { d => d.Node, node }, { d => d.Load, load }, { d => d.Link, link } },
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true });
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await Load();
+        _loading = false;
+        if (result is { IsSuccess: true, Value: { } pods })
+        {
+            _pods = pods;
+        }
+        else
+        {
+            _error = result.Error ?? "Couldn't list the pods.";
+        }
+    }
+}

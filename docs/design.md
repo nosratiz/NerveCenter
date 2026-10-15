@@ -1852,7 +1852,83 @@ plugin test projects' `ProjectReference`s point at the new paths. Test projects 
 `tests/`. A new plugin goes in the folder matching its purpose; add a new category folder only
 when a plugin fits neither.
 
-## 20. PostgreSQL query IntelliSense (2026-10-14)
+## 20. Kubernetes plugin (`SbConsole.Plugins.Kubernetes`) (2026-10-14)
+
+Spec: `docs/superpowers/specs/2026-10-14-kubernetes-plugin-design.md`; plan:
+`docs/superpowers/plans/2026-10-14-kubernetes-plugin.md`. Overview, Workloads (with Deployment
+detail), Pods (detail and logs), Nodes, Config and Events, plus the audited actions behind them.
+Client: the official `KubernetesClient`, referenced by the plugin only; it lives in
+`src/Plugins/Infrastructure/` (§19). This section records the decisions and where review changed
+the spec.
+
+- **Static credentials only.** The saved secret is a kubeconfig, accepted only if its user has a
+  bearer token or client certificate/key **inline**. `exec`, `auth-provider` and file-path
+  credentials are rejected at save time: they would run binaries or read files on the *host*
+  running the console, which for a team-hosted app is not the user's machine and is an
+  arbitrary-code path. The form says how to mint a ServiceAccount token instead.
+  Because KubernetesClient resolves context/cluster/user names case-insensitively (first match),
+  the validator checks *every* user and cluster in the file and rejects names that collide
+  ignoring case, and the client factory builds from a trimmed in-memory config holding only the
+  validated context, cluster and user (`BuildConfigFromConfigObject`), so an unchecked entry can
+  never be selected.
+- **Secrets never leave one method.** The typed Secret list is reduced to `SecretSummary` (name,
+  type, key names, sizes, age) inside a single method of `KubernetesOperations.Config.cs`; values
+  are not copied anywhere. The one value read is a `kubernetes.io/tls` certificate's `NotAfter`,
+  parsed and dropped. Workload/pod env never fetches Secrets (a `secretKeyRef` shows its reference).
+  Non-HTTP failures on that path are wrapped **without the inner exception**, so nothing carrying a
+  response body can reach logs or UI.
+- **Polling, not watches.** Pages refresh every 5 s (lists) or 10 s (detail); watches would need a
+  long-lived stream per circuit and resync logic for little gain. One shared `K8sPoller` pauses
+  while a dialog is open (`K8sDialogGate`) or the tab is hidden (`K8sVisibilityHook`, JS
+  `watchVisibility`). Pages are dispose-safe: check `_disposed` after every await.
+- **RBAC: remove, don't disable.** `SelfSubjectRulesReview` per namespace (plus
+  `SelfSubjectAccessReview` for cluster-scoped checks), cached 5 minutes per connection. Controls
+  the user can't use are not rendered; a 403 from the API is the backstop and shows a plain
+  message. "All namespaces" probes the rules as `default` (a rules review needs one namespace). A
+  connection counts as read-only from its non-self-review rules; the self-review rules every
+  account has are ignored. Limit: a Role granted in only some namespaces can show controls in the
+  all-namespaces view that 403 on click.
+- **Drain runs in the request, with progress.** No background job: the dialog owns it, so closing
+  or Stop ends it. Concurrency slots (5) are held only around API calls, never across waits.
+  Evictable pods go before PDB-blocked ones, so a blocked pod can't starve the rest; blocked pods
+  are retried until the **5-minute deadline**. Ownerless pods are never evicted without "force".
+  In-flight calls finish on Stop and are reported; there is **no forced delete after Stop or the
+  deadline**. The cordon stays on cancel (the node is simply left cordoned, and says so).
+  Deviations from the mockup: deleting `emptyDir` data is **off** by default (kubectl's safer
+  default); grace period is at least 1 s; the typed confirmation lives in `DrainDialog` (its
+  eviction preview is the confirmation surface), not `IConfirmationService`. Every other
+  Destructive action uses `ConfirmationRequest` (§18).
+- **ConfigMap change history dropped.** The mockup showed one; Kubernetes keeps none (only
+  `managedFields`, which isn't history). Edit is a replace with `resourceVersion`, so a concurrent
+  change surfaces as a conflict.
+- **Events.** Read from `events.k8s.io/v1`; on the **first 403** the plugin falls back to
+  `core/v1` (the built-in `view` role cannot read `events.k8s.io`) and remembers it. "Last seen"
+  comes from series / `deprecatedLastTimestamp`: `EventTime` is the *first* occurrence.
+- **Dashboard hooks** share a 15 s cached overview per connection, so the shell's polling doesn't
+  fan out. The "problems" hook **throws** when the cluster is unreachable, so the host marks the
+  connection unchecked rather than healthy.
+- **UI notes.** The namespace picker is `MudButton` + `MudPopover`: `MudSelect` renders child
+  content inline and steals focus from its search field. The Overview header shows identity only;
+  the "strongest ClusterRole binding" in the spec needs rights to list ClusterRoleBindings that
+  most accounts lack.
+- **Local dev stack.** Compose profile `kubernetes`: single-node k3s (`rancher/k3s:v1.30.6-k3s1`,
+  Traefik off, privileged, fixed hostname `k3s-node-1`) with two **static demo tokens** (admin,
+  and a `view`-bound viewer), checked in on purpose and local-only. The RBAC bindings are mounted
+  as k3s auto-deploy manifests because tokens carry no groups, so the admin can't grant itself
+  anything. The `alpine/k8s` seed job creates namespaces with a crash loop, a stuck rollout, a
+  PDB-blocked StatefulSet, a failed Job, Pending/FailedMount pods and a TLS secret regenerated per
+  run. Demo connections `k3s-local` (prod) and `k3s-local-viewer` (demo) join
+  `docker/sqlite/demo-connections.json` (§16.1).
+- **Testing exception.** `KubernetesOperations` is tested against a real k3s Testcontainer (shared
+  fixture, skipped without Docker): RBAC reviews, eviction/PDB behaviour and API shapes aren't
+  honestly fakeable. Handlers and pages use a substituted operations interface.
+- **Out of scope.** Exec and Port-forward need a bidirectional stream through Blazor Server and get
+  their own spec later. Add label and Edit taints are also out of scope; their controls are not rendered.
+- **Known limitations.** Events polls cluster-wide on "All namespaces"; PDB `matchExpressions` are
+  ignored when previewing a drain (the preview can over-report blocked pods); a single-node
+  cluster can't demonstrate NotReady or a drain that moves workloads (handler tests cover them).
+
+## 21. PostgreSQL query IntelliSense (2026-10-14)
 
 Completion in the Postgres Query editor (spec: `docs/superpowers/specs/2026-10-14-postgres-plugin-design.md`
 §16; plan: `docs/superpowers/plans/2026-10-14-postgres-query-intellisense.md`), reversing that spec's
@@ -1868,3 +1944,38 @@ that ran DDL, and skips the load during static prerender. A finished word that e
 (`orders`, `OR`) offers nothing, so Enter stays a newline rather than accepting the next prefix match.
 Suggestions: keywords, built-in functions, schemas, tables/views/matviews, columns, aliases;
 user-defined functions, types and enum labels are out of scope.
+
+## 22. Kubernetes Architecture page (2026-10-15)
+
+Mockup 4a (`SbConsole Kubernetes.dc.html`, turn 4): a dependency map at `/p/kubernetes/architecture`,
+second in the drawer. Detection, layout and the overlay are pure C# in `Architecture/`
+(`ArchitectureBuilder`, `ArchitectureLayout`); the page only renders them.
+
+- **Detection.** One operations call (`GetArchitectureInputsAsync`) lists Deployments,
+  StatefulSets, DaemonSets and Services **cluster-wide** (falling back to the selection on 403) so
+  a dependency in another namespace resolves; Ingresses and ConfigMaps for the selection only (403
+  = none). Edges come from env values (literal or ConfigMap-resolved; a Secret ref is never read)
+  that name a Service — `svc`, `svc.ns`, `svc.ns.svc[.cluster.local]`, StatefulSet pod DNS,
+  `host:port`, URLs, ADO-style `Host=…;Port=…` — and from Ingress backends. An unresolvable short
+  name is ignored; an http(s) URL to a dotted host outside the cluster becomes an **external**
+  node. Edge kind (thin HTTP, dashed queue, thick store) comes from the scheme, then the target's
+  store type, then the port. A workload is a **store** when its *first* image is a known
+  database/cache/broker (a redis sidecar doesn't make `cart` a store).
+- **Values never leave the builder.** Env values are read only to extract host and port; edges
+  carry the env var's *name* as their source ("env REDIS_URL"), never the value, because
+  connection strings hold passwords.
+- **NetworkPolicy detection, drag-to-arrange, zoom, Fit, Export and the "mirror to annotation"
+  option from the mockup are out of scope.** Positions are computed every load (depth columns
+  shared by all lanes, cycle back edges ignored); Team grouping uses the `team` /
+  `app.kubernetes.io/team` / `owner` label.
+- **Overlay is console data** in the plugin store, per connection: `arch:overlay:{id}` (manual
+  edges, dismissed detected edge ids) and `arch:desc:{id}` (node id → description). Descriptions
+  are versioned: a save names the version it opened and is refused if someone saved since. Every
+  edit is audited `k8s.arch.edit` (Mutating) with a detail that never includes the text; refusals
+  (conflict, duplicate, nothing changed) are not audited. Read-modify-write runs under one
+  process-wide gate because `IPluginStore` has no compare-and-set — fine for the single-process
+  console, revisit if it ever scales out. The description is shown as plain text (Markdown source);
+  no Markdown renderer was added.
+- **Demo data.** The k3s seed gained `14-architecture.yaml` (`cart-redis`, Services `cart` /
+  `pricing`, Ingress `shop`) and env URLs on the checkout/payments Deployments so the map has edges.
+
